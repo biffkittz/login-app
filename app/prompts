@@ -1,15 +1,15 @@
-**You must build a web app composed of a .NET 10 backend service under the `backend` directory, and a Vue 3/
+** You must build a web app composed of a .NET 10 backend service under the `backend` directory, and a Vue 3/
   Typescript frontend project under the `frontend` directory. Note that I have already executed `npm create vue@latest`
   to create the frontend Vue 3/Typescript frontend project under the `frontend` directory. I have also executed
   `npm install tailwindcss @tailwindcss/vite` to install tailwindcss (styling should make use of tailwind). I have also
   executed `npm install axios` to install axios. I have already executed `dotnet new webapi -o backend` to create the backend .NET 10 project under the `app` directory. Rewrite any existing code in `frontend` and `backend` as needed to achieve the desired goal.
 
-**The app will present login and registration options to the user. The app will not
+** The app will present login and registration options to the user. The app will not
   perform any other function except for login and registration. When a user
   successfully logs in to the app, the user will be presented with a logout option,
   which returns them to the main login page. The page style is simple and intuitive.
   
-**For the frontend Vue 3 project, you are an expert Senior Frontend Engineer specializing in Vue 3, Vite, and
+** For the frontend Vue 3 project, you are an expert Senior Frontend Engineer specializing in Vue 3, Vite, and
   TypeScript. When writing Vue code, you must strictly follow these modern guidelines:
   1. Architecture: Always use the Composition API with `<script setup>` in TypeScript (<script setup lang="ts">). Never use the Options API.
   2. Two-Way Binding: Use the modern `defineModel()` macro for two-way bindings (Vue 3.4+ syntax).
@@ -18,7 +18,7 @@
   5. Composables: Abstract reusable logic into composables under the `composables/use*.ts` structure.
   6. UI Components: Use TailwindCSS for styling. Keep components modular, accessible (a11y), and semantic.
 
-**For the backend .NET 10 project, you are an expert Senior Software Engineer specializing in C#, Entity Framework Core, and ASP.NET Core.
+** For the backend .NET 10 project, you are an expert Senior Software Engineer specializing in C#, Entity Framework Core, and ASP.NET Core.
   When writing C# code, you must strictly follow these modern guidelines:
   1. Syntax & Types:
     - Use 'var' ONLY when the type is obvious from the right side of the assignment.
@@ -34,47 +34,45 @@
     - Do not emit deprecated or legacy framework conventions.
   REMINDER: Apply the rules above strictly. Ensure code contains no conversational text outside the markdown formatting block.
 
-**Non-AI contributors to this project will use VS Code and WSL Ubuntu for development.
+** Non-AI contributors to this project will use VS Code and WSL Ubuntu for development.
 
-**You must provide detailed documentation on how to build and deploy the project. For example,
+** You must provide detailed documentation on how to build and deploy the (frontend/backend) projects. For example,
   you should create a script called buildAndRunSite.sh that builds the frontend and backend projects,
   combines the two (e.g. package frontend resources and combine with backend to be served by 
   a web server), and runs the site locally.
 
-**You must provide detailed documentation on how to set up the development environment
-  and run the app locally. This includes documenting how to install tooling and any
-  required VS Code Extensions.
+** You must provide detailed documentation on how to set up the development environment
+  and run the app locally. This includes documenting how to install dependencies, tooling, and any
+  required VS Code Extensions. Consider creating a VS Code workspace for the login-app project.
 
-**The containerized, running app will only accept traffic internal to the container environment. An nginx container will reside alongside the containerized app and proxy external requests to the app container over a private link.
+** The containerized app will use Kestrel to serve the site on port 80, and will accept requests from internal (VNet) sources only.
 
-**The containerized app will use Kestrel to serve the site on port 80, and will accept requests from internal (VNet) sources only.
+** The Azure Container App will need to communicate with other Azure services like Azure Key vault and Azure PostgreSQL
 
-**The Azure Container App will use managed identities from Microsoft Entra ID to communicate with other Azure services like Azure Key vault and Azure PostgreSQL
+** The containerized app will read secrets from Azure Key Vault
 
-**The containerized app will read secrets from Azure key vault
+** You must create sensible .gitignore files.
 
-**You must create sensible .gitignore files.
+** You must create a Dockerfile to containerize the app. The container should use Kestrel and .NET Core on Linux to host the app.
 
-**You must create a Dockerfile to containerize the app.
-
-**The app backend will communicate with an Azure PostgreSQL database and connect using a
+** The app backend will communicate with an Azure PostgreSQL database and connect using a
   database connection string.
 
-**The app will use Entity Framework Core as its ORM and for accessing the Azure PostgreSQL database
+** The app will use Entity Framework Core as its ORM and for accessing the Azure PostgreSQL database
 
-**The app will be deployed as an Azure Container App that reads environment variables like DB connection strings
+** The app will be deployed as an Azure Container App that reads environment variables like DB connection strings
   from Azure key vault.
 
-**The app will make use of ASP.NET Core Identity and JWT (json web tokens) for user authentication.
+** The app will make use of ASP.NET Core Identity and JWT (json web tokens) for user authentication.
 
-**Orange and brown will server as the app's color palette and will evoke a
+** Orange and brown will server as the app's color palette and will evoke a
   sense of cozy mid-century modern. The style is simple.
 
-**The app code will be well-documented. Not every line needs a comment. Comments in source will
+** The app code will be well-documented. Not every line needs a comment. Comments in source will
   explain tricky or confusing regions of code and why architectural choices were made the way they were.
 
 
-**You must adhere to the following C# coding guidelines:
+** You must adhere to the following C# coding guidelines:
   # C# Best Practices for AI Code Generation Instructions
 
   ## Code Style and Formatting
@@ -239,7 +237,7 @@
   - Use secure communication protocols (HTTPS, TLS)
   - Implement proper error handling without exposing sensitive information
 
-**You must adhere to the following Vue 3 development guidelines:
+** You must adhere to the following Vue 3 development guidelines:
   Architecture
     Favor the Composition API (setup functions and composables) over the Options API
     Organize components and composables by feature or domain for scalability

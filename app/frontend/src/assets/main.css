@@ -1,0 +1,61 @@
+@import 'tailwindcss';
+
+/*
+ * Design tokens: a cozy mid-century modern palette of cream paper, walnut browns and ember oranges.
+ * Tailwind turns each token into utilities (bg-cream-50, text-walnut-900, ...) and a CSS custom property
+ * (--color-ember-700), so components never hard-code a color.
+ *
+ * Every text/background pairing the components use meets WCAG 2.2 AA contrast (4.5:1 for text, 3:1 for input
+ * borders and focus rings). Re-check contrast when changing a value.
+ */
+@theme {
+  --color-cream-50: #fdf7ee;
+  --color-cream-100: #f8ecd9;
+  --color-cream-200: #f0dcbd;
+  --color-cream-300: #e4c69b;
+
+  --color-walnut-400: #9a7253;
+  --color-walnut-500: #82593c;
+  --color-walnut-600: #6b4730;
+  --color-walnut-700: #563724;
+  --color-walnut-800: #3f2819;
+  --color-walnut-900: #2a1a10;
+
+  --color-ember-300: #f6b47c;
+  --color-ember-400: #ef9450;
+  --color-ember-500: #e0742c;
+  --color-ember-600: #c25a1b;
+  --color-ember-700: #9d4514;
+  --color-ember-800: #7d3612;
+
+  --color-mustard-400: #e3a93f;
+  --color-brick-700: #9b2c1c;
+  --color-sage-700: #3f5b3a;
+
+  /* Geometric sans-serifs (Futura, Avenir, Century Gothic) carry the mid-century look. They ship with macOS,
+     Windows and Office, so no web font is downloaded and the strict Content-Security-Policy stays intact. */
+  --font-display:
+    'Futura', 'Avenir Next', 'Century Gothic', 'Trebuchet MS', ui-sans-serif, system-ui, sans-serif;
+  --font-sans:
+    'Avenir Next', 'Segoe UI', ui-sans-serif, system-ui, -apple-system, 'Helvetica Neue', Arial,
+    sans-serif;
+}
+
+/* An inline text link, e.g. "Create an account". */
+@utility text-link {
+  @apply rounded-sm font-semibold text-ember-700 underline decoration-2 underline-offset-4 transition hover:text-ember-800 focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-ember-600 motion-reduce:transition-none;
+}
+
+@layer base {
+  html {
+    color-scheme: light;
+  }
+
+  body {
+    @apply bg-cream-50 font-sans text-walnut-900 antialiased;
+  }
+
+  ::selection {
+    @apply bg-ember-300 text-walnut-900;
+  }
+}

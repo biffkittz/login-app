@@ -1,0 +1,17 @@
+# .NET build output (backend and backend.tests)
+bin/
+obj/
+TestResults/
+*.user
+*.rsuser
+
+# Generated from frontend/dist by buildAndRunSite.sh and the Dockerfile. Never edit or commit it:
+# the Vue source of truth is frontend/src.
+backend/wwwroot/
+
+# The published, combined site produced by buildAndRunSite.sh
+artifacts/
+
+# Code coverage output
+coverage/
+*.cobertura.xml

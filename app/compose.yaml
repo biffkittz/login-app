@@ -1,0 +1,42 @@
+# Runs the production container image locally next to a throwaway PostgreSQL, to smoke-test the Dockerfile
+# before deploying. Azure does not use this file.
+#
+#   export LOGINAPP_JWT_SIGNING_KEY="$(openssl rand -base64 48)"
+#   docker compose --file app/compose.yaml up --build
+#   # then browse to http://localhost:8080
+#
+# Stop with Ctrl+C; `docker compose --file app/compose.yaml down --volumes` also deletes the database.
+name: login-app
+
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: loginapp
+      POSTGRES_USER: loginapp
+      # A throwaway local database; real credentials live in Azure Key Vault.
+      POSTGRES_PASSWORD: loginapp_compose
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready --username=loginapp --dbname=loginapp"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  app:
+    build:
+      context: .
+    image: login-app:local
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      ConnectionStrings__DefaultConnection: "Host=db;Port=5432;Database=loginapp;Username=loginapp;Password=loginapp_compose"
+      Jwt__SigningKey: "${LOGINAPP_JWT_SIGNING_KEY:?Set LOGINAPP_JWT_SIGNING_KEY first, for example: export LOGINAPP_JWT_SIGNING_KEY=\"$$(openssl rand -base64 48)\"}"
+    ports:
+      # Published on the host's loopback interface only; Kestrel listens on port 80 inside the container.
+      - "127.0.0.1:8080:80"
+
+volumes:
+  pgdata:

@@ -1,0 +1,38 @@
+# Exercise the API against a locally running backend (`dotnet run` or the "Backend" launch configuration).
+# Works with the VS Code REST Client extension (humao.rest-client) and Visual Studio.
+#
+# The auth token travels in an HttpOnly cookie that REST Client stores and re-sends automatically, so run the
+# requests from top to bottom: register -> me -> logout -> login.
+
+@baseUrl = http://localhost:5082
+
+### Register a new account (also signs it in by setting the auth cookie)
+POST {{baseUrl}}/api/auth/register
+Content-Type: application/json
+
+{
+  "displayName": "Ada Lovelace",
+  "email": "ada@example.com",
+  "password": "analytical engine notes"
+}
+
+### Who is signed in?
+GET {{baseUrl}}/api/auth/me
+
+### Sign out (deletes the auth cookie)
+POST {{baseUrl}}/api/auth/logout
+
+### Sign in again
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "ada@example.com",
+  "password": "analytical engine notes"
+}
+
+### Liveness probe (no dependencies)
+GET {{baseUrl}}/health/live
+
+### Readiness probe (checks the database)
+GET {{baseUrl}}/health/ready

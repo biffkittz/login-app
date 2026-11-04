@@ -1,0 +1,37 @@
+# Keeps the build context small, reproducible and free of secrets. The image is always built from source, so
+# local build output and installed packages must never leak in.
+
+# Dependencies and build output (rebuilt inside the image)
+**/node_modules
+**/bin
+**/obj
+**/dist
+artifacts/
+backend/wwwroot/
+
+# Tests are run by buildAndRunSite.sh / CI, not inside the image
+backend.tests/
+**/TestResults
+**/coverage
+
+# Local-development configuration: the localhost database credentials and launch profiles must never ship in the
+# production image.
+backend/appsettings.Development.json
+backend/Properties/launchSettings.json
+
+# Secrets and editor files
+**/.env
+**/.env.*
+**/*.user
+**/.vscode
+**/.idea
+
+# Not needed to build the image
+prompts
+*.slnx
+Dockerfile
+.dockerignore
+compose.yaml
+buildAndRunSite.sh
+**/*.md
+**/*.http

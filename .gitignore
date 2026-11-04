@@ -1,0 +1,31 @@
+# Repository-wide ignores. Project-specific rules live next to each project:
+#   app/.gitignore           .NET build output, the generated wwwroot and the combined site
+#   app/frontend/.gitignore  Node, Vite and Vitest output
+
+# Operating systems
+.DS_Store
+Thumbs.db
+desktop.ini
+# Alternate-data-stream files Windows creates when files are copied into WSL
+*:Zone.Identifier
+
+# Editors and IDEs. Shared VS Code settings live in login-app.code-workspace.
+.idea/
+.vs/
+*.swp
+*~
+.vscode/*
+!.vscode/extensions.json
+
+# Secrets and machine-local configuration: never commit these
+.env
+.env.*
+!.env.example
+appsettings.Local.json
+*.pfx
+*.p12
+*.key
+*.pem
+
+# Logs
+*.log

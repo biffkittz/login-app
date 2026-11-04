@@ -1,0 +1,30 @@
+<Project>
+  <!--
+    Shared MSBuild settings for every .NET project under app/ (the API and its tests).
+    Keeping them here guarantees both projects compile with identical language and analyzer rules.
+  -->
+  <PropertyGroup>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+
+    <!-- Roslyn analyzers + code-style rules from the repository .editorconfig, enforced during build. -->
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+
+    <!-- Required for XML documentation output and for IDE0005 (unused usings) to run at build time. -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+
+    <!--
+      Release builds (buildAndRunSite.sh and the Dockerfile) fail on any warning, so analyzer and style
+      violations cannot reach a deployable artifact. Debug builds only warn, keeping the inner loop fast.
+    -->
+    <TreatWarningsAsErrors Condition="'$(Configuration)' == 'Release'">true</TreatWarningsAsErrors>
+
+    <!--
+      NuGet vulnerability advisories (NU1901-NU1904) stay visible as warnings but do not block a build:
+      a newly published advisory for a transitive package must not prevent shipping an urgent fix.
+      docs/DEVELOPMENT.md shows how to list vulnerable packages.
+    -->
+    <WarningsNotAsErrors>$(WarningsNotAsErrors);NU1901;NU1902;NU1903;NU1904</WarningsNotAsErrors>
+  </PropertyGroup>
+</Project>

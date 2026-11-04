@@ -1,0 +1,12 @@
+# Normalize line endings: the repository stores LF, which shell scripts need to run in WSL and Linux containers.
+* text=auto eol=lf
+
+*.sh text eol=lf
+Dockerfile text eol=lf
+
+# Binary files
+*.png binary
+*.jpg binary
+*.ico binary
+*.woff binary
+*.woff2 binary

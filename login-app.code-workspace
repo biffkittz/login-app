@@ -1,0 +1,228 @@
+// VS Code multi-root workspace for login-app. From a WSL terminal in the repository root, run:
+//   code login-app.code-workspace
+//
+// The backend, its tests and the frontend appear as separate folders so each gets its own tooling (C# Dev Kit,
+// Vue/ESLint). The "login-app" folder shows everything else (docs, Dockerfile, scripts, infra). To avoid listing
+// the same files twice, files.exclude hides the three project folders inside "login-app"; the patterns are
+// relative to each workspace folder, so they only match there. See docs/DEVELOPMENT.md.
+{
+  "folders": [
+    { "name": "login-app", "path": "." },
+    { "name": "backend", "path": "app/backend" },
+    { "name": "backend.tests", "path": "app/backend.tests" },
+    { "name": "frontend", "path": "app/frontend" }
+  ],
+
+  "settings": {
+    // Consistent files everywhere (also enforced by .editorconfig and .gitattributes).
+    "files.eol": "\n",
+    "files.insertFinalNewline": true,
+    "files.trimFinalNewlines": true,
+    "files.trimTrailingWhitespace": true,
+    "editor.formatOnSave": true,
+    "editor.rulers": [120],
+
+    "files.exclude": {
+      "app/backend": true,
+      "app/backend.tests": true,
+      "app/frontend": true,
+      "**/bin": true,
+      "**/obj": true
+    },
+    "search.exclude": {
+      "**/node_modules": true,
+      "**/dist": true,
+      "**/wwwroot": true,
+      "app/artifacts": true
+    },
+
+    // C#: formatting follows .editorconfig. Tests run on Microsoft.Testing.Platform (see global.json).
+    "[csharp]": {
+      "editor.defaultFormatter": "ms-dotnettools.csharp",
+      "editor.tabSize": 4
+    },
+    "dotnet.testWindow.useTestingPlatformProtocol": true,
+
+    // Frontend: Prettier formats, ESLint fixes on save.
+    "[vue]": { "editor.defaultFormatter": "esbenp.prettier-vscode" },
+    "[typescript]": { "editor.defaultFormatter": "esbenp.prettier-vscode" },
+    "[javascript]": { "editor.defaultFormatter": "esbenp.prettier-vscode" },
+    "[json]": { "editor.defaultFormatter": "esbenp.prettier-vscode" },
+    "[jsonc]": { "editor.defaultFormatter": "esbenp.prettier-vscode" },
+    "[css]": { "editor.defaultFormatter": "esbenp.prettier-vscode" },
+    "[tailwindcss]": { "editor.defaultFormatter": "esbenp.prettier-vscode" },
+    "[html]": { "editor.defaultFormatter": "esbenp.prettier-vscode" },
+    "editor.codeActionsOnSave": {
+      "source.fixAll.eslint": "explicit"
+    },
+    "eslint.useFlatConfig": true,
+    "eslint.workingDirectories": [{ "mode": "auto" }],
+    // Tailwind v4 at-rules (@theme, @utility, @apply) are understood by the Tailwind CSS IntelliSense language mode.
+    "files.associations": {
+      "*.css": "tailwindcss"
+    },
+
+    // Shell scripts must keep LF line endings to run in WSL.
+    "[shellscript]": {
+      "files.eol": "\n",
+      "editor.tabSize": 2
+    }
+  },
+
+  "extensions": {
+    "recommendations": [
+      "ms-vscode-remote.remote-wsl",
+      "ms-dotnettools.csdevkit",
+      "ms-dotnettools.csharp",
+      "Vue.volar",
+      "dbaeumer.vscode-eslint",
+      "esbenp.prettier-vscode",
+      "oxc.oxc-vscode",
+      "bradlc.vscode-tailwindcss",
+      "vitest.explorer",
+      "EditorConfig.EditorConfig",
+      "humao.rest-client",
+      "ms-ossdata.vscode-pgsql",
+      "ms-azuretools.vscode-containers",
+      "ms-azuretools.vscode-azurecontainerapps",
+      "timonwong.shellcheck"
+    ],
+    "unwantedRecommendations": [
+      // Vetur is the Vue 2 extension and conflicts with the official Vue (Volar) extension.
+      "octref.vetur"
+    ]
+  },
+
+  "launch": {
+    "version": "0.2.0",
+    "configurations": [
+      {
+        "name": "Backend: API (Development)",
+        "type": "coreclr",
+        "request": "launch",
+        "preLaunchTask": "backend: build",
+        "program": "${workspaceFolder:backend}/bin/Debug/net10.0/LoginApp.Api.dll",
+        "cwd": "${workspaceFolder:backend}",
+        "env": {
+          "ASPNETCORE_ENVIRONMENT": "Development",
+          "ASPNETCORE_URLS": "http://localhost:5082"
+        },
+        "console": "integratedTerminal",
+        "stopAtEntry": false
+      },
+      {
+        "name": "Frontend: Vite dev server",
+        "type": "node-terminal",
+        "request": "launch",
+        "command": "npm run dev",
+        "cwd": "${workspaceFolder:frontend}"
+      },
+      {
+        "name": "Frontend: debug in Edge",
+        "type": "msedge",
+        "request": "launch",
+        "url": "http://localhost:5173",
+        "webRoot": "${workspaceFolder:frontend}"
+      }
+    ],
+    "compounds": [
+      {
+        "name": "Full stack: API + Vite",
+        "configurations": ["Backend: API (Development)", "Frontend: Vite dev server"],
+        "stopAll": true
+      }
+    ]
+  },
+
+  "tasks": {
+    "version": "2.0.0",
+    "tasks": [
+      {
+        "label": "backend: build",
+        "type": "process",
+        "command": "dotnet",
+        "args": ["build", "app/backend/LoginApp.Api.csproj", "-p:GenerateFullPaths=true", "-consoleLoggerParameters:NoSummary"],
+        "options": { "cwd": "${workspaceFolder:login-app}" },
+        "problemMatcher": "$msCompile",
+        "group": { "kind": "build", "isDefault": true }
+      },
+      {
+        "label": "backend: test",
+        "type": "process",
+        "command": "dotnet",
+        "args": ["test", "--solution", "app/LoginApp.slnx"],
+        "options": { "cwd": "${workspaceFolder:login-app}" },
+        "problemMatcher": "$msCompile",
+        "group": "test"
+      },
+      {
+        "label": "backend: watch (hot reload)",
+        "type": "process",
+        "command": "dotnet",
+        "args": ["watch", "run", "--project", "app/backend/LoginApp.Api.csproj", "--launch-profile", "http"],
+        "options": { "cwd": "${workspaceFolder:login-app}" },
+        "isBackground": true,
+        "problemMatcher": []
+      },
+      {
+        "label": "backend: format",
+        "type": "process",
+        "command": "dotnet",
+        "args": ["format", "app/LoginApp.slnx"],
+        "options": { "cwd": "${workspaceFolder:login-app}" },
+        "problemMatcher": []
+      },
+      {
+        "label": "frontend: dev server",
+        "type": "shell",
+        "command": "npm run dev",
+        "options": { "cwd": "${workspaceFolder:frontend}" },
+        "isBackground": true,
+        "problemMatcher": []
+      },
+      {
+        "label": "frontend: test",
+        "type": "shell",
+        "command": "npm run test",
+        "options": { "cwd": "${workspaceFolder:frontend}" },
+        "problemMatcher": [],
+        "group": "test"
+      },
+      {
+        "label": "frontend: lint, type-check and format",
+        "type": "shell",
+        "command": "npm run lint && npm run type-check && npm run format",
+        "options": { "cwd": "${workspaceFolder:frontend}" },
+        "problemMatcher": []
+      },
+      {
+        "label": "site: build and run (buildAndRunSite.sh)",
+        "type": "shell",
+        "command": "./app/buildAndRunSite.sh",
+        "options": { "cwd": "${workspaceFolder:login-app}" },
+        "problemMatcher": []
+      },
+      {
+        "label": "db: add migration",
+        "type": "shell",
+        "command": "dotnet tool restore && dotnet ef migrations add ${input:migrationName} --project app/backend --output-dir Infrastructure/Data/Migrations",
+        "options": { "cwd": "${workspaceFolder:login-app}" },
+        "problemMatcher": []
+      },
+      {
+        "label": "db: apply migrations to the local database",
+        "type": "shell",
+        "command": "dotnet tool restore && dotnet ef database update --project app/backend",
+        "options": { "cwd": "${workspaceFolder:login-app}" },
+        "problemMatcher": []
+      }
+    ],
+    "inputs": [
+      {
+        "id": "migrationName",
+        "type": "promptString",
+        "description": "Migration name in PascalCase, e.g. AddUserTimeZone"
+      }
+    ]
+  }
+}

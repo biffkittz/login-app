@@ -1,41 +1,61 @@
-var builder = WebApplication.CreateBuilder(args);
+using LoginApp.Api.Features.Auth;
+using LoginApp.Api.Infrastructure.Configuration;
+using LoginApp.Api.Infrastructure.Data;
+using LoginApp.Api.Infrastructure.Hosting;
+using LoginApp.Api.Infrastructure.Networking;
+using LoginApp.Api.Infrastructure.Security;
 
-// Add services to the container.
-// Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
+// Composition root. Each concern registers itself through an extension method, so this file reads as an ordered
+// table of contents: configuration sources, then services, then the HTTP pipeline, then endpoints.
+WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
+
+// Configuration sources must be complete before anything reads a secret, so Key Vault is attached first.
+builder.Configuration.AddAzureKeyVaultIfConfigured(builder.Environment);
+bool usesEphemeralSigningKey = builder.Configuration.AddEphemeralSigningKeyInDevelopment(builder.Environment);
+
+builder.Services.AddServerHardening();
+builder.Services.AddProblemDetails();
+builder.Services.AddValidation();
 builder.Services.AddOpenApi();
+builder.Services.AddApplicationDatabase();
+builder.Services.AddAuthFeature();
+builder.Services.AddInternalNetworking();
+builder.Services.AddApplicationHealthChecks();
 
-var app = builder.Build();
+WebApplication app = builder.Build();
 
-// Configure the HTTP request pipeline.
+if (usesEphemeralSigningKey)
+{
+    AuthLog.UsingEphemeralSigningKey(app.Logger);
+}
+
+// Middleware order is significant:
+// 1. The exception handler wraps everything so any failure becomes a ProblemDetails response without internals.
+// 2. The internal-network check must see the *immediate* peer, so it runs before forwarded headers rewrite it.
+// 3. Forwarded headers then restore the client IP and scheme, which HSTS and per-client rate limiting rely on.
+app.UseExceptionHandler();
+app.UseInternalNetworkRestriction();
+app.UseForwardedHeaders();
+if (!app.Environment.IsDevelopment())
+{
+    app.UseHsts();
+}
+
+app.UseSecurityHeaders();
+app.UseStatusCodePages();
+app.UseRateLimiter();
+app.UseAuthentication();
+app.UseAuthorization();
+
+app.MapApplicationHealthChecks();
+app.MapAuthEndpoints();
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
 }
 
-app.UseHttpsRedirection();
+// Last, because its fallback route catches every path the endpoints above did not.
+app.MapSpaFrontend();
 
-var summaries = new[]
-{
-    "Freezing", "Bracing", "Chilly", "Cool", "Mild", "Warm", "Balmy", "Hot", "Sweltering", "Scorching"
-};
-
-app.MapGet("/weatherforecast", () =>
-{
-    var forecast =  Enumerable.Range(1, 5).Select(index =>
-        new WeatherForecast
-        (
-            DateOnly.FromDateTime(DateTime.Now.AddDays(index)),
-            Random.Shared.Next(-20, 55),
-            summaries[Random.Shared.Next(summaries.Length)]
-        ))
-        .ToArray();
-    return forecast;
-})
-.WithName("GetWeatherForecast");
-
-app.Run();
-
-record WeatherForecast(DateOnly Date, int TemperatureC, string? Summary)
-{
-    public int TemperatureF => 32 + (int)(TemperatureC / 0.5556);
-}
+await app.MigrateDatabaseIfEnabledAsync();
+await app.RunAsync();

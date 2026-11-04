@@ -1,0 +1,7 @@
+# Test-specific analyzer settings; everything else is inherited from the repository .editorconfig.
+
+[*.cs]
+# Test names follow Method_Scenario_ExpectedResult, which is easier to scan in test output than PascalCase.
+dotnet_diagnostic.CA1707.severity = none
+# xUnit discovers only public test classes, so they cannot be internal.
+dotnet_diagnostic.CA1515.severity = none
