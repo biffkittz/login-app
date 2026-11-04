@@ -3,6 +3,11 @@
   to create the frontend Vue 3/Typescript frontend project under the `frontend` directory. I have also executed
   `npm install tailwindcss @tailwindcss/vite` to install tailwindcss (styling should make use of tailwind). I have also
   executed `npm install axios` to install axios. I have already executed `dotnet new webapi -o backend` to create the backend .NET 10 project under the `app` directory. Rewrite any existing code in `frontend` and `backend` as needed to achieve the desired goal.
+
+**The app will present login and registration options to the user. The app will not
+  perform any other function except for login and registration. When a user
+  successfully logs in to the app, the user will be presented with a logout option,
+  which returns them to the main login page. The page style is simple and intuitive.
   
 **For the frontend Vue 3 project, you are an expert Senior Frontend Engineer specializing in Vue 3, Vite, and
   TypeScript. When writing Vue code, you must strictly follow these modern guidelines:
@@ -40,13 +45,11 @@
   and run the app locally. This includes documenting how to install tooling and any
   required VS Code Extensions.
 
-**The containerized, running app will only accept traffic internal to the container environment. An nginx container will reside
-  alongside the containerized app and proxy external requests to the app container over a private link.
+**The containerized, running app will only accept traffic internal to the container environment. An nginx container will reside alongside the containerized app and proxy external requests to the app container over a private link.
 
 **The containerized app will use Kestrel to serve the site on port 80, and will accept requests from internal (VNet) sources only.
 
-**The Azure Container App will use managed identities from Microsoft Entra ID to communicate with other Azure services like
-  Azure Key vault and Azure PostgreSQL
+**The Azure Container App will use managed identities from Microsoft Entra ID to communicate with other Azure services like Azure Key vault and Azure PostgreSQL
 
 **The containerized app will read secrets from Azure key vault
 
@@ -61,11 +64,6 @@
 
 **The app will be deployed as an Azure Container App that reads environment variables like DB connection strings
   from Azure key vault.
-
-**The app will present login and registration options to the user. The app will not
-  perform any other function except for login and registration. When a user
-  successfully logs in to the app, the user will be presented with a logout option,
-  which returns them to the main login page.
 
 **The app will make use of ASP.NET Core Identity and JWT (json web tokens) for user authentication.
 
