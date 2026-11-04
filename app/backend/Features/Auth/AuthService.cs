@@ -14,7 +14,10 @@ namespace LoginApp.Api.Features.Auth;
 /// <remarks>
 /// <see cref="UserManager{TUser}"/> methods take no <see cref="CancellationToken"/>. It is registered as
 /// <see cref="AspNetUserManager{TUser}"/>, which passes <c>HttpContext.RequestAborted</c> to every store call, so
-/// database work still stops when the client disconnects; the explicit token checks cover the remaining steps.
+/// database work still stops when the client disconnects. The explicit check at the start of each method also
+/// skips work the store can't cancel, such as the deliberately slow password hash, which runs before any store
+/// call. Nothing checks for cancellation after a change has been saved: by then cancelling can't undo the change,
+/// and would only skip logging it.
 /// </remarks>
 /// <param name="userManager">Identity's user API.</param>
 /// <param name="signInManager">Identity's sign-in API, used for password checks with lockout.</param>
@@ -51,7 +54,8 @@ internal sealed class AuthService(
             return RegistrationResult.Failure(GroupErrorsByField(result.Errors));
         }
 
-        cancellationToken.ThrowIfCancellationRequested();
+        // No cancellation check from here on: the account is saved, so the remaining work (logging it and
+        // signing a token) must finish even if the client has gone.
         AuthLog.UserRegistered(logger, user.Id);
         return RegistrationResult.Success(CreateSession(user));
     }
@@ -71,8 +75,9 @@ internal sealed class AuthService(
         // Verifies the password *and* maintains Identity's lockout counter: failures count towards a temporary
         // lockout and a success resets the count. Unlike PasswordSignInAsync it does not issue Identity's own
         // cookie; the caller issues a JWT instead.
+        // The attempt is now recorded (failed-sign-in count, possibly a lockout), so its outcome is always logged;
+        // there is deliberately no cancellation check after this point.
         SignInResult signIn = await signInManager.CheckPasswordSignInAsync(user, request.Password, lockoutOnFailure: true);
-        cancellationToken.ThrowIfCancellationRequested();
 
         if (signIn.Succeeded)
         {
