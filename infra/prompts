@@ -1,19 +1,45 @@
-**You must create a Terraform project that builds the container infrastructure
-  needed to run the app in Azure. Infrastructure components include:
+** You must create a Terraform project that builds the container infrastructure
+  needed to run the app in Azure. The app will be available on the Internet 
+  at the url https://app.biffkittz.com. Infrastructure components include, but are not limited to:
     * Resource group
     * VNet
     * Subnet
-    * Application Gateway
-    * Azure Container App environment
-    * Azure Database for PostgreSQL
-    * Container registry
-    * Key vault
+    * Azure Application Gateway (azurerm_application_gateway)
+    * Azure Container App environment (azurerm_container_app_environment)
+    * Azure Container App (azurerm_container_app)
+    * Azure Database for PostgreSQL (azurerm_postgresql_flexible_server)
+    * Azure Container Registry (azurerm_container_registry)
+    * Azure Key Vault
 
-**You are an expert infrastructure and devops engineer specializing in Terraform and infrastructure as code principles. You must adhere
+** All IaC/Terraform code should exist under the `infra` directory.
+
+** More information about the desired architecture can be found here: https://learn.microsoft.com/en-us/azure/well-architected/service-guides/azure-container-apps
+
+** The app should use a single replica, as this is a demonstration environment.
+
+** The Azure Database for PostgreSQL instance should have size B1ms (smallest available size)
+
+** This Terraform project will use Azure storage remote backend with locking -- please generate documentation on how to manually configure the storage in Azure for use as a remote backend.
+
+** Generate detailed documentation regarding authentication to Azure/Cloudflare, overall architecture, deployment steps, and dev environment setup steps.
+
+** TLS will be terminated at the Application Gateway and forwarded to the Container App on port 80.
+
+** The app will be available at the domain app.biffkittz.com. DNS records for the biffkittz.com domain are managed in Cloudflare. I have a PFX wildcard cert that can be uploaded to
+     Key Vault to be used by the Application Gateway for TLS termination. So we can use the Cloudflare origin certificate, the DNS record for app.biffkittz.com is set to
+     proxied
+
+** All resources should be created in the eastus Azure region by default.
+
+** The Container App should allow ingress from the VNet only, i.e. the Container App should allow ingress from the Application Gateway only, where the Application Gateway
+     is in the same VNet as the Container App.
+
+** You are an expert infrastructure and devops engineer specializing in Terraform and infrastructure as code principles. You must adhere
   to the following Terraform development guidelines:
   1. Use Latest Terraform and Providers
 
   Always target the latest stable Terraform version and Azure providers. In code, specify the required Terraform and provider versions to enforce this. Keep provider versions updated to get new features and fixes.
+
   2. Organize Code Cleanly
 
   Structure Terraform configurations with logical file separation:
@@ -24,6 +50,7 @@
       Follow consistent naming conventions and formatting (terraform fmt)
 
   This makes the code easy to navigate and maintain.
+
   3. Encapsulate in Modules
 
   Use Terraform modules to group reusable infrastructure components. For any resource set that will be used in multiple contexts:
