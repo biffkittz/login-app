@@ -20,10 +20,11 @@ data "cloudflare_zone" "this" {
   }
 }
 
+# substr(sha256("${data.azurerm_client_config.current.subscription_id}/${local.name}"), 0, 6)
 locals {
   name         = "${var.project}-${var.environment}"         # e.g. loginapp-demo
   compact_name = substr(replace(local.name, "-", ""), 0, 13) # for names that allow no hyphens
-  suffix       = coalesce(var.name_suffix, substr(sha256("${data.azurerm_client_config.current.subscription_id}/${local.name}"), 0, 6))
+  suffix       = coalesce(var.name_suffix, substr(sha256("${timestamp()}"), 0, 6)) # TODO: FIX
 
   # Every taggable resource carries these. "project" is the tag the project requires: project = "loginapp".
   tags = merge(var.tags, {

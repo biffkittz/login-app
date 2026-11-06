@@ -22,9 +22,9 @@ newgrp docker
 Then push:
 ```bash
 az login
-az acr login --name testregistry9468
-docker tag loginapp:latest testregistry9468.azurecr.io/loginapp:v1
-docker push testregistry9468.azurecr.io/loginapp:v1
+az acr login --name crloginappdemo85705a
+docker tag loginapp:latest crloginappdemo85705a.azurecr.io/loginapp:v1
+docker push crloginappdemo85705a.azurecr.io/loginapp:v1
 ```
 
 Configuring auth for Azure remote backend for Terraform:
