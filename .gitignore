@@ -2,6 +2,8 @@
 #   app/.gitignore           .NET build output, the generated wwwroot and the combined site
 #   app/frontend/.gitignore  Node, Vite and Vitest output
 
+.scratch/
+
 # Operating systems
 .DS_Store
 Thumbs.db

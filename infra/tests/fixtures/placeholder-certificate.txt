@@ -1,0 +1,2 @@
+Placeholder for tls_certificate_pfx_path in terraform test runs.
+The tests use mocked providers, so this file is never parsed as a certificate.

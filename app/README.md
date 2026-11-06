@@ -10,3 +10,27 @@ Build the container
 cd ./login-app/app
 sudo docker build -t loginapp .
 ```
+
+Docker push to ACR
+
+To make auth work, need to add user to docker group:
+```bash
+sudo groupadd docker
+sudo usermod -aG docker $USER
+newgrp docker
+```
+Then push:
+```bash
+az login
+az acr login --name testregistry9468
+docker tag loginapp:latest testregistry9468.azurecr.io/loginapp:v1
+docker push testregistry9468.azurecr.io/loginapp:v1
+```
+
+Configuring auth for Azure remote backend for Terraform:
+https://learn.microsoft.com/en-us/azure/developer/terraform/store-state-in-azure-storage?tabs=azure-cli
+```bash
+ACCOUNT_KEY=$(az storage account keys list --resource-group rg-terraform-state  --account-name demonstration --query '[0].value' -o tsv)
+export ARM_ACCESS_KEY=$ACCOUNT_KEY
+terraform init
+```

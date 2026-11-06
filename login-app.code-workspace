@@ -1,16 +1,18 @@
 // VS Code multi-root workspace for login-app. From a WSL terminal in the repository root, run:
 //   code login-app.code-workspace
 //
-// The backend, its tests and the frontend appear as separate folders so each gets its own tooling (C# Dev Kit,
-// Vue/ESLint). The "login-app" folder shows everything else (docs, Dockerfile, scripts, infra). To avoid listing
-// the same files twice, files.exclude hides the three project folders inside "login-app"; the patterns are
-// relative to each workspace folder, so they only match there. See docs/DEVELOPMENT.md.
+// The backend, its tests, the frontend and the Terraform project appear as separate folders, so each gets its own
+// tooling (C# Dev Kit, Vue/ESLint, the Terraform language server). The "login-app" folder shows everything else
+// (docs, Dockerfile, scripts). To avoid listing the same files twice, files.exclude hides those four folders inside
+// "login-app"; the patterns are relative to each workspace folder, so they only match there. See docs/DEVELOPMENT.md
+// and infra/docs/DEVELOPMENT.md.
 {
   "folders": [
     { "name": "login-app", "path": "." },
     { "name": "backend", "path": "app/backend" },
     { "name": "backend.tests", "path": "app/backend.tests" },
-    { "name": "frontend", "path": "app/frontend" }
+    { "name": "frontend", "path": "app/frontend" },
+    { "name": "infra", "path": "infra" }
   ],
 
   "settings": {
@@ -26,8 +28,10 @@
       "app/backend": true,
       "app/backend.tests": true,
       "app/frontend": true,
+      "infra": true,
       "**/bin": true,
-      "**/obj": true
+      "**/obj": true,
+      "**/.terraform": true
     },
     "search.exclude": {
       "**/node_modules": true,
@@ -66,7 +70,42 @@
     "[shellscript]": {
       "files.eol": "\n",
       "editor.tabSize": 2
-    }
+    },
+
+    // Terraform: the HashiCorp extension's language server formats with `terraform fmt` on save.
+    "[terraform]": {
+      "editor.defaultFormatter": "hashicorp.terraform",
+      "editor.tabSize": 2
+    },
+    "[terraform-vars]": {
+      "editor.defaultFormatter": "hashicorp.terraform",
+      "editor.tabSize": 2
+    },
+
+    // Project vocabulary that the spelling checker would otherwise flag (Azure abbreviations, tool names).
+    "cSpell.words": [
+      "appgw",
+      "ASPNETCORE",
+      "azuresu",
+      "azurelinux",
+      "biffkittz",
+      "Burstable",
+      "containerapp",
+      "CREATEDB",
+      "CREATEROLE",
+      "dbinit",
+      "eastus",
+      "libpq",
+      "loginapp",
+      "Npgsql",
+      "psql",
+      "psqlrc",
+      "snet",
+      "tflint",
+      "tfvars",
+      "versionless",
+      "vnet"
+    ]
   },
 
   "extensions": {
@@ -85,6 +124,8 @@
       "ms-ossdata.vscode-pgsql",
       "ms-azuretools.vscode-containers",
       "ms-azuretools.vscode-azurecontainerapps",
+      "ms-azuretools.vscode-azureresourcegroups",
+      "hashicorp.terraform",
       "timonwong.shellcheck"
     ],
     "unwantedRecommendations": [
@@ -214,6 +255,21 @@
         "type": "shell",
         "command": "dotnet tool restore && dotnet ef database update --project app/backend",
         "options": { "cwd": "${workspaceFolder:login-app}" },
+        "problemMatcher": []
+      },
+      {
+        "label": "infra: check (fmt, validate, test, lint, docs)",
+        "type": "shell",
+        "command": "terraform fmt -recursive && terraform init -backend=false -input=false >/dev/null && terraform validate && terraform test && tflint --init >/dev/null && tflint --recursive && terraform-docs .",
+        "options": { "cwd": "${workspaceFolder:infra}" },
+        "problemMatcher": [],
+        "group": "test"
+      },
+      {
+        "label": "infra: plan (demo)",
+        "type": "shell",
+        "command": "terraform plan -var-file=environments/demo.tfvars -out=demo.tfplan",
+        "options": { "cwd": "${workspaceFolder:infra}" },
         "problemMatcher": []
       }
     ],

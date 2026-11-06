@@ -1,0 +1,30 @@
+# Terraform working directory: providers, installed modules and backend settings. Recreated by `terraform init`.
+.terraform/
+
+# State never belongs in git. It lives in the azurerm backend and contains secrets (generated passwords, the
+# imported certificate). Saved plans and crash logs can contain the same values.
+*.pfx
+.secrets/
+
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+crash.log
+crash.*.log
+
+# Machine-local overrides and CLI configuration.
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+
+# Variable files are only committed under environments/ and must not contain secrets. Anything auto-loaded or
+# named for secrets stays local.
+*.auto.tfvars
+*.auto.tfvars.json
+*secret*.tfvars
+
+# .terraform.lock.hcl is deliberately NOT ignored: it pins provider versions and checksums for everyone.

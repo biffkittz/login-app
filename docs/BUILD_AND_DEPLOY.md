@@ -68,8 +68,9 @@ excludes `appsettings.Development.json`, so local credentials can never ship.
 
 ### Kestrel on port 80, as a non-root user
 
-The container listens for plain HTTP on **port 80** (`ASPNETCORE_HTTP_PORTS=80`). TLS terminates upstream at
-Application Gateway and the Container Apps ingress.
+The container listens for plain HTTP on **port 80** (`ASPNETCORE_HTTP_PORTS=80`). TLS terminates upstream, at
+Cloudflare's edge and at Application Gateway, which forwards plain HTTP to the Container Apps ingress inside the VNet
+(section 3).
 
 Since .NET 8, the official images provide an unprivileged `app` user, and the image runs as that user. Linux does
 not normally let unprivileged processes bind ports below 1024. Some container runtimes lift that restriction
@@ -105,202 +106,61 @@ Safari does not.
 
 ## 3. Deploying to Azure Container Apps
 
-### Target architecture
+The Terraform project in [`infra/`](../infra/README.md) creates the Azure infrastructure and deploys the image. It
+covers the network, Application Gateway, the internal Container Apps environment and app, PostgreSQL, Key Vault, the
+registry and the Cloudflare DNS record. **[infra/docs/DEPLOYMENT.md](../infra/docs/DEPLOYMENT.md) is the step-by-step
+guide**; this section describes what the app expects from that infrastructure.
 
-The Terraform project in `infra/` provisions the shared infrastructure. The app expects:
+### Request path
 
-| Resource | Requirements for this app |
+```text
+visitor ──HTTPS──► Cloudflare (app.biffkittz.com, proxied)
+        ──HTTPS──► Application Gateway (public IP; Cloudflare origin certificate from Key Vault; only Cloudflare may connect)
+        ──HTTP :80, inside the VNet──► Container Apps ingress (internal environment; only the gateway subnet)
+        ──HTTP :80──► Kestrel ──TLS──► PostgreSQL flexible server (private access, no public endpoint)
+```
+
+### What the infrastructure provides to the app
+
+| The app needs | How `infra/` provides it |
 | --- | --- |
-| Virtual network + subnets | A subnet delegated to the Container Apps environment; a subnet for Application Gateway; private endpoints for PostgreSQL and Key Vault (or VNet integration) |
-| Container Apps environment | **Internal** (`internal_load_balancer_enabled = true`): no public IP; reachable only from the VNet |
-| Azure Database for PostgreSQL – Flexible Server | PostgreSQL 16 or 17, private access; a database `loginapp` owned by a dedicated login role |
-| Azure Key Vault | RBAC authorization; holds the two app secrets below |
-| Azure Container Registry | Holds the `login-app` images |
-| User-assigned managed identity | Roles **AcrPull** on the registry and **Key Vault Secrets User** on the vault |
-| Application Gateway | The entry point for users; forwards to the Container App over HTTPS |
+| The image | `<registry>.azurecr.io/login-app:<tag>`, pulled with the app's user-assigned identity (AcrPull). `app_image_tag` in `infra/environments/demo.tfvars` selects the tag |
+| `ConnectionStrings__DefaultConnection` | Key Vault secret `ConnectionStrings--DefaultConnection` (as a Container Apps Key Vault reference): `Host=<server>.postgres.database.azure.com;Port=5432;Database=loginapp;Username=loginapp_app;Password=…;SSL Mode=VerifyFull` |
+| `Jwt__SigningKey` | Key Vault secret `Jwt--SigningKey`: 64 random bytes, Base64 |
+| A database role that owns its schema | The bootstrap job `caj-loginapp-demo-dbinit` creates `loginapp_app` with only `CONNECT` on `loginapp` and `CREATE` on schema `public`. The app then applies its own migrations |
+| Port 80 | Ingress target port 80 and `ASPNETCORE_HTTP_PORTS=80`. Set `app_target_port = 8080` if the platform refuses the port-80 capability (section 2) |
+| Real client IPs for rate limiting | Cloudflare's ranges are added as `Network__InternalNetworks__100+`, so the app trusts the Cloudflare → gateway → ingress hops in `X-Forwarded-For` |
+| One replica, 0.5 vCPU, 1 GiB | `app_min_replicas` / `app_max_replicas` = 1 (a demonstration environment) |
 
-### Variables used below
+Secrets reach the app as Container Apps Key Vault references. The app could also load Key Vault itself (set
+`KeyVault__Uri` and `AZURE_CLIENT_ID`), but that provider reads *every* secret in the vault, including the
+PostgreSQL administrator password, so the infrastructure doesn't use it.
 
-```bash
-RESOURCE_GROUP=rg-login-app
-REGISTRY=acrloginapp                  # registry name, without .azurecr.io
-KEY_VAULT=kv-login-app
-CONTAINERAPPS_ENV=cae-login-app       # the internal Container Apps environment
-APP_NAME=ca-login-app
-IDENTITY=id-login-app                 # user-assigned managed identity
-POSTGRES_SERVER=psql-login-app
-IMAGE_TAG="$(git rev-parse --short HEAD)"
+### Health probes
 
-IDENTITY_ID="$(az identity show -g "$RESOURCE_GROUP" -n "$IDENTITY" --query id -o tsv)"
-IDENTITY_CLIENT_ID="$(az identity show -g "$RESOURCE_GROUP" -n "$IDENTITY" --query clientId -o tsv)"
-KEY_VAULT_URI="$(az keyvault show -n "$KEY_VAULT" --query properties.vaultUri -o tsv)"   # ends with "/"
-```
-
-### Step 1: build and push the image
-
-`az acr build` builds the Dockerfile inside Azure, so no local Docker is needed:
-
-```bash
-az acr build --registry "$REGISTRY" --image "login-app:$IMAGE_TAG" --file app/Dockerfile app
-```
-
-With Docker locally instead:
-
-```bash
-az acr login --name "$REGISTRY"
-docker build --tag "$REGISTRY.azurecr.io/login-app:$IMAGE_TAG" app
-docker push "$REGISTRY.azurecr.io/login-app:$IMAGE_TAG"
-```
-
-Tag images immutably (commit SHA) rather than `latest`, so every revision maps to exactly one build.
-
-### Step 2: prepare the database role (once)
-
-Connect to the server from inside the VNet (a jump box, Azure Bastion, or a Cloud Shell attached to the VNet) as the
-server admin. Then create a login that owns the app's database. The app applies its own migrations, so it needs
-to own its schema, but it never needs server-level rights.
-
-```sql
-CREATE ROLE loginapp_app WITH LOGIN PASSWORD '<generate a long random password>';
-CREATE DATABASE loginapp OWNER loginapp_app;
-```
-
-### Step 3: store the secrets in Key Vault
-
-| Secret name | Becomes setting | Value |
-| --- | --- | --- |
-| `ConnectionStrings--DefaultConnection` | `ConnectionStrings:DefaultConnection` | `Host=<server>.postgres.database.azure.com;Port=5432;Database=loginapp;Username=loginapp_app;Password=<password>;SSL Mode=VerifyFull` |
-| `Jwt--SigningKey` | `Jwt:SigningKey` | `openssl rand -base64 48` |
-
-```bash
-az keyvault secret set --vault-name "$KEY_VAULT" --name "ConnectionStrings--DefaultConnection" \
-  --value "Host=$POSTGRES_SERVER.postgres.database.azure.com;Port=5432;Database=loginapp;Username=loginapp_app;Password=<password>;SSL Mode=VerifyFull"
-az keyvault secret set --vault-name "$KEY_VAULT" --name "Jwt--SigningKey" --value "$(openssl rand -base64 48)"
-```
-
-`SSL Mode=VerifyFull` encrypts the connection *and* verifies the server's certificate and host name. The runtime
-image's CA bundle already trusts the roots that Azure Database for PostgreSQL certificates chain to. If the vault
-only allows private access, run these commands from inside the VNet.
-
-### Step 4: create the Container App
-
-There are two supported ways to get the secrets into the app:
-
-- **Option A (recommended): Container Apps Key Vault references.** The platform reads the secrets with the managed
-  identity and exposes them as environment variables. No app code is involved.
-- **Option B: the app reads Key Vault itself.** Set `KeyVault__Uri` (and `AZURE_CLIENT_ID` for a user-assigned
-  identity). The app then loads every secret in the vault at startup with that managed identity, using
-  `ManagedIdentityCredential` rather than `DefaultAzureCredential`, as the Azure SDK guidance recommends for
-  production. It needs network access to the vault's private endpoint.
-
-#### Option A
-
-```bash
-az containerapp create \
-  --name "$APP_NAME" --resource-group "$RESOURCE_GROUP" --environment "$CONTAINERAPPS_ENV" \
-  --image "$REGISTRY.azurecr.io/login-app:$IMAGE_TAG" \
-  --registry-server "$REGISTRY.azurecr.io" --registry-identity "$IDENTITY_ID" \
-  --user-assigned "$IDENTITY_ID" \
-  --ingress external --target-port 80 --transport http \
-  --min-replicas 1 --max-replicas 3 --cpu 0.5 --memory 1.0Gi \
-  --secrets \
-    "db-connection=keyvaultref:${KEY_VAULT_URI}secrets/ConnectionStrings--DefaultConnection,identityref:$IDENTITY_ID" \
-    "jwt-signing-key=keyvaultref:${KEY_VAULT_URI}secrets/Jwt--SigningKey,identityref:$IDENTITY_ID" \
-  --env-vars \
-    "ConnectionStrings__DefaultConnection=secretref:db-connection" \
-    "Jwt__SigningKey=secretref:jwt-signing-key"
-```
-
-#### Option B
-
-Replace the `--secrets` and `--env-vars` arguments with:
-
-```bash
-  --env-vars "KeyVault__Uri=$KEY_VAULT_URI" "AZURE_CLIENT_ID=$IDENTITY_CLIENT_ID"
-```
-
-> **`--ingress external` on an internal environment does not mean public.** In an internal Container Apps
-> environment, `external` means "reachable from the virtual network", which is what Application Gateway needs.
-> `internal` would limit the app to other apps in the same environment. The environment itself has no public
-> endpoint.
-
-**Keep it VNet-only (defense in depth).** The app is unreachable from the internet because the environment is
-internal. On top of that:
-
-- Restrict ingress to the Application Gateway subnet:
-  ```bash
-  az containerapp ingress access-restriction set --name "$APP_NAME" --resource-group "$RESOURCE_GROUP" \
-    --rule-name allow-app-gateway --action Allow --ip-address <app-gateway-subnet-cidr>
-  ```
-- Keep network security groups on the subnets.
-- The app refuses any peer outside `Network:InternalNetworks` (RFC 1918 and Azure platform ranges by default).
-  Narrow that list to your VNet ranges if you like:
-  `Network__InternalNetworks__0=10.20.0.0/16`, `Network__InternalNetworks__1=...`.
-
-#### Health probes
-
-Configure them in Terraform (`liveness_probe`, `readiness_probe` and `startup_probe` on the container) or in the
-Container App YAML (`az containerapp update --yaml`):
+Terraform configures these on the container:
 
 | Probe | Path | Port | Purpose |
 | --- | --- | --- | --- |
-| Startup | `/health/live` | 80 | Allows time for migrations on first start: e.g. every 5 s, 36 failures (3 min) |
+| Startup | `/health/live` | 80 | Allows time for migrations on first start: every 5 s, 36 failures (3 min) |
 | Liveness | `/health/live` | 80 | Restarts a hung process. Deliberately ignores the database, so an outage doesn't cause restart loops |
 | Readiness | `/health/ready` | 80 | Includes a database check; replicas that can't reach PostgreSQL get no traffic |
 
-```yaml
-# template.containers[0].probes in the Container App YAML
-probes:
-  - type: Startup
-    httpGet: { path: /health/live, port: 80 }
-    periodSeconds: 5
-    failureThreshold: 36
-  - type: Liveness
-    httpGet: { path: /health/live, port: 80 }
-    periodSeconds: 10
-  - type: Readiness
-    httpGet: { path: /health/ready, port: 80 }
-    periodSeconds: 10
-```
+Application Gateway probes `/health/ready` too, so the public site reports unavailability rather than errors while
+the database is unreachable.
 
-### Step 5: Application Gateway
-
-Point a backend pool at the Container App's FQDN:
-`az containerapp show -n "$APP_NAME" -g "$RESOURCE_GROUP" --query properties.configuration.ingress.fqdn -o tsv`.
-It resolves privately through the environment's private DNS zone.
-
-- **Backend settings:** HTTPS on port 443, with *Override with new host name → Pick host name from backend target*.
-  The Container Apps ingress routes by host name.
-- **Health probe:** HTTPS, path `/health/ready`, host name picked from the backend settings.
-- **Listener:** HTTPS with your certificate (from Key Vault). For an intranet-only site, use the gateway's private
-  frontend IP.
-
-Application Gateway and the Container Apps ingress both add `X-Forwarded-For` and `X-Forwarded-Proto`. The app trusts
-those headers only from the internal networks, and walks back through both hops to find the real client address,
-which drives per-client rate limiting and logging. It also emits HSTS for HTTPS requests.
-
-### Step 6: verify
-
-From a machine in the VNet:
+### Releasing a new version
 
 ```bash
-FQDN="$(az containerapp show -n "$APP_NAME" -g "$RESOURCE_GROUP" --query properties.configuration.ingress.fqdn -o tsv)"
-curl -sS "https://$FQDN/health/ready"          # Healthy
-curl -sS -o /dev/null -w '%{http_code}\n' "https://$FQDN/"   # 200 (the SPA)
-az containerapp logs show -n "$APP_NAME" -g "$RESOURCE_GROUP" --tail 50   # JSON logs; look for "Database schema is up to date"
+TAG="$(git rev-parse --short HEAD)"
+az acr build --registry "$(terraform -chdir=infra output -raw container_registry_name)" \
+  --image "login-app:$TAG" --file app/Dockerfile app
+# set app_image_tag = "<TAG>" in infra/environments/demo.tfvars, then from infra/:
+terraform plan -var-file=environments/demo.tfvars -out=demo.tfplan && terraform apply demo.tfplan
 ```
 
-Then open the Application Gateway URL in a browser, register, sign out and sign in.
-
-### Updating
-
-```bash
-az acr build --registry "$REGISTRY" --image "login-app:$IMAGE_TAG" --file app/Dockerfile app
-az containerapp update --name "$APP_NAME" --resource-group "$RESOURCE_GROUP" \
-  --image "$REGISTRY.azurecr.io/login-app:$IMAGE_TAG"
-```
-
-Each update creates a new revision. Readiness probes keep traffic on the old revision until the new one is healthy.
+Tag images immutably (commit SHA) rather than `latest`, so every revision maps to exactly one build. Don't change the
+image with `az containerapp update`: Terraform owns the Container App, and the next apply would revert it.
 
 ## 4. Database migrations in Azure
 
@@ -323,26 +183,31 @@ it; don't point an older image at a newer schema unless the change was backward 
 
 ## 5. Day-2 operations
 
+[infra/docs/DEPLOYMENT.md](../infra/docs/DEPLOYMENT.md#day-2-operations) has the full list. In short:
+
 | Task | How |
 | --- | --- |
-| **Roll back** | Re-deploy the previous image tag with `az containerapp update --image ...`, or with multiple-revision mode, shift traffic: `az containerapp ingress traffic set --revision-weight <previous-revision>=100` |
-| **Rotate the database password** | `ALTER ROLE loginapp_app PASSWORD '...'`, update the Key Vault secret, then `az containerapp revision restart --revision <active-revision>` |
-| **Rotate the JWT signing key** | Set a new `Jwt--SigningKey` secret and restart the revision. Every existing session ends and users sign in again |
-| **Scale** | `az containerapp update --min-replicas N --max-replicas M`. The app is stateless; sessions live in the cookie |
-| **Logs** | `az containerapp logs show` or Log Analytics. Logs are JSON, one event per line, and never contain passwords, tokens or email addresses |
+| **Roll back** | Set `app_image_tag` back to the previous tag and apply. Mind schema changes (section 4) |
+| **Rotate the database password** | `terraform apply -replace=random_password.postgresql_app`, then run the bootstrap job and restart the revision |
+| **Rotate the JWT signing key** | `terraform apply -replace=random_bytes.jwt_signing_key`. Every session ends and users sign in again |
+| **Scale** | `app_min_replicas` / `app_max_replicas` in the tfvars file. The app is stateless; sessions live in the cookie |
+| **Logs** | `az containerapp logs show --name ca-loginapp-demo --resource-group rg-loginapp-demo`, or Log Analytics (`ContainerAppConsoleLogs_CL`). Logs are JSON, one event per line, and never contain passwords, tokens or email addresses |
 
-Restart after changing a secret: running replicas only read their configuration at startup.
+Running replicas read their configuration only at startup. With versionless Key Vault references, Container Apps
+picks up a new secret version within 30 minutes and restarts the revision itself.
 
 ## 6. Troubleshooting
 
+App-level symptoms are below. Infrastructure symptoms (Cloudflare 52x errors, certificate imports, role propagation,
+the bootstrap job) are in [infra/docs/DEPLOYMENT.md](../infra/docs/DEPLOYMENT.md#troubleshooting).
+
 | Symptom | Cause and fix |
 | --- | --- |
-| Container exits with `SocketException (13): Permission denied` | The platform refused the port-80 capability (section 2). Listen on 8080 (`ASPNETCORE_HTTP_PORTS=8080` + target port 8080) or run as root |
-| Startup: `Jwt:SigningKey is not configured` / `ConnectionStrings:DefaultConnection is not configured` | The secrets didn't reach the app: check the `--secrets`/`--env-vars` names, or `KeyVault__Uri` and the identity's role |
-| Startup: `403 Forbidden` from Key Vault | The managed identity lacks **Key Vault Secrets User**, or `AZURE_CLIENT_ID` points at another identity |
-| Startup times out connecting to PostgreSQL | Private DNS or VNet integration for the server is missing, or the firewall blocks the environment's subnet |
+| Container exits with `SocketException (13): Permission denied` | The platform refused the port-80 capability (section 2). Set `app_target_port = 8080` and apply |
+| Startup: `Jwt:SigningKey is not configured` / `ConnectionStrings:DefaultConnection is not configured` | The secrets didn't reach the app: check the app's Key Vault references and its identity's **Key Vault Secrets User** role on both secrets |
+| Startup times out connecting to PostgreSQL | Private DNS for the server isn't linked to the VNet, or the NSG on the PostgreSQL subnet blocks the Container Apps subnet |
+| `password authentication failed for user "loginapp_app"` | The bootstrap job hasn't run since the password was created or rotated |
 | `The remote certificate is invalid` from Npgsql | The host name in the connection string doesn't match the server certificate; use the `*.postgres.database.azure.com` name |
-| Every request gets `403` and the log says `Refused a request from ...` | The ingress or a proxy connects from a range missing in `Network:InternalNetworks`; add that CIDR |
-| Users share one rate-limit bucket | A proxy in front of the app is outside `Network:InternalNetworks`, so its `X-Forwarded-For` is ignored; add its range |
+| Every request gets `403` and the log says `Refused a request from ...` | The ingress connects from a range missing in `Network:InternalNetworks`; add that CIDR |
+| Users share one rate-limit bucket | A proxy in front of the app is outside `Network:InternalNetworks`, so the app stops walking `X-Forwarded-For` at that proxy. Cloudflare's ranges are added by `infra/`; add any other proxy's range |
 | Readiness probe failing, liveness fine | The database is unreachable from the replica (see above); the app stays up and recovers by itself |
-| `az acr build` fails with a network error | The registry blocks public access; allow trusted Azure services or use an ACR Tasks agent pool in the VNet |

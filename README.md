@@ -12,15 +12,18 @@ else. It is built to production standards so it can serve as a solid foundation:
 
 ```mermaid
 flowchart LR
-  user([Browser]) -->|HTTPS| agw[Application Gateway<br/>TLS termination]
+  user([Browser]) -->|HTTPS| cf[Cloudflare<br/>app.biffkittz.com]
+  cf -->|HTTPS| agw[Application Gateway<br/>TLS termination]
   subgraph vnet[Azure virtual network]
-    agw -->|HTTPS| ingress[Container Apps ingress<br/>internal environment]
+    agw -->|HTTP :80| ingress[Container Apps ingress<br/>internal environment]
     ingress -->|HTTP :80| app[login-app container<br/>Kestrel: API + Vue SPA]
     app -->|TLS :5432| pg[(Azure Database<br/>for PostgreSQL)]
   end
   kv[Azure Key Vault] -.->|secrets via managed identity| ingress
   acr[Azure Container Registry] -.->|image pull| ingress
 ```
+
+The Azure side is built with Terraform in [`infra/`](infra/README.md).
 
 ## Quick start (WSL Ubuntu)
 
@@ -52,6 +55,7 @@ cd app/frontend && npm run dev                                   # SPA on http:/
 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Setting up WSL, VS Code, extensions and tooling; running, debugging and testing locally; conventions; troubleshooting |
 | [docs/BUILD_AND_DEPLOY.md](docs/BUILD_AND_DEPLOY.md) | `buildAndRunSite.sh`, the container image, and deployment to Azure Container Apps with Key Vault and PostgreSQL |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | How the pieces fit together, the authentication flow, and the security decisions behind them |
+| [infra/README.md](infra/README.md) | The Terraform project for Azure and Cloudflare, with its own docs: [architecture](infra/docs/ARCHITECTURE.md), [authentication](infra/docs/AUTHENTICATION.md), [deployment](infra/docs/DEPLOYMENT.md), [development setup](infra/docs/DEVELOPMENT.md) |
 
 ## Repository layout
 
@@ -72,7 +76,9 @@ login-app/
 │   ├── backend/                  ASP.NET Core 10 API (LoginApp.Api)
 │   ├── backend.tests/            xUnit v3 unit and in-memory integration tests
 │   └── frontend/                 Vue 3 + TypeScript SPA
-└── infra/                        Terraform for the Azure infrastructure (separate workstream)
+├── infra/                        Terraform: network, gateway, Container Apps, PostgreSQL, Key Vault, DNS
+├── .github/workflows/infra.yml   CI for infra/: fmt, validate, mocked tests, lint, docs
+└── .pre-commit-config.yaml       Git hooks for infra/ (fmt, validate, lint, docs, ShellCheck)
 ```
 
 ## What's in the box

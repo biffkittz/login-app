@@ -174,17 +174,22 @@ the Extensions view (filter: `@recommended`):
 
 ### The workspace layout
 
-`login-app.code-workspace` is a multi-root workspace with four folders:
+`login-app.code-workspace` is a multi-root workspace with five folders:
 
 | Folder | Path | Contents |
 | --- | --- | --- |
-| `login-app` | repository root | Docs, Dockerfile, scripts, `infra/` (the three folders below are hidden here to avoid duplicates) |
+| `login-app` | repository root | Docs, Dockerfile, scripts (the four folders below are hidden here to avoid duplicates) |
 | `backend` | `app/backend` | The ASP.NET Core API |
 | `backend.tests` | `app/backend.tests` | xUnit tests |
 | `frontend` | `app/frontend` | The Vue SPA |
+| `infra` | `infra` | The Terraform project; its tools and setup are in [infra/docs/DEVELOPMENT.md](../infra/docs/DEVELOPMENT.md) |
 
 It also defines shared settings (format on save, LF line endings), debug configurations (section 7) and tasks
-(*Terminal → Run Task…*): build, test, watch, lint, run the site, and add or apply database migrations.
+(*Terminal → Run Task…*):
+
+- build, test, watch, lint and run the site;
+- add or apply database migrations;
+- check or plan the infrastructure.
 
 ## 6. Run the app
 

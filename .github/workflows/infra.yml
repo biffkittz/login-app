@@ -1,0 +1,87 @@
+# Checks for the Terraform project in infra/: formatting, validation, the mocked `terraform test` suites, linting,
+# generated docs and the bootstrap script. Every provider is mocked or unused, so the workflow needs no Azure or
+# Cloudflare credentials and can't change any infrastructure. Third-party actions are pinned to commit SHAs.
+name: infra
+
+on:
+  pull_request:
+    paths:
+      - "infra/**"
+      - ".github/workflows/infra.yml"
+  push:
+    branches: [main]
+    paths:
+      - "infra/**"
+      - ".github/workflows/infra.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: infra-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: infra
+
+jobs:
+  checks:
+    name: fmt, validate, test, lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.17.1
+          terraform_wrapper: false
+
+      - name: terraform fmt
+        run: terraform fmt -check -recursive -diff
+
+      - name: terraform init (providers and modules only, no backend)
+        run: terraform init -backend=false -input=false
+
+      - name: terraform validate
+        run: terraform validate
+
+      - name: terraform test (mocked providers)
+        run: terraform test
+
+      - name: Cache TFLint plugins
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.tflint.d/plugins
+          key: tflint-${{ runner.os }}-${{ hashFiles('infra/.tflint.hcl') }}
+
+      - name: Set up TFLint
+        uses: terraform-linters/setup-tflint@6ffdbaa3be476b3431f7275c26966ef32ff60337 # v6.3.2
+        with:
+          tflint_version: v0.65.0
+
+      - name: tflint
+        run: |
+          tflint --init
+          tflint --recursive --format compact
+        env:
+          # tflint --init downloads the pinned ruleset from GitHub; the token avoids API rate limits.
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - name: terraform-docs is up to date
+        run: |
+          curl -sSfLo "$RUNNER_TEMP/terraform-docs.tgz" \
+            https://github.com/terraform-docs/terraform-docs/releases/download/v0.24.0/terraform-docs-v0.24.0-linux-amd64.tar.gz
+          echo "9005daf969de0b50134493a2c00078b49f5f5b39d021cda7c89bf4d4f3d776d3  $RUNNER_TEMP/terraform-docs.tgz" | sha256sum --check --strict
+          tar -xzf "$RUNNER_TEMP/terraform-docs.tgz" -C "$RUNNER_TEMP" terraform-docs
+          "$RUNNER_TEMP/terraform-docs" --output-check . || { echo "::error::Run 'terraform-docs .' in infra/ and commit the result."; exit 1; }
+
+      - name: shellcheck
+        run: shellcheck modules/container-app/scripts/*.sh

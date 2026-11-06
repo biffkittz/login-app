@@ -1,0 +1,34 @@
+# terraform-docs (https://terraform-docs.io) configuration. Regenerates the reference sections (requirements,
+# providers, modules, resources, inputs, outputs) between the BEGIN_TF_DOCS and END_TF_DOCS markers in README.md of
+# the root module and of every module under modules/. Run from infra/ after changing variables, outputs or resources:
+#   terraform-docs .
+formatter: markdown table
+version: ">= 0.24.0, < 1.0.0"
+
+recursive:
+  enabled: true
+  path: modules
+  include-main: true
+
+output:
+  file: README.md
+  mode: inject
+  template: |-
+    <!-- BEGIN_TF_DOCS -->
+    {{ .Content }}
+    <!-- END_TF_DOCS -->
+
+sort:
+  enabled: true
+  by: required
+
+settings:
+  anchor: true
+  default: true
+  escape: true
+  hide-empty: true
+  indent: 3
+  lockfile: true
+  required: true
+  sensitive: true
+  type: true

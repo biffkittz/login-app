@@ -1,38 +1,49 @@
-** You must create a Terraform project that builds the container infrastructure
-  needed to run the app in Azure. The app will be available on the Internet 
+** You must create a Terraform project that builds the infrastructure
+  needed to run the LoginApp in Azure Container Apps. The app will be available on the Internet 
   at the url https://app.biffkittz.com. Infrastructure components include, but are not limited to:
     * Resource group
-    * VNet
-    * Subnet
+    * VNet (azurerm_virtual_network)
+    * Subnet (azurerm_virtual_network)
     * Azure Application Gateway (azurerm_application_gateway)
     * Azure Container App environment (azurerm_container_app_environment)
     * Azure Container App (azurerm_container_app)
-    * Azure Database for PostgreSQL (azurerm_postgresql_flexible_server)
+    * Azure Database for PostgreSQL (azurerm_postgresql_flexible_server/azurerm_postgresql_flexible_server_database)
     * Azure Container Registry (azurerm_container_registry)
     * Azure Key Vault
+    * Public IP address for the Application Gateway
+
+** Consider configuring service endpoints so that the Container App can communicate with the PostgreSQL database over Microsoft's network vs Internet.
+
+** All resources should be tagged with `project:loginapp`
 
 ** All IaC/Terraform code should exist under the `infra` directory.
 
 ** More information about the desired architecture can be found here: https://learn.microsoft.com/en-us/azure/well-architected/service-guides/azure-container-apps
 
-** The app should use a single replica, as this is a demonstration environment.
+** The Container App should use a single replica, as this is a demonstration environment.
 
 ** The Azure Database for PostgreSQL instance should have size B1ms (smallest available size)
 
-** This Terraform project will use Azure storage remote backend with locking -- please generate documentation on how to manually configure the storage in Azure for use as a remote backend.
+** The Container App needs to be able to connect to the PostgreSQL database
+
+** This Terraform project will use Azure storage remote backend with locking, which I have already configured in `backend.tf`.
 
 ** Generate detailed documentation regarding authentication to Azure/Cloudflare, overall architecture, deployment steps, and dev environment setup steps.
 
 ** TLS will be terminated at the Application Gateway and forwarded to the Container App on port 80.
 
-** The app will be available at the domain app.biffkittz.com. DNS records for the biffkittz.com domain are managed in Cloudflare. I have a PFX wildcard cert that can be uploaded to
-     Key Vault to be used by the Application Gateway for TLS termination. So we can use the Cloudflare origin certificate, the DNS record for app.biffkittz.com is set to
-     proxied
+** The app will be available at the domain app.biffkittz.com. DNS records for the biffkittz.com domain are managed in Cloudflare. I have a PFX wildcard cert that can be uploaded to Key Vault to be used by the Application Gateway for TLS termination. So we can use the Cloudflare origin certificate, and the DNS record for app.biffkittz.com is set to proxied in Cloudflare. The app.biffkittz.com record will point to the public IP of the Azure Application Gateway
 
-** All resources should be created in the eastus Azure region by default.
+** All resources should be created in the `eastus` Azure region by default.
 
 ** The Container App should allow ingress from the VNet only, i.e. the Container App should allow ingress from the Application Gateway only, where the Application Gateway
      is in the same VNet as the Container App.
+
+** The Container Registry should use the Basic pricing plan
+
+** The azurerm_postgresql_flexible_server_database should have name `loginapp`
+
+** You can read `login-app/docs/BUILD_AND_DEPLOY.md` for additional information about how the app is to be deployed.
 
 ** You are an expert infrastructure and devops engineer specializing in Terraform and infrastructure as code principles. You must adhere
   to the following Terraform development guidelines:
