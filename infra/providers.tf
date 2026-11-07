@@ -51,9 +51,10 @@ provider "azurerm" {
       # Destroy only soft-deletes; nothing is purged. Re-creating the same names within the retention period
       # recovers the vault and its secrets instead of failing on a name conflict. Purging is impossible anyway
       # while purge protection is on (the default here).
-      purge_soft_delete_on_destroy               = false
-      purge_soft_deleted_secrets_on_destroy      = false
-      purge_soft_deleted_certificates_on_destroy = false
+      # NOTE: For the demo app, set purging to true so the key vault resource is entirely destroyed.
+      purge_soft_delete_on_destroy               = true # initially false
+      purge_soft_deleted_secrets_on_destroy      = true # initially false
+      purge_soft_deleted_certificates_on_destroy = true # initially false
       recover_soft_deleted_key_vaults            = true
       recover_soft_deleted_secrets               = true
       recover_soft_deleted_certificates          = true

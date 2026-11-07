@@ -11,7 +11,7 @@
 
 subscription_id = "3c3f379f-8161-4631-a30c-a3af82622a6a"
 location        = "centralus"
-name_suffix     = "85705a" #TODO: REMOVE
+name_suffix     = "798hyr" #TODO: REMOVE
 project         = "loginapp"
 environment     = "demo"
 
