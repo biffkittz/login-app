@@ -154,7 +154,7 @@ mock_resource "azurerm_container_app_environment" {
   defaults = {
     id                = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-mock/providers/Microsoft.App/managedEnvironments/cae-mock"
     default_domain    = "mockdomain-1a2b3c4d.eastus.azurecontainerapps.io"
-    static_ip_address = "10.40.1.100"
+    static_ip_address = "203.0.113.20" # public: the environment is external
   }
 }
 
@@ -169,18 +169,5 @@ mock_resource "azurerm_container_app" {
 mock_resource "azurerm_container_app_job" {
   defaults = {
     id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-mock/providers/Microsoft.App/jobs/caj-mock"
-  }
-}
-
-mock_resource "azurerm_public_ip" {
-  defaults = {
-    id         = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-mock/providers/Microsoft.Network/publicIPAddresses/pip-mock"
-    ip_address = "203.0.113.10"
-  }
-}
-
-mock_resource "azurerm_application_gateway" {
-  defaults = {
-    id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-mock/providers/Microsoft.Network/applicationGateways/agw-mock"
   }
 }

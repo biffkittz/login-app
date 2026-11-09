@@ -8,9 +8,9 @@ output "resource_group_name" {
   value       = azurerm_resource_group.this.name
 }
 
-output "application_gateway_public_ip" {
-  description = "Public IP of Application Gateway, the target of the Cloudflare DNS record."
-  value       = module.application_gateway.public_ip_address
+output "origin_public_ip" {
+  description = "Public IP of the Container Apps environment (the origin), the target of the Cloudflare DNS record."
+  value       = module.container_apps.static_ip_address
 }
 
 output "container_registry_name" {
@@ -33,19 +33,14 @@ output "container_app_name" {
   value       = module.container_apps.app_name
 }
 
-output "container_app_private_fqdn" {
-  description = "Private FQDN of the app inside the VNet; Application Gateway's backend."
+output "container_app_fqdn" {
+  description = "The app's platform FQDN. It answers TLS on the exposed port but serves only the health endpoints to anyone without Cloudflare's client certificate."
   value       = module.container_apps.app_fqdn
 }
 
 output "container_apps_environment_name" {
-  description = "Name of the internal Container Apps environment."
+  description = "Name of the Container Apps environment."
   value       = module.container_apps.environment_name
-}
-
-output "container_apps_environment_static_ip" {
-  description = "Private IP of the environment's internal load balancer."
-  value       = module.container_apps.static_ip_address
 }
 
 output "db_bootstrap_job_name" {

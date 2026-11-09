@@ -126,3 +126,11 @@
           CI pipeline
           Pre-commit hooks
           Enforce formatting, linting, and basic validation
+
+
+I want you to refactor the app so that an Application Gateway is no longer needed (it's expensive).
+  Instead, the app container should accept inbound web traffic on port 443. The app will still need to use
+  the Cloudflare origin certificate for TLS termination at the container. Please provide an explanation of
+  your solution before applying it.
+
+Your next goal is to create a realtime webapp to manage a grocery/todo list for a family (growing off the existing .NET backend and Vue frontend). The app will be accessed primarily from a mobile browser, so mobile performance and usability is paramount. The app will use the SignalR library for realtime communication via websockets. Every authenticated client will be able to update the grocery list, and changes will be reflected across all authenticated clients in realtime. Since this is a demo app with a single server instance, SignalR on the web server itself will handle all realtime websocket traffic, i.e. do not use Azure SignalR service for this project. The grocery app must be intuitive and simple. UI design should follow best practices and should not burden the user with an overly complex design. Users must be able to create/delete/update/rearrange grocery items. Grocery items should include expanded options for brand, quantity, store, and notes. Item name is a required field on each grocery item. The app should allow users to view and update saved grocery lists. Lists can be named and saved for future reference. To view the grocery list, a user must register and login. Any logged-in, registered user may access the app.

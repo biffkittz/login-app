@@ -1,5 +1,5 @@
 # Key Vault holds every secret the platform needs (database passwords, the app's connection string, the JWT signing
-# key) and the gateway's TLS certificate. Access is controlled by Azure RBAC, scoped to individual secrets wherever
+# key) and the app's TLS certificate. Access is controlled by Azure RBAC, scoped to individual secrets wherever
 # possible, so each identity can read only what it uses.
 
 resource "azurerm_key_vault" "this" {
@@ -58,8 +58,8 @@ resource "azurerm_key_vault_secret" "this" {
   depends_on = [time_sleep.administrator_rbac]
 }
 
-# The TLS certificate for the gateway's HTTPS listener, imported from a PFX file. Changing the file and applying
-# imports a new version, and Application Gateway picks up new versions on its own (see outputs.tf).
+# The TLS certificate the app serves to Cloudflare, imported from a PFX file. Changing the file and applying imports
+# a new version, which the app picks up on its own (see outputs.tf).
 resource "azurerm_key_vault_certificate" "tls" {
   name         = var.certificate_name
   key_vault_id = azurerm_key_vault.this.id
@@ -84,7 +84,7 @@ resource "azurerm_role_assignment" "secret_reader" {
   principal_type       = "ServicePrincipal"
 }
 
-# A Key Vault certificate is served through a secret of the same name, which is what Application Gateway reads.
+# A Key Vault certificate is served through a secret of the same name, which is what the Container App reads.
 resource "azurerm_role_assignment" "certificate_reader" {
   for_each = var.certificate_reader_principal_ids
 

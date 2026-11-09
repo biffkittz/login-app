@@ -10,7 +10,7 @@ flowchart LR
   subgraph browser[Browser]
     spa[Vue 3 SPA]
   end
-  subgraph container[login-app container: Kestrel on :80]
+  subgraph container[login-app container: Kestrel on :80, or HTTPS :443 in Azure]
     static[Static files<br/>MapStaticAssets]
     api[Minimal API<br/>/api/auth/*]
     identity[ASP.NET Core Identity]
@@ -24,8 +24,9 @@ flowchart LR
 - **One origin.** The API serves the compiled SPA, and in development Vite proxies `/api` to the API. The browser
   therefore always talks to a single origin, which is what allows a `SameSite=Strict` cookie and removes CORS
   entirely.
-- **One container.** Kestrel serves both static files and the API over HTTP on port 80. TLS terminates in front of
-  it (Application Gateway, then the Container Apps ingress).
+- **One container.** Kestrel serves both static files and the API. In Azure it terminates TLS itself on port 443
+  with the Cloudflare origin certificate: Container Apps passes the TCP connection through. Locally it serves plain
+  HTTP on port 80 (or 5082/8080 in development).
 - **Stateless app.** Sessions are signed tokens kept in the browser's cookie and accounts live in PostgreSQL, so
   replicas can be added or removed freely.
 
@@ -73,13 +74,15 @@ All errors are [RFC 9457 problem details](https://www.rfc-editor.org/rfc/rfc9457
 | **Lockout and rate limiting** | Five failures lock an account for 15 minutes (stops guessing one account), and a per-IP fixed window on login and registration slows credential stuffing and sign-up spam. |
 | **Same message for "unknown email" and "wrong password"** | Avoids revealing which emails are registered at sign-in. Registration and lockout responses *do* reveal it: registration must say "already registered", and a locked-out user deserves to know why. With registration revealing it anyway, hiding it at lockout would protect nothing. |
 | **Strict Content-Security-Policy** | `script-src 'self'` with no `unsafe-inline` is possible because Vite emits only external, fingerprinted files and the app loads nothing from other origins. Also `frame-ancestors 'none'`, `nosniff`, `no-referrer`, COOP/CORP and a permissions policy. |
-| **Internal-network allow-list** | The Container Apps environment is VNet-internal; that is the real control. The app also refuses peers outside `Network:InternalNetworks`, in case the image is ever exposed elsewhere. It checks the *immediate* peer (the ingress), not the forwarded client, because users may legitimately arrive via Application Gateway. |
-| **Trusted forwarded headers** | `X-Forwarded-For` and `X-Forwarded-Proto` are honored only from internal networks, walking back through both proxies to the real client. That is what makes per-client rate limits, logs and HSTS correct behind TLS termination. |
+| **Cloudflare client certificate required** | The container is publicly reachable, and a public Container Apps environment can't be fenced with an NSG. With `OriginTls:RequireCloudflareClientCertificate`, Kestrel asks every client for a certificate and accepts only one that chains to Cloudflare's origin-pull CA, embedded in the image (not the system roots). Requests without one get 403, except the health endpoints, which the platform's probes call directly. See `Infrastructure/Tls/`. |
+| **TLS in the container** | `OriginTls:CertificatePfxBase64` (the origin certificate from Key Vault) becomes Kestrel's HTTPS certificate, TLS 1.2 and 1.3 only. The app refuses to start if the certificate is unreadable, has no private key or is outside its validity period. |
+| **Internal-network allow-list** | The app refuses TCP peers outside `Network:InternalNetworks`, in case the image is ever exposed somewhere without the other controls. It checks the *immediate* peer (in Azure, the Container Apps ingress proxy), not the forwarded client, because users legitimately arrive from the internet through Cloudflare. |
+| **Trusted forwarded headers** | `X-Forwarded-For` and `X-Forwarded-Proto` are honored only from internal networks (and Cloudflare's ranges), walking back through trusted hops to the real client. That is what makes per-client rate limits and logs correct behind Cloudflare. The client-certificate check is what makes the header trustworthy: only Cloudflare can send it. |
 | **Request body limit 64 KB, no `Server` header** | The largest legitimate request is a few hundred bytes, and the server software is nobody's business. |
 | **Data Protection keys in memory** | `AddAuthentication` registers Data Protection, but nothing uses it. Keeping its keys in memory avoids writing unused secret material into the container. |
 | **No secrets in source or image** | Secrets come from Key Vault (or user secrets locally). `.dockerignore` keeps `appsettings.Development.json` out of the image, and Development generates a temporary JWT key rather than committing one. |
 | **Logging hygiene** | Logs identify users by opaque ID only, never email, password or token. Request DTOs and token types are classes, not records, so a synthesized `ToString()` can't leak them. |
-| **Non-root container** | The process runs as the image's `app` user, with only `CAP_NET_BIND_SERVICE` added so it can listen on port 80. Its code is owned by root and read-only to it. |
+| **Non-root container** | The process runs as the image's `app` user, with only `CAP_NET_BIND_SERVICE` added so it can listen on port 80 or 443. Its code is owned by root and read-only to it. |
 
 ## Backend
 
@@ -99,21 +102,24 @@ app/backend/
     ├── Configuration/                   Azure Key Vault configuration provider
     ├── Networking/                      Internal-network middleware and forwarded-header trust
     ├── Security/                        Security headers, Kestrel hardening, in-memory Data Protection keys
+    ├── Tls/                             HTTPS in Kestrel with the origin certificate; Cloudflare client-certificate check
     └── Hosting/                         SPA static files and fallback; health checks
 ```
 
 The **request pipeline** order is deliberate (`Program.cs`):
 
 1. Exception handler: always returns problem details, never a stack trace.
-2. Internal-network check: must see the original peer, so it runs before forwarded headers.
-3. Forwarded headers: restores the client IP and scheme.
-4. HSTS (outside Development).
-5. Security headers.
-6. Status-code pages.
-7. Rate limiter.
-8. Authentication, then authorization.
-9. Endpoints, mapped in priority order: health, API, OpenAPI (Development), and last the SPA static files and
-   fallback.
+2. Client-certificate requirement (when `OriginTls:RequireCloudflareClientCertificate` is on): refuses requests
+   without Cloudflare's certificate before any other work, except the health endpoints.
+3. Internal-network check: must see the original peer, so it runs before forwarded headers.
+4. Forwarded headers: restores the client IP and scheme.
+5. HSTS (outside Development).
+6. Security headers.
+7. Status-code pages.
+8. Rate limiter.
+9. Authentication, then authorization.
+10. Endpoints, mapped in priority order: health, API, OpenAPI (Development), and last the SPA static files and
+    fallback.
 
 **Validation** happens before handlers run: `AddValidation()` (new in .NET 10) generates validators for the public
 request contracts and answers invalid input with a `400` validation problem. Identity's own rules (unique email,

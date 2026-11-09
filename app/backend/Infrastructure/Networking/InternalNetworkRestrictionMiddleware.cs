@@ -8,14 +8,15 @@ namespace LoginApp.Api.Infrastructure.Networking;
 /// </summary>
 /// <remarks>
 /// <para>
-/// This is defense in depth. The primary control is the network itself: the Container Apps environment is
-/// VNet-internal, so the container is unreachable from the internet. This middleware keeps the app internal-only
-/// even if the image is ever run somewhere that does expose it.
+/// This is defense in depth. It keeps the app from answering clients that connect to it directly, should the image
+/// ever run somewhere that exposes its port. In Azure every connection arrives from the Container Apps ingress
+/// proxy, inside the environment, so it always passes; there, Cloudflare's client certificate is what keeps
+/// everyone else out (see <c>ClientCertificateRequirementMiddleware</c>).
 /// </para>
 /// <para>
 /// It deliberately judges the immediate TCP peer (normally the Container Apps ingress) and runs before
-/// <c>UseForwardedHeaders</c>. The forwarded client address is not used, because end users may legitimately
-/// reach the app through an Application Gateway from outside the VNet.
+/// <c>UseForwardedHeaders</c>. The forwarded client address is not used, because end users legitimately reach
+/// the app from the internet through Cloudflare.
 /// </para>
 /// </remarks>
 internal sealed class InternalNetworkRestrictionMiddleware

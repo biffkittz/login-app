@@ -7,20 +7,20 @@ else. It is built to production standards so it can serve as a solid foundation:
   PostgreSQL.
 - **Frontend:** Vue 3 with TypeScript, Vite, Pinia, Vue Router and Tailwind CSS, in a cozy mid-century-modern palette
   of orange and brown.
-- **Hosting:** one Linux container in which Kestrel serves the API and the compiled SPA on port 80. It is designed
-  for an internal (VNet-only) Azure Container Apps environment and reads its secrets from Azure Key Vault.
+- **Hosting:** one Linux container in which Kestrel serves the API and the compiled SPA. In Azure Container Apps it
+  terminates TLS itself on port 443 with the Cloudflare origin certificate, accepts only requests that carry
+  Cloudflare's client certificate, and reads its secrets from Azure Key Vault. Locally it serves plain HTTP.
 
 ```mermaid
 flowchart LR
   user([Browser]) -->|HTTPS| cf[Cloudflare<br/>app.biffkittz.com]
-  cf -->|HTTPS| agw[Application Gateway<br/>TLS termination]
+  cf -->|"TLS :8443 + Cloudflare<br/>client certificate"| ingress[Container Apps ingress<br/>TCP pass-through]
   subgraph vnet[Azure virtual network]
-    agw -->|HTTP :80| ingress[Container Apps ingress<br/>internal environment]
-    ingress -->|HTTP :80| app[login-app container<br/>Kestrel: API + Vue SPA]
+    ingress -->|"TLS :443"| app[login-app container<br/>Kestrel: TLS, API + Vue SPA]
     app -->|TLS :5432| pg[(Azure Database<br/>for PostgreSQL)]
   end
-  kv[Azure Key Vault] -.->|secrets via managed identity| ingress
-  acr[Azure Container Registry] -.->|image pull| ingress
+  kv[Azure Key Vault] -.->|secrets and certificate via managed identity| app
+  acr[Azure Container Registry] -.->|image pull| app
 ```
 
 The Azure side is built with Terraform in [`infra/`](infra/README.md).
@@ -68,7 +68,7 @@ login-app/
 ├── docs/                         Developer and operations documentation
 ├── app/
 │   ├── buildAndRunSite.sh        Builds and tests both projects, combines them, runs the site locally
-│   ├── Dockerfile                Container image: Kestrel on port 80, running as a non-root user
+│   ├── Dockerfile                Container image: Kestrel on port 80 (443 with TLS in Azure), as a non-root user
 │   ├── compose.yaml              Runs the image locally next to a throwaway PostgreSQL
 │   ├── LoginApp.slnx             .NET solution (API and tests)
 │   ├── Directory.Build.props     Shared .NET build settings (analyzers; warnings are errors in Release)
@@ -76,7 +76,7 @@ login-app/
 │   ├── backend/                  ASP.NET Core 10 API (LoginApp.Api)
 │   ├── backend.tests/            xUnit v3 unit and in-memory integration tests
 │   └── frontend/                 Vue 3 + TypeScript SPA
-├── infra/                        Terraform: network, gateway, Container Apps, PostgreSQL, Key Vault, DNS
+├── infra/                        Terraform: network, Container Apps, PostgreSQL, Key Vault, Cloudflare DNS
 ├── .github/workflows/infra.yml   CI for infra/: fmt, validate, mocked tests, lint, docs
 └── .pre-commit-config.yaml       Git hooks for infra/ (fmt, validate, lint, docs, ShellCheck)
 ```
@@ -94,7 +94,8 @@ login-app/
   - A 64 KB request body limit.
   - No `Server` header.
   - An internal-network allow-list.
-  - HSTS behind the TLS-terminating proxy.
+  - TLS 1.2+ terminated in the container, and HSTS.
+  - Only Cloudflare gets in: its Authenticated Origin Pulls client certificate is required.
 - **Operations:**
   - Liveness and readiness health endpoints.
   - Structured JSON logs.

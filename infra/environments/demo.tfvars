@@ -11,7 +11,7 @@
 
 subscription_id = "3c3f379f-8161-4631-a30c-a3af82622a6a"
 location        = "centralus"
-name_suffix     = "798hyr" #TODO: REMOVE
+name_suffix     = "7fyguj" #TODO: REMOVE
 project         = "loginapp"
 environment     = "demo"
 
@@ -20,8 +20,7 @@ app_hostname  = "app.biffkittz.com"
 
 # Image tag of the app to run, e.g. the short commit SHA pushed with `az acr build`. Leave it commented out for the
 # first apply (no image exists yet). Once set, keep it set: removing it again would delete the Container App.
-app_image_repository = "loginapp" # the repository `az acr build --image loginapp:v1` pushed to
-app_image_tag        = "v1"
+app_image_tag = "aa3cf3d"
 
 # One replica: this is a demonstration environment.
 app_min_replicas = 1

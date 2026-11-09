@@ -8,7 +8,7 @@ namespace LoginApp.Api.Infrastructure.Networking;
 /// </summary>
 /// <remarks>
 /// The same list serves two purposes: it is the allow-list for <see cref="InternalNetworkRestrictionMiddleware"/>,
-/// and it identifies the reverse proxies (Container Apps ingress, Application Gateway) whose
+/// and it identifies the reverse proxies (Container Apps ingress, Cloudflare's edge) whose
 /// <c>X-Forwarded-For</c>/<c>X-Forwarded-Proto</c> headers are trusted.
 /// </remarks>
 internal sealed class NetworkOptions : IValidatableObject

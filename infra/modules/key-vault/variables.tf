@@ -104,7 +104,7 @@ variable "certificate_password" {
 }
 
 variable "certificate_reader_principal_ids" {
-  description = "Principals granted Key Vault Secrets User on the certificate's secret (Application Gateway), keyed by a static name."
+  description = "Principals granted Key Vault Secrets User on the certificate's secret (the app), keyed by a static name."
   type        = map(string)
   default     = {}
 }

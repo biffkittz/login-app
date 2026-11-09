@@ -37,7 +37,6 @@ run "defaults_target_eastus_with_required_tags" {
         azurerm_log_analytics_workspace.this.tags,
         azurerm_user_assigned_identity.app.tags,
         azurerm_user_assigned_identity.db_bootstrap.tags,
-        azurerm_user_assigned_identity.gateway.tags,
       ] : tags["project"] == "loginapp"
     ])
     error_message = "Every resource must carry the tag project:loginapp."
@@ -131,7 +130,7 @@ run "first_apply_creates_everything_but_the_app" {
   }
 }
 
-run "dns_record_points_at_the_gateway_through_cloudflare" {
+run "dns_record_is_proxied_through_cloudflare" {
   command = plan
 
   assert {
@@ -148,6 +147,46 @@ run "dns_record_points_at_the_gateway_through_cloudflare" {
   assert {
     condition     = strcontains(cloudflare_dns_record.app.comment, "project:loginapp") && length(cloudflare_dns_record.app.comment) <= 100
     error_message = "The record comment must carry the project tag and fit Cloudflare's 100-character limit."
+  }
+}
+
+run "cloudflare_presents_its_client_certificate_by_default" {
+  command = plan
+
+  assert {
+    condition = (
+      one(cloudflare_zone_setting.authenticated_origin_pulls[*].setting_id) == "tls_client_auth" &&
+      one(cloudflare_zone_setting.authenticated_origin_pulls[*].value) == "on"
+    )
+    error_message = "Authenticated Origin Pulls must be on, or the app would refuse every request."
+  }
+}
+
+run "cloudflare_reaches_the_app_on_its_exposed_port" {
+  command = plan
+
+  assert {
+    condition = (
+      cloudflare_ruleset.origin_port.phase == "http_request_origin" &&
+      length(cloudflare_ruleset.origin_port.rules) == 1 &&
+      cloudflare_ruleset.origin_port.rules[0].action == "route" &&
+      cloudflare_ruleset.origin_port.rules[0].expression == "http.host eq \"app.biffkittz.com\"" &&
+      cloudflare_ruleset.origin_port.rules[0].action_parameters.origin.port == 8443
+    )
+    error_message = "An Origin Rule must send app.biffkittz.com traffic to the app's exposed port (8443 by default)."
+  }
+}
+
+run "client_certificate_requirement_can_be_turned_off" {
+  command = plan
+
+  variables {
+    require_cloudflare_client_certificate = false
+  }
+
+  assert {
+    condition     = length(cloudflare_zone_setting.authenticated_origin_pulls) == 0
+    error_message = "Without the requirement, Terraform must leave the zone's Authenticated Origin Pulls setting alone."
   }
 }
 
@@ -185,13 +224,13 @@ run "setting_an_image_tag_deploys_the_app" {
   }
 
   assert {
-    condition     = output.container_app_private_fqdn == "ca-loginapp-demo.mockdomain-1a2b3c4d.eastus.azurecontainerapps.io"
-    error_message = "The gateway's backend must be <app name>.<environment default domain>."
+    condition     = output.container_app_fqdn == "ca-loginapp-demo.mockdomain-1a2b3c4d.eastus.azurecontainerapps.io"
+    error_message = "The app's FQDN must be <app name>.<environment default domain>."
   }
 
   assert {
-    condition     = cloudflare_dns_record.app.content == output.application_gateway_public_ip
-    error_message = "The DNS record must point at the gateway's public IP."
+    condition     = cloudflare_dns_record.app.content == output.origin_public_ip && output.origin_public_ip == "203.0.113.20"
+    error_message = "The DNS record must point at the Container Apps environment's public IP."
   }
 }
 
@@ -246,7 +285,6 @@ run "rejects_a_container_apps_subnet_smaller_than_27" {
 
   variables {
     subnet_address_prefixes = {
-      app_gateway    = "10.40.0.0/24"
       container_apps = "10.40.1.0/28"
       postgresql     = "10.40.2.0/24"
     }
@@ -263,6 +301,26 @@ run "rejects_a_missing_certificate_file" {
   }
 
   expect_failures = [var.tls_certificate_pfx_path]
+}
+
+run "rejects_the_ports_held_by_the_environments_http_ingress" {
+  command = plan
+
+  variables {
+    app_exposed_port = 443
+  }
+
+  expect_failures = [var.app_exposed_port]
+}
+
+run "rejects_the_port_reserved_for_container_apps_health_checks" {
+  command = plan
+
+  variables {
+    app_exposed_port = 36985
+  }
+
+  expect_failures = [var.app_exposed_port]
 }
 
 run "rejects_a_reserved_postgresql_admin_login" {

@@ -36,8 +36,8 @@ internal static class AuthRateLimiting
     }
 
     // One fixed window per client IP address. UseForwardedHeaders runs earlier in the pipeline, so behind
-    // Application Gateway and the Container Apps ingress this is the real client address; without it every user
-    // would share the proxy's single bucket and one noisy client would lock everybody out.
+    // Cloudflare and the Container Apps ingress this is the real client address; without it every user would
+    // share the proxy's single bucket and one noisy client would lock everybody out.
     private static RateLimitPartition<string> CreatePartition(HttpContext httpContext)
     {
         AuthRateLimitOptions options = httpContext.RequestServices.GetRequiredService<IOptions<AuthRateLimitOptions>>().Value;

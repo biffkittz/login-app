@@ -9,10 +9,10 @@ output "virtual_network_name" {
 }
 
 output "subnet_ids" {
-  description = "Subnet resource IDs, keyed app_gateway, container_apps and postgresql. Available once each subnet's NSG is attached."
+  description = "Subnet resource IDs, keyed container_apps and postgresql. Available once each subnet's NSG is attached."
   value       = local.subnet_ids
 
-  # Consumers (gateway, environment, database) must not start before their subnet is protected.
+  # Consumers (the environment, the database) must not start before their subnet is protected.
   depends_on = [azurerm_subnet_network_security_group_association.this]
 }
 

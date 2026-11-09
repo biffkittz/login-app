@@ -1,8 +1,8 @@
 # Login App on Azure Container Apps.
 #
-#   visitor --HTTPS--> Cloudflare (proxied DNS, edge TLS) --HTTPS--> Application Gateway (public IP; origin
-#   certificate from Key Vault) --HTTP :80, private network--> internal Container Apps environment --> Login App
-#   --TLS--> PostgreSQL flexible server (private access, no public endpoint)
+#   visitor --HTTPS--> Cloudflare (proxied DNS, edge TLS) --HTTPS :443, with Cloudflare's client certificate-->
+#   public Container Apps environment (TCP ingress, TLS passed through) --> Login App (Kestrel terminates TLS with
+#   the origin certificate from Key Vault) --TLS--> PostgreSQL flexible server (private access, no public endpoint)
 #
 # The root module names everything, creates the shared pieces (resource group, Log Analytics, managed identities,
 # generated secrets, the Cloudflare DNS record) and wires the modules in ./modules together.
@@ -10,8 +10,8 @@
 
 data "azurerm_client_config" "current" {}
 
-# Cloudflare's published edge ranges. The gateway accepts HTTPS only from these, and the app trusts their
-# X-Forwarded-For entries so it can resolve the real client IP.
+# Cloudflare's published edge ranges. The app's ingress accepts connections only from these, and the app trusts
+# their X-Forwarded-For entries so it can resolve the real client IP.
 data "cloudflare_ip_ranges" "this" {}
 
 data "cloudflare_zone" "this" {
@@ -20,11 +20,12 @@ data "cloudflare_zone" "this" {
   }
 }
 
-# substr(sha256("${data.azurerm_client_config.current.subscription_id}/${local.name}"), 0, 6)
 locals {
   name         = "${var.project}-${var.environment}"         # e.g. loginapp-demo
   compact_name = substr(replace(local.name, "-", ""), 0, 13) # for names that allow no hyphens
-  suffix       = coalesce(var.name_suffix, substr(sha256("${timestamp()}"), 0, 6)) # TODO: FIX
+  # Deterministic, so every plan computes the same names. (A changing value such as timestamp() would rename, and
+  # so replace, the registry, Key Vault and PostgreSQL server on every apply.)
+  suffix = coalesce(var.name_suffix, substr(sha256("${data.azurerm_client_config.current.subscription_id}/${local.name}"), 0, 6))
 
   # Every taggable resource carries these. "project" is the tag the project requires: project = "loginapp".
   tags = merge(var.tags, {
@@ -45,17 +46,20 @@ locals {
     container_apps_managed_rg  = "rg-${local.name}-cae-managed"
     container_app              = "ca-${local.name}"
     db_bootstrap_job           = "caj-${local.name}-dbinit"
-    application_gateway        = "agw-${local.name}"
-    gateway_public_ip          = "pip-agw-${local.name}"
     identity_app               = "id-${local.name}-app"
     identity_db_bootstrap      = "id-${local.name}-dbinit"
-    identity_gateway           = "id-${local.name}-agw"
   }
 
   cloudflare_ipv4_cidrs = data.cloudflare_ip_ranges.this.ipv4_cidrs
 
-  # No list means the gateway accepts HTTPS from the whole internet.
-  gateway_ingress_allowed_cidrs = var.restrict_gateway_to_cloudflare ? concat(local.cloudflare_ipv4_cidrs, var.gateway_additional_allowed_cidrs) : []
+  # IP restrictions for the app's public ingress, keyed by rule name. No rules means anyone may connect (and the
+  # client-certificate check alone keeps them out). The transitional Container Apps ranges are explained on their
+  # variable.
+  app_ingress_allowed_cidrs = var.restrict_ingress_to_cloudflare ? merge(
+    { for index, cidr in local.cloudflare_ipv4_cidrs : "cloudflare-${index}" => cidr },
+    { for index, cidr in var.ingress_additional_allowed_cidrs : "additional-${index}" => cidr },
+    { for index, cidr in var.container_apps_transitional_ingress_cidrs : "aca-infrastructure-${index}" => cidr },
+  ) : {}
 
   deploy_app = var.app_image_tag != null
 
@@ -71,10 +75,11 @@ locals {
   ])
 
   # Network:InternalNetworks in the app lists the proxies whose X-Forwarded-For entries it trusts (it also guards the
-  # TCP peer, which in Container Apps is always the platform's own ingress). Requests arrive through Cloudflare's
-  # edge, then Application Gateway. Appending Cloudflare's ranges lets the app walk back past the edge to the
-  # visitor's real IP, which drives per-client rate limiting. The entries start at index 100 so they come after the
-  # defaults in appsettings.json instead of replacing them.
+  # TCP peer, which in Container Apps is the platform's own ingress proxy). Requests arrive through Cloudflare's
+  # edge, which appends the visitor's IP. Should the ingress ever hand over Cloudflare's address as the peer instead
+  # of its own, these entries let the app walk back past the edge to the visitor's real IP, which drives per-client
+  # rate limiting. They start at index 100 so they come after the defaults in appsettings.json instead of replacing
+  # them.
   app_trusted_proxy_settings = {
     for index, cidr in local.cloudflare_ipv4_cidrs : "Network__InternalNetworks__${100 + index}" => cidr
   }
@@ -86,7 +91,7 @@ resource "azurerm_resource_group" "this" {
   tags     = local.tags
 }
 
-# Logs from the Container Apps environment, Application Gateway access logs and Key Vault audit events.
+# Logs from the Container Apps environment and Key Vault audit events.
 resource "azurerm_log_analytics_workspace" "this" {
   name                = local.names.log_analytics
   location            = azurerm_resource_group.this.location
@@ -102,7 +107,7 @@ resource "azurerm_log_analytics_workspace" "this" {
 # use them are created. One identity per consumer keeps each one's access to the minimum.
 # ---------------------------------------------------------------------------------------------------------------------
 
-# The Login App: pulls its image and reads its two secrets.
+# The Login App: pulls its image and reads its secrets and its TLS certificate.
 resource "azurerm_user_assigned_identity" "app" {
   name                = local.names.identity_app
   location            = azurerm_resource_group.this.location
@@ -113,14 +118,6 @@ resource "azurerm_user_assigned_identity" "app" {
 # The database bootstrap job: the only identity that can read the PostgreSQL administrator password.
 resource "azurerm_user_assigned_identity" "db_bootstrap" {
   name                = local.names.identity_db_bootstrap
-  location            = azurerm_resource_group.this.location
-  resource_group_name = azurerm_resource_group.this.name
-  tags                = local.tags
-}
-
-# Application Gateway: reads its TLS certificate.
-resource "azurerm_user_assigned_identity" "gateway" {
-  name                = local.names.identity_gateway
   location            = azurerm_resource_group.this.location
   resource_group_name = azurerm_resource_group.this.name
   tags                = local.tags
@@ -159,13 +156,13 @@ resource "random_bytes" "jwt_signing_key" {
 module "networking" {
   source = "./modules/networking"
 
-  name                          = local.name
-  location                      = azurerm_resource_group.this.location
-  resource_group_name           = azurerm_resource_group.this.name
-  address_space                 = var.vnet_address_space
-  subnet_address_prefixes       = var.subnet_address_prefixes
-  gateway_ingress_allowed_cidrs = local.gateway_ingress_allowed_cidrs
-  tags                          = local.tags
+  name                      = local.name
+  location                  = azurerm_resource_group.this.location
+  resource_group_name       = azurerm_resource_group.this.name
+  address_space             = var.vnet_address_space
+  subnet_address_prefixes   = var.subnet_address_prefixes
+  app_ingress_allowed_cidrs = var.restrict_ingress_to_cloudflare ? concat(local.cloudflare_ipv4_cidrs, var.ingress_additional_allowed_cidrs) : []
+  tags                      = local.tags
 }
 
 module "registry" {
@@ -210,7 +207,7 @@ module "key_vault" {
 
   firewall_enabled   = var.key_vault_firewall_enabled
   allowed_ip_ranges  = var.key_vault_allowed_ip_ranges
-  allowed_subnet_ids = [module.networking.subnet_ids.app_gateway, module.networking.subnet_ids.container_apps]
+  allowed_subnet_ids = [module.networking.subnet_ids.container_apps]
 
   # The app reads the first two. Their "--" names map to the configuration keys ConnectionStrings:DefaultConnection
   # and Jwt:SigningKey, which is also what the app's optional built-in Key Vault provider expects.
@@ -236,7 +233,7 @@ module "key_vault" {
   certificate_name                 = "${replace(var.app_hostname, ".", "-")}-origin"
   certificate_pfx_base64           = filebase64(pathexpand(var.tls_certificate_pfx_path))
   certificate_password             = var.tls_certificate_pfx_password
-  certificate_reader_principal_ids = { gateway = azurerm_user_assigned_identity.gateway.principal_id }
+  certificate_reader_principal_ids = { app = azurerm_user_assigned_identity.app.principal_id }
 
   log_analytics_workspace_id = azurerm_log_analytics_workspace.this.id
   rbac_propagation_wait      = var.rbac_propagation_wait
@@ -253,7 +250,6 @@ module "container_apps" {
   environment_name                   = local.names.container_apps_environment
   infrastructure_resource_group_name = local.names.container_apps_managed_rg
   infrastructure_subnet_id           = module.networking.subnet_ids.container_apps
-  virtual_network_id                 = module.networking.virtual_network_id
   log_analytics_workspace_id         = azurerm_log_analytics_workspace.this.id
 
   deploy_app       = local.deploy_app
@@ -262,29 +258,29 @@ module "container_apps" {
   app_identity_id  = azurerm_user_assigned_identity.app.id
   registry_server  = module.registry.login_server
   app_target_port  = var.app_target_port
+  app_exposed_port = var.app_exposed_port
   app_cpu          = var.app_cpu
   app_memory       = var.app_memory
   app_min_replicas = var.app_min_replicas
   app_max_replicas = var.app_max_replicas
 
+  # The certificate's secret holds the PFX (Base64, no password), which the app loads as its HTTPS certificate.
   app_secrets = {
     db-connection-string = module.key_vault.secret_ids["db_connection_string"]
     jwt-signing-key      = module.key_vault.secret_ids["jwt_signing_key"]
+    origin-certificate   = module.key_vault.certificate_secret_id
   }
   app_secret_environment_variables = {
     ConnectionStrings__DefaultConnection = "db-connection-string"
     Jwt__SigningKey                      = "jwt-signing-key"
+    OriginTls__CertificatePfxBase64      = "origin-certificate"
   }
   app_environment_variables = merge(local.app_trusted_proxy_settings, {
-    ASPNETCORE_ENVIRONMENT = "Production"
+    ASPNETCORE_ENVIRONMENT                        = "Production"
+    OriginTls__RequireCloudflareClientCertificate = tostring(var.require_cloudflare_client_certificate)
   })
 
-  # Defense in depth on top of the internal environment and the subnet NSG: the ingress itself refuses anything not
-  # coming from the gateway subnet (see var.container_apps_transitional_ingress_cidrs for the temporary extra ranges).
-  ingress_allowed_cidrs = merge(
-    { app-gateway-subnet = var.subnet_address_prefixes.app_gateway },
-    { for index, cidr in var.container_apps_transitional_ingress_cidrs : "aca-infrastructure-${index}" => cidr },
-  )
+  ingress_allowed_cidrs = local.app_ingress_allowed_cidrs
 
   db_bootstrap = {
     job_name                  = local.names.db_bootstrap_job
@@ -299,41 +295,62 @@ module "container_apps" {
   }
 }
 
-module "application_gateway" {
-  source = "./modules/application-gateway"
-
-  name                = local.names.application_gateway
-  public_ip_name      = local.names.gateway_public_ip
-  location            = azurerm_resource_group.this.location
-  resource_group_name = azurerm_resource_group.this.name
-  subnet_id           = module.networking.subnet_ids.app_gateway
-  zones               = var.app_gateway_zones
-  autoscale           = var.app_gateway_autoscale
-
-  identity_id                         = azurerm_user_assigned_identity.gateway.id
-  ssl_certificate_key_vault_secret_id = module.key_vault.certificate_secret_id
-
-  host_name         = var.app_hostname
-  backend_fqdn      = module.container_apps.app_fqdn
-  backend_port      = 80
-  health_probe_path = "/health/ready"
-
-  log_analytics_workspace_id = azurerm_log_analytics_workspace.this.id
-  tags                       = local.tags
-}
-
 # ---------------------------------------------------------------------------------------------------------------------
-# Public DNS: app.biffkittz.com -> Application Gateway, proxied through Cloudflare (orange cloud), so visitors only
-# ever see Cloudflare's edge certificate and IPs.
+# Public DNS: app.biffkittz.com -> the Container Apps environment's public IP, proxied through Cloudflare (orange
+# cloud), so visitors only ever see Cloudflare's edge certificate and IPs.
 # ---------------------------------------------------------------------------------------------------------------------
 
 resource "cloudflare_dns_record" "app" {
   zone_id = data.cloudflare_zone.this.id
   name    = var.app_hostname
   type    = "A"
-  content = module.application_gateway.public_ip_address
+  content = module.container_apps.static_ip_address
   proxied = true
   ttl     = 1 # "automatic", required for proxied records
   # Comments work on every Cloudflare plan (record tags need a paid plan), so they carry the project tag.
-  comment = "Azure Application Gateway ${local.names.application_gateway}; project:${var.project}; managed by Terraform"
+  comment = "Azure Container Apps environment ${local.names.container_apps_environment}; project:${var.project}; managed by Terraform"
+
+  # Turn on the client certificate before traffic moves to an app that refuses requests without it, and send that
+  # traffic to the app's port: without the Origin Rule, Cloudflare would knock on 443, the environment's HTTP ingress.
+  depends_on = [cloudflare_zone_setting.authenticated_origin_pulls, cloudflare_ruleset.origin_port]
+}
+
+# Origin Rule: Cloudflare connects to the origin on app_exposed_port instead of the visitor's port (443). The
+# environment's HTTP ingress owns 80 and 443 on its public IP, so the app's TCP ingress can't take 443 (Azure:
+# "exposedPort already in use"). Visitors keep using https://app.biffkittz.com on 443.
+#
+# A zone has one ruleset per phase. Origin Rules created by hand in the dashboard live in that same ruleset; import it
+# (terraform import cloudflare_ruleset.origin_port zones/<zone id>/<ruleset id>) and add them here, or the apply fails.
+resource "cloudflare_ruleset" "origin_port" {
+  zone_id     = data.cloudflare_zone.this.id
+  name        = "Origin rules"
+  description = "Managed by Terraform (project:${var.project})"
+  kind        = "zone"
+  phase       = "http_request_origin"
+
+  rules = [{
+    ref         = "${var.project}_${var.environment}_app_origin_port"
+    description = "${var.app_hostname}: connect to the Container Apps TCP ingress on ${var.app_exposed_port}"
+    expression  = "http.host eq \"${var.app_hostname}\""
+    action      = "route"
+    action_parameters = {
+      origin = {
+        port = var.app_exposed_port
+      }
+    }
+  }]
+}
+
+# Authenticated Origin Pulls ("global" AOP): Cloudflare presents its origin-pull client certificate on every
+# connection to this zone's origins, and the app refuses requests without it. It's a zone-wide switch, but origins
+# that don't ask for a client certificate simply never see it, so other records in the zone are unaffected.
+#
+# The global certificate is shared by all Cloudflare accounts: it proves a request came through Cloudflare, not
+# through this zone. Zone-level AOP with your own certificate closes that gap (docs/ARCHITECTURE.md).
+resource "cloudflare_zone_setting" "authenticated_origin_pulls" {
+  count = var.require_cloudflare_client_certificate ? 1 : 0
+
+  zone_id    = data.cloudflare_zone.this.id
+  setting_id = "tls_client_auth"
+  value      = "on"
 }

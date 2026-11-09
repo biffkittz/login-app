@@ -1,8 +1,10 @@
 # The Container Apps environment, the Login App itself and a one-off job that prepares its database role.
 #
-# The environment is "internal": its only entry point is an internal load balancer with a private IP in the
-# environment's subnet, so nothing on the internet can reach it directly. Application Gateway, in the same virtual
-# network, is the single route in.
+# The environment is "external": it has a public IP, which Cloudflare connects to. The app uses TCP ingress, so the
+# platform's proxy passes the TLS connection through without decrypting it and Kestrel terminates TLS in the
+# container. Only Cloudflare gets in: the ingress IP restrictions allow Cloudflare's ranges, and the app refuses
+# requests that don't carry Cloudflare's client certificate. (An NSG can't do this here: inbound internet traffic
+# to an external workload-profiles environment doesn't pass through the subnet.)
 
 resource "azurerm_container_app_environment" "this" {
   name                = var.environment_name
@@ -11,7 +13,7 @@ resource "azurerm_container_app_environment" "this" {
 
   # Workload profiles (with only the serverless Consumption profile) is the current environment type. Unlike the
   # legacy Consumption-only type it supports a /27 subnet, NSGs on that subnet, user-defined routes and private
-  # endpoints.
+  # endpoints. External TCP ingress needs an environment in a custom virtual network, which this is.
   workload_profile {
     name                  = "Consumption"
     workload_profile_type = "Consumption"
@@ -19,7 +21,8 @@ resource "azurerm_container_app_environment" "this" {
 
   infrastructure_subnet_id           = var.infrastructure_subnet_id
   infrastructure_resource_group_name = var.infrastructure_resource_group_name
-  internal_load_balancer_enabled     = true
+  # Public. Changing this replaces the environment (and with it the app and the job).
+  internal_load_balancer_enabled = false
 
   # A single replica can't be spread across zones, so zone redundancy would add nothing in this demo.
   zone_redundancy_enabled = false
@@ -30,45 +33,12 @@ resource "azurerm_container_app_environment" "this" {
   tags = var.tags
 }
 
-# An internal environment doesn't publish DNS for its apps. This zone is named after the environment's default
-# domain and maps every app name (*) and the domain itself (@) to the internal load balancer, so Application Gateway
-# can resolve <app>.<default domain>. This is the setup Microsoft documents for Application Gateway in front of an
-# internal environment.
-resource "azurerm_private_dns_zone" "environment" {
-  name                = azurerm_container_app_environment.this.default_domain
-  resource_group_name = var.resource_group_name
-  tags                = var.tags
-}
-
-resource "azurerm_private_dns_zone_virtual_network_link" "environment" {
-  name                 = "link-${var.environment_name}"
-  private_dns_zone_id  = azurerm_private_dns_zone.environment.id
-  virtual_network_id   = var.virtual_network_id
-  registration_enabled = false
-  tags                 = var.tags
-}
-
-resource "azurerm_private_dns_a_record" "wildcard" {
-  name                = "*"
-  private_dns_zone_id = azurerm_private_dns_zone.environment.id
-  ttl                 = 300
-  records             = [azurerm_container_app_environment.this.static_ip_address]
-  tags                = var.tags
-}
-
-resource "azurerm_private_dns_a_record" "apex" {
-  name                = "@"
-  private_dns_zone_id = azurerm_private_dns_zone.environment.id
-  ttl                 = 300
-  records             = [azurerm_container_app_environment.this.static_ip_address]
-  tags                = var.tags
-}
-
 locals {
   app_environment_variables = merge(
     var.app_environment_variables,
-    # Kestrel's listening port and the ingress target port always move together.
-    { ASPNETCORE_HTTP_PORTS = tostring(var.app_target_port) },
+    # Kestrel listens for HTTPS only, on the port the ingress targets. ASPNETCORE_URLS takes precedence over the
+    # image's ASPNETCORE_HTTP_PORTS=80, so nothing listens on plain HTTP.
+    { ASPNETCORE_URLS = "https://+:${var.app_target_port}" },
   )
 }
 
@@ -110,21 +80,19 @@ resource "azurerm_container_app" "this" {
   }
 
   ingress {
-    # In an internal environment "external" means reachable from the virtual network (where Application Gateway
-    # lives). Internal would mean reachable only from other apps in this environment.
+    # Published on the environment's public IP. TCP rather than HTTP ingress, so the platform passes the encrypted
+    # connection through and TLS (with Cloudflare's client certificate) is handled by Kestrel.
     external_enabled = true
+    transport        = "tcp"
+    exposed_port     = var.app_exposed_port
     target_port      = var.app_target_port
-    transport        = "http"
-    # TLS terminates at Application Gateway, which forwards plain HTTP on port 80 across the private network.
-    # Without this, the ingress would answer that HTTP with a redirect to HTTPS.
-    allow_insecure_connections = true
 
     traffic_weight {
       latest_revision = true
       percentage      = 100
     }
 
-    # Once any allow rule exists, every source not listed is refused.
+    # Once any allow rule exists, every source not listed is refused. No rules means everyone may connect.
     dynamic "ip_security_restriction" {
       for_each = var.ingress_allowed_cidrs
 
@@ -164,9 +132,11 @@ resource "azurerm_container_app" "this" {
         }
       }
 
+      # The probes connect straight to the container over HTTPS (they skip certificate validation) and present no
+      # client certificate, which is why the app serves the health endpoints without one.
       # Startup: up to 3 minutes (36 x 5 s) for the first start, which applies database migrations.
       startup_probe {
-        transport               = "HTTP"
+        transport               = "HTTPS"
         port                    = var.app_target_port
         path                    = var.liveness_probe_path
         interval_seconds        = 5
@@ -176,7 +146,7 @@ resource "azurerm_container_app" "this" {
 
       # Liveness ignores the database on purpose: a database outage must not cause a restart loop.
       liveness_probe {
-        transport               = "HTTP"
+        transport               = "HTTPS"
         port                    = var.app_target_port
         path                    = var.liveness_probe_path
         interval_seconds        = 10
@@ -186,7 +156,7 @@ resource "azurerm_container_app" "this" {
 
       # Readiness includes the database: a replica that can't reach PostgreSQL gets no traffic until it can.
       readiness_probe {
-        transport               = "HTTP"
+        transport               = "HTTPS"
         port                    = var.app_target_port
         path                    = var.readiness_probe_path
         interval_seconds        = 10

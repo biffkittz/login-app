@@ -28,6 +28,9 @@ appsettings.Local.json
 *.p12
 *.key
 *.pem
+# Exception: Cloudflare's public origin-pull CA certificate (no private key), which the app embeds to validate
+# Cloudflare's client certificate.
+!app/backend/Infrastructure/Tls/cloudflare-origin-pull-ca.pem
 
 # Logs
 *.log

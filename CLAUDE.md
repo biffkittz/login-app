@@ -1,7 +1,7 @@
 # Login App
 
 A sign-up / sign-in / sign-out web app built to production standards, hosted on Azure Container Apps behind
-Cloudflare and Application Gateway at https://app.biffkittz.com.
+Cloudflare at https://app.biffkittz.com. The container terminates TLS itself; there is no Application Gateway.
 
 - `app/`: ASP.NET Core 10 API + Vue 3 SPA in one container. See `app/CLAUDE.md`.
 - `infra/`: Terraform for Azure and Cloudflare. See `infra/CLAUDE.md`.
@@ -24,7 +24,8 @@ Cloudflare and Application Gateway at https://app.biffkittz.com.
 - No hardcoded secrets. In Azure, the app reads them from Key Vault; locally, from `appsettings.Development.json`.
 - Tokens live in `HttpOnly` cookies, never `localStorage`.
 - HTTPS for every request; validate all input; log errors without sensitive data; follow OWASP guidance.
-- Kestrel serves the site on port 80 and accepts requests from internal (VNet) sources only.
+- In Azure, Kestrel serves HTTPS on 443 with the Cloudflare origin certificate and accepts only requests carrying
+  Cloudflare's Authenticated Origin Pulls client certificate (health endpoints excepted). Locally it serves HTTP.
 
 ## Documentation
 

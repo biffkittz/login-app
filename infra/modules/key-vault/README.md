@@ -66,7 +66,7 @@ for why it is off by default.
 | <a name="input_allowed_ip_ranges"></a> [allowed\_ip\_ranges](#input\_allowed\_ip\_ranges) | Public ranges (CIDR, e.g. "203.0.113.10/32") allowed through the firewall: the machines that run Terraform. | `list(string)` | `[]` | no |
 | <a name="input_allowed_subnet_ids"></a> [allowed\_subnet\_ids](#input\_allowed\_subnet\_ids) | Subnets (with the Microsoft.KeyVault service endpoint) allowed through the firewall. | `list(string)` | `[]` | no |
 | <a name="input_certificate_password"></a> [certificate\_password](#input\_certificate\_password) | Password of the PFX file, or null when it has none. | `string` | `null` | no |
-| <a name="input_certificate_reader_principal_ids"></a> [certificate\_reader\_principal\_ids](#input\_certificate\_reader\_principal\_ids) | Principals granted Key Vault Secrets User on the certificate's secret (Application Gateway), keyed by a static name. | `map(string)` | `{}` | no |
+| <a name="input_certificate_reader_principal_ids"></a> [certificate\_reader\_principal\_ids](#input\_certificate\_reader\_principal\_ids) | Principals granted Key Vault Secrets User on the certificate's secret (the app), keyed by a static name. | `map(string)` | `{}` | no |
 | <a name="input_firewall_enabled"></a> [firewall\_enabled](#input\_firewall\_enabled) | When true, the vault denies network access except from allowed\_ip\_ranges, allowed\_subnet\_ids and trusted Azure services. | `bool` | `false` | no |
 | <a name="input_purge_protection_enabled"></a> [purge\_protection\_enabled](#input\_purge\_protection\_enabled) | Whether deleted vaults and objects can't be purged before the retention period ends. Can't be turned off once on. | `bool` | `true` | no |
 | <a name="input_rbac_propagation_wait"></a> [rbac\_propagation\_wait](#input\_rbac\_propagation\_wait) | How long to wait after creating role assignments before anything relies on them, e.g. "60s". | `string` | `"60s"` | no |
@@ -79,7 +79,7 @@ for why it is off by default.
 
 | Name | Description |
 | ---- | ----------- |
-| <a name="output_certificate_secret_id"></a> [certificate\_secret\_id](#output\_certificate\_secret\_id) | Versionless URI of the certificate's secret, for Application Gateway. With no version in the URI, the gateway rotates to new certificate versions by itself (it checks every 4 hours). |
+| <a name="output_certificate_secret_id"></a> [certificate\_secret\_id](#output\_certificate\_secret\_id) | Versionless URI of the certificate's secret (a Base64, passwordless PFX), referenced by the Container App. Container Apps picks up new versions within 30 minutes and restarts the revision, so the app loads the new certificate. |
 | <a name="output_certificate_thumbprint"></a> [certificate\_thumbprint](#output\_certificate\_thumbprint) | Thumbprint of the current certificate version. |
 | <a name="output_id"></a> [id](#output\_id) | Resource ID of the vault. |
 | <a name="output_name"></a> [name](#output\_name) | Name of the vault. |

@@ -66,11 +66,11 @@ only; WSL forwards that port to Windows, so browse to <http://localhost:8080> fr
 The runtime image contains no SDK, no Node.js, no source code, no tests and no development settings. `.dockerignore`
 excludes `appsettings.Development.json`, so local credentials can never ship.
 
-### Kestrel on port 80, as a non-root user
+### Kestrel on port 80 or 443, as a non-root user
 
-The container listens for plain HTTP on **port 80** (`ASPNETCORE_HTTP_PORTS=80`). TLS terminates upstream, at
-Cloudflare's edge and at Application Gateway, which forwards plain HTTP to the Container Apps ingress inside the VNet
-(section 3).
+By default the container listens for plain HTTP on **port 80** (`ASPNETCORE_HTTP_PORTS=80`), which is how
+`compose.yaml` and local runs use it. In Azure, Terraform sets `ASPNETCORE_URLS=https://+:443` and the `OriginTls`
+settings, so Kestrel listens for **HTTPS on port 443** only and terminates TLS itself (section 3).
 
 Since .NET 8, the official images provide an unprivileged `app` user, and the image runs as that user. Linux does
 not normally let unprivileged processes bind ports below 1024. Some container runtimes lift that restriction
@@ -83,8 +83,9 @@ you can't attach a debugger to the container and can't collect `createdump` cras
 `dotnet-trace` still work. If you ever need those diagnostics, or a platform refuses file capabilities, use one of
 these alternatives:
 
-- **Preferred:** listen on 8080 instead. Set `ASPNETCORE_HTTP_PORTS=8080` and the Container App's target port to
-  8080. Clients are unaffected, because the ingress still serves 80/443.
+- **Preferred:** listen on a high port instead. In Azure, set `app_target_port = 8443` in Terraform; it updates
+  `ASPNETCORE_URLS`, the ingress target port and the probes. Clients are unaffected, because the ingress's
+  exposed port (8443) doesn't change.
 - Run as root by removing `USER $APP_UID`. This is simplest, but weakens container isolation.
 
 ### Build and run the image locally
@@ -107,17 +108,18 @@ Safari does not.
 ## 3. Deploying to Azure Container Apps
 
 The Terraform project in [`infra/`](../infra/README.md) creates the Azure infrastructure and deploys the image. It
-covers the network, Application Gateway, the internal Container Apps environment and app, PostgreSQL, Key Vault, the
-registry and the Cloudflare DNS record. **[infra/docs/DEPLOYMENT.md](../infra/docs/DEPLOYMENT.md) is the step-by-step
+covers the network, the Container Apps environment and app, PostgreSQL, Key Vault, the registry, and the Cloudflare
+DNS record and Authenticated Origin Pulls. **[infra/docs/DEPLOYMENT.md](../infra/docs/DEPLOYMENT.md) is the step-by-step
 guide**; this section describes what the app expects from that infrastructure.
 
 ### Request path
 
 ```text
 visitor ──HTTPS──► Cloudflare (app.biffkittz.com, proxied)
-        ──HTTPS──► Application Gateway (public IP; Cloudflare origin certificate from Key Vault; only Cloudflare may connect)
-        ──HTTP :80, inside the VNet──► Container Apps ingress (internal environment; only the gateway subnet)
-        ──HTTP :80──► Kestrel ──TLS──► PostgreSQL flexible server (private access, no public endpoint)
+        ──TLS :8443 (Origin Rule), with Cloudflare's client certificate──► Container Apps environment (public IP;
+          TCP ingress passes the connection through without decrypting it; IP restrictions allow Cloudflare's ranges)
+        ──TLS :443──► Kestrel (origin certificate from Key Vault; validates Cloudflare's client certificate)
+        ──TLS──► PostgreSQL flexible server (private access, no public endpoint)
 ```
 
 ### What the infrastructure provides to the app
@@ -128,8 +130,10 @@ visitor ──HTTPS──► Cloudflare (app.biffkittz.com, proxied)
 | `ConnectionStrings__DefaultConnection` | Key Vault secret `ConnectionStrings--DefaultConnection` (as a Container Apps Key Vault reference): `Host=<server>.postgres.database.azure.com;Port=5432;Database=loginapp;Username=loginapp_app;Password=…;SSL Mode=VerifyFull` |
 | `Jwt__SigningKey` | Key Vault secret `Jwt--SigningKey`: 64 random bytes, Base64 |
 | A database role that owns its schema | The bootstrap job `caj-loginapp-demo-dbinit` creates `loginapp_app` with only `CONNECT` on `loginapp` and `CREATE` on schema `public`. The app then applies its own migrations |
-| Port 80 | Ingress target port 80 and `ASPNETCORE_HTTP_PORTS=80`. Set `app_target_port = 8080` if the platform refuses the port-80 capability (section 2) |
-| Real client IPs for rate limiting | Cloudflare's ranges are added as `Network__InternalNetworks__100+`, so the app trusts the Cloudflare → gateway → ingress hops in `X-Forwarded-For` |
+| `OriginTls__CertificatePfxBase64` | The Key Vault certificate's secret (the origin certificate as a passwordless PFX, Base64) |
+| `OriginTls__RequireCloudflareClientCertificate` | `true` (Terraform's `require_cloudflare_client_certificate`), together with Authenticated Origin Pulls in Cloudflare |
+| Port 443 | TCP ingress exposing 8443 (Cloudflare's Origin Rule points there; Azure keeps 443 for HTTP ingress) and targeting 443, and `ASPNETCORE_URLS=https://+:443`. Set `app_target_port = 8443` if the platform refuses the low-port capability (section 2) |
+| Real client IPs for rate limiting | The app's TCP peer is the ingress proxy (an internal address), so it trusts the `X-Forwarded-For` entry Cloudflare appended. Cloudflare's ranges are also added as `Network__InternalNetworks__100+` |
 | One replica, 0.5 vCPU, 1 GiB | `app_min_replicas` / `app_max_replicas` = 1 (a demonstration environment) |
 
 Secrets reach the app as Container Apps Key Vault references. The app could also load Key Vault itself (set
@@ -142,12 +146,12 @@ Terraform configures these on the container:
 
 | Probe | Path | Port | Purpose |
 | --- | --- | --- | --- |
-| Startup | `/health/live` | 80 | Allows time for migrations on first start: every 5 s, 36 failures (3 min) |
-| Liveness | `/health/live` | 80 | Restarts a hung process. Deliberately ignores the database, so an outage doesn't cause restart loops |
-| Readiness | `/health/ready` | 80 | Includes a database check; replicas that can't reach PostgreSQL get no traffic |
+| Startup | `/health/live` | 443 (HTTPS) | Allows time for migrations on first start: every 5 s, 36 failures (3 min) |
+| Liveness | `/health/live` | 443 (HTTPS) | Restarts a hung process. Deliberately ignores the database, so an outage doesn't cause restart loops |
+| Readiness | `/health/ready` | 443 (HTTPS) | Includes a database check; replicas that can't reach PostgreSQL get no traffic |
 
-Application Gateway probes `/health/ready` too, so the public site reports unavailability rather than errors while
-the database is unreachable.
+The probes connect to the container directly and present no client certificate, so these two paths are the only
+ones the app serves without Cloudflare's certificate. They reveal only whether the app and its database are up.
 
 ### Releasing a new version
 

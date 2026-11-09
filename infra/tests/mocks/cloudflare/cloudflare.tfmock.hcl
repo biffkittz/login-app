@@ -17,3 +17,15 @@ mock_resource "cloudflare_dns_record" {
     id = "fedcba9876543210fedcba9876543210"
   }
 }
+
+mock_resource "cloudflare_zone_setting" {
+  defaults = {
+    id = "tls_client_auth"
+  }
+}
+
+mock_resource "cloudflare_ruleset" {
+  defaults = {
+    id = "2f2feab2026849078ba485f918791bdc"
+  }
+}

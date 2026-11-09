@@ -26,6 +26,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Cloudflare's Authenticated Origin Pulls CA, the only issuer trusted for client certificates (Infrastructure/Tls). -->
+    <EmbeddedResource Include="Infrastructure/Tls/cloudflare-origin-pull-ca.pem" LogicalName="LoginApp.Api.Infrastructure.Tls.cloudflare-origin-pull-ca.pem" />
+  </ItemGroup>
+
+  <ItemGroup>
     <InternalsVisibleTo Include="LoginApp.Api.Tests" />
   </ItemGroup>
 

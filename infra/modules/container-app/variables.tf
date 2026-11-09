@@ -4,7 +4,7 @@ variable "location" {
 }
 
 variable "resource_group_name" {
-  description = "Resource group that holds the environment, app, job and the environment's private DNS zone."
+  description = "Resource group that holds the environment, app and job."
   type        = string
 }
 
@@ -23,17 +23,12 @@ variable "environment_name" {
 }
 
 variable "infrastructure_resource_group_name" {
-  description = "Name of the platform-managed resource group that Container Apps creates for the environment's load balancer. Must not exist yet."
+  description = "Name of the platform-managed resource group that Container Apps creates for the environment's load balancer and public IP. Must not exist yet."
   type        = string
 }
 
 variable "infrastructure_subnet_id" {
   description = "Subnet delegated to Microsoft.App/environments (at least /27)."
-  type        = string
-}
-
-variable "virtual_network_id" {
-  description = "Virtual network to link the environment's private DNS zone to."
   type        = string
 }
 
@@ -78,7 +73,12 @@ variable "registry_server" {
 }
 
 variable "app_target_port" {
-  description = "Port the container listens on. The ingress, health probes and ASPNETCORE_HTTP_PORTS all follow it."
+  description = "Port the container listens on for HTTPS. The ingress, health probes and ASPNETCORE_URLS all follow it."
+  type        = number
+}
+
+variable "app_exposed_port" {
+  description = "Public TCP port of the app's ingress on the environment's IP. Must be unique across the environment."
   type        = number
 }
 
@@ -121,18 +121,18 @@ variable "app_environment_variables" {
 }
 
 variable "ingress_allowed_cidrs" {
-  description = "IPv4 ranges allowed by the app's ingress IP restrictions, keyed by rule name. Every other source is refused."
+  description = "IPv4 ranges allowed by the app's ingress IP restrictions, keyed by rule name. Every other source is refused; an empty map allows everyone."
   type        = map(string)
 }
 
 variable "liveness_probe_path" {
-  description = "HTTP path of the liveness and startup probes. It must not depend on the database."
+  description = "Path of the liveness and startup probes. It must not depend on the database."
   type        = string
   default     = "/health/live"
 }
 
 variable "readiness_probe_path" {
-  description = "HTTP path of the readiness probe. It includes the database check."
+  description = "Path of the readiness probe. It includes the database check."
   type        = string
   default     = "/health/ready"
 }

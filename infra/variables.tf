@@ -73,14 +73,12 @@ variable "vnet_address_space" {
 }
 
 variable "subnet_address_prefixes" {
-  description = "Prefix of each dedicated subnet, inside vnet_address_space. Container Apps (workload profiles) needs at least /27, PostgreSQL at least /28; /24 is recommended for Application Gateway v2."
+  description = "Prefix of each dedicated subnet, inside vnet_address_space. Container Apps (workload profiles) needs at least /27, PostgreSQL at least /28."
   type = object({
-    app_gateway    = string
     container_apps = string
     postgresql     = string
   })
   default = {
-    app_gateway    = "10.40.0.0/24"
     container_apps = "10.40.1.0/24"
     postgresql     = "10.40.2.0/24"
   }
@@ -94,7 +92,7 @@ variable "subnet_address_prefixes" {
 }
 
 # ---------------------------------------------------------------------------------------------------------------------
-# Public entry point: Cloudflare DNS and Application Gateway
+# Public entry point: Cloudflare DNS and the app's TLS
 # ---------------------------------------------------------------------------------------------------------------------
 
 variable "dns_zone_name" {
@@ -114,53 +112,31 @@ variable "app_hostname" {
   }
 }
 
-variable "restrict_gateway_to_cloudflare" {
-  description = "Allow HTTPS to the gateway only from Cloudflare's published IPv4 ranges (plus gateway_additional_allowed_cidrs), so the proxy can't be bypassed."
+variable "restrict_ingress_to_cloudflare" {
+  description = "Allow connections to the app's public ingress only from Cloudflare's published IPv4 ranges (plus ingress_additional_allowed_cidrs), using the ingress IP restrictions. The client-certificate check is the stronger control; this one keeps everyone else from even reaching Kestrel."
   type        = bool
   default     = true
 }
 
-variable "gateway_additional_allowed_cidrs" {
-  description = "Extra source ranges allowed to reach the gateway on 443 when restrict_gateway_to_cloudflare is true, e.g. your own IP for troubleshooting."
+variable "ingress_additional_allowed_cidrs" {
+  description = "Extra source ranges allowed by the app's ingress IP restrictions when restrict_ingress_to_cloudflare is true, e.g. your own IP for troubleshooting. Without Cloudflare's client certificate they still get only the health endpoints."
   type        = list(string)
   default     = []
 
   validation {
-    condition     = alltrue([for cidr in var.gateway_additional_allowed_cidrs : can(cidrhost(cidr, 0))])
-    error_message = "gateway_additional_allowed_cidrs must contain CIDR ranges, e.g. 203.0.113.10/32."
+    condition     = alltrue([for cidr in var.ingress_additional_allowed_cidrs : can(cidrhost(cidr, 0))])
+    error_message = "ingress_additional_allowed_cidrs must contain CIDR ranges, e.g. 203.0.113.10/32."
   }
 }
 
-variable "app_gateway_autoscale" {
-  description = "Application Gateway autoscaling bounds in capacity units. min_capacity 0 reserves nothing (cheapest); max_capacity is 2-125."
-  type = object({
-    min_capacity = number
-    max_capacity = number
-  })
-  default = {
-    min_capacity = 0
-    max_capacity = 2
-  }
-
-  validation {
-    condition = (
-      var.app_gateway_autoscale.min_capacity >= 0 &&
-      var.app_gateway_autoscale.max_capacity >= 2 &&
-      var.app_gateway_autoscale.max_capacity <= 125 &&
-      var.app_gateway_autoscale.min_capacity <= var.app_gateway_autoscale.max_capacity
-    )
-    error_message = "app_gateway_autoscale needs 0 <= min_capacity <= max_capacity, with max_capacity between 2 and 125."
-  }
-}
-
-variable "app_gateway_zones" {
-  description = "Availability zones for Application Gateway and its public IP (zone-redundant by default; no extra charge)."
-  type        = list(string)
-  default     = ["1", "2", "3"]
+variable "require_cloudflare_client_certificate" {
+  description = "Turn on Cloudflare Authenticated Origin Pulls for the zone (Cloudflare then presents a client certificate to every origin) and make the app refuse requests without it. This is what keeps visitors from bypassing Cloudflare: a public Container Apps environment can't be locked down with an NSG."
+  type        = bool
+  default     = true
 }
 
 variable "tls_certificate_pfx_path" {
-  description = "Path to the PFX file with the TLS certificate and private key for the gateway: the Cloudflare origin certificate. Keep it outside the repository (\"~\" is expanded)."
+  description = "Path to the PFX file with the TLS certificate and private key that the app serves: the Cloudflare origin certificate. Keep it outside the repository (\"~\" is expanded)."
   type        = string
 
   validation {
@@ -204,9 +180,25 @@ variable "app_image_tag" {
 }
 
 variable "app_target_port" {
-  description = "Port Kestrel listens on inside the container. The image listens on 80; set 8080 if the platform refuses the port-80 capability (see docs/DEPLOYMENT.md)."
+  description = "Port Kestrel listens on for HTTPS inside the container. 443 needs the image's port-binding capability; set 8443 if the platform refuses it (see docs/DEPLOYMENT.md)."
   type        = number
-  default     = 80
+  default     = 443
+
+  validation {
+    condition     = var.app_target_port >= 1 && var.app_target_port <= 65535 && var.app_target_port != 36985
+    error_message = "app_target_port must be a TCP port; 36985 is reserved by Container Apps for health checks."
+  }
+}
+
+variable "app_exposed_port" {
+  description = "Public TCP port of the environment that Cloudflare connects to. Not 80 or 443: the environment's own HTTP ingress holds those (Azure answers \"exposedPort already in use\"). Terraform adds a Cloudflare Origin Rule so visitors still use 443."
+  type        = number
+  default     = 8443
+
+  validation {
+    condition     = var.app_exposed_port >= 1 && var.app_exposed_port <= 65535 && !contains([80, 443, 36985], var.app_exposed_port)
+    error_message = "app_exposed_port must be a TCP port other than 80 and 443 (the environment's HTTP ingress) and 36985 (Container Apps health checks)."
+  }
 }
 
 variable "app_cpu" {
@@ -244,7 +236,7 @@ variable "app_max_replicas" {
 }
 
 variable "container_apps_transitional_ingress_cidrs" {
-  description = "Container Apps infrastructure ranges also allowed by the app's ingress IP restrictions. While Microsoft rolls out real client IPs to the ingress (until about March 2027, GitHub issue microsoft/azure-container-apps#1666), requests may appear to come from these ranges. Remove them once Microsoft announces the rollout is complete; the subnet NSG enforces the gateway-only rule in the meantime."
+  description = "Container Apps infrastructure ranges also allowed by the app's ingress IP restrictions. While Microsoft rolls out real client IPs to the ingress (until about March 2027, GitHub issue microsoft/azure-container-apps#1666), requests may appear to come from these ranges. Remove them once Microsoft announces the rollout is complete; Cloudflare's client certificate keeps other callers out in the meantime."
   type        = list(string)
   default     = ["100.100.0.0/17", "100.100.128.0/19", "100.100.160.0/19", "100.100.192.0/19"]
 
@@ -346,7 +338,7 @@ variable "key_vault_purge_protection_enabled" {
 }
 
 variable "key_vault_firewall_enabled" {
-  description = "Deny Key Vault network access except from the gateway and Container Apps subnets, trusted Azure services and key_vault_allowed_ip_ranges. Read docs/ARCHITECTURE.md (Key Vault network access) before enabling it."
+  description = "Deny Key Vault network access except from the Container Apps subnet, trusted Azure services and key_vault_allowed_ip_ranges. Read docs/ARCHITECTURE.md (Key Vault network access) before enabling it."
   type        = bool
   default     = false
 }

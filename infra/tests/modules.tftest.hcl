@@ -31,38 +31,20 @@ run "networking_restricts_every_subnet" {
     name          = "loginapp-test"
     address_space = ["10.40.0.0/16"]
     subnet_address_prefixes = {
-      app_gateway    = "10.40.0.0/24"
       container_apps = "10.40.1.0/24"
       postgresql     = "10.40.2.0/24"
     }
-    gateway_ingress_allowed_cidrs = ["173.245.48.0/20", "103.21.244.0/22"]
+    app_ingress_port          = 8443
+    app_ingress_allowed_cidrs = ["173.245.48.0/20", "103.21.244.0/22"]
   }
 
   assert {
     condition = (
-      azurerm_network_security_rule.inbound["app_gateway/AllowHttpsInbound"].source_address_prefixes == toset(["173.245.48.0/20", "103.21.244.0/22"]) &&
-      azurerm_network_security_rule.inbound["app_gateway/AllowHttpsInbound"].destination_port_range == "443"
-    )
-    error_message = "The gateway must accept HTTPS from the allowed (Cloudflare) ranges only."
-  }
-
-  assert {
-    condition     = azurerm_network_security_rule.inbound["app_gateway/DenyInternetInbound"].access == "Deny"
-    error_message = "All other internet traffic to the gateway must be denied."
-  }
-
-  assert {
-    condition     = azurerm_network_security_rule.inbound["app_gateway/AllowGatewayManagerInbound"].destination_port_range == "65200-65535"
-    error_message = "Application Gateway v2 requires inbound GatewayManager traffic on 65200-65535."
-  }
-
-  assert {
-    condition = (
-      azurerm_network_security_rule.inbound["container_apps/AllowAppGatewayHttpInbound"].source_address_prefix == "10.40.0.0/24" &&
-      azurerm_network_security_rule.inbound["container_apps/AllowAppGatewayHttpInbound"].destination_port_ranges == toset(["80", "31080"]) &&
+      azurerm_network_security_rule.inbound["container_apps/AllowAppIngressInbound"].source_address_prefixes == toset(["173.245.48.0/20", "103.21.244.0/22"]) &&
+      azurerm_network_security_rule.inbound["container_apps/AllowAppIngressInbound"].destination_port_ranges == toset(["8443", "30000-32767"]) &&
       azurerm_network_security_rule.inbound["container_apps/DenyVirtualNetworkInbound"].access == "Deny"
     )
-    error_message = "Only the gateway subnet may reach the Container Apps environment over HTTP."
+    error_message = "The app's ingress must be open to the allowed (Cloudflare) ranges only, on the exposed port and the node-port range."
   }
 
   assert {
@@ -77,7 +59,7 @@ run "networking_restricts_every_subnet" {
   assert {
     condition = alltrue([
       for key, rule in azurerm_network_security_rule.inbound :
-      rule.priority < azurerm_network_security_rule.inbound[format("%s/%s", split("/", key)[0], split("/", key)[0] == "app_gateway" ? "DenyInternetInbound" : "DenyVirtualNetworkInbound")].priority
+      rule.priority < azurerm_network_security_rule.inbound[format("%s/DenyVirtualNetworkInbound", split("/", key)[0])].priority
       if rule.access == "Allow"
     ])
     error_message = "Every allow rule must take precedence over its subnet's deny rule."
@@ -93,7 +75,6 @@ run "networking_restricts_every_subnet" {
 
   assert {
     condition = (
-      [for endpoint in azurerm_subnet.app_gateway.service_endpoint : endpoint.service] == ["Microsoft.KeyVault"] &&
       [for endpoint in azurerm_subnet.container_apps.service_endpoint : endpoint.service] == ["Microsoft.KeyVault"] &&
       [for endpoint in azurerm_subnet.postgresql.service_endpoint : endpoint.service] == ["Microsoft.Storage"]
     )
@@ -101,12 +82,12 @@ run "networking_restricts_every_subnet" {
   }
 
   assert {
-    condition     = length(azurerm_subnet_network_security_group_association.this) == 3
+    condition     = length(azurerm_subnet_network_security_group_association.this) == 2
     error_message = "Every subnet needs an NSG."
   }
 }
 
-run "networking_without_a_source_list_opens_https_to_the_internet" {
+run "networking_without_a_source_list_opens_the_ingress_to_the_internet" {
   command = plan
 
   module {
@@ -117,21 +98,15 @@ run "networking_without_a_source_list_opens_https_to_the_internet" {
     name          = "loginapp-test"
     address_space = ["10.40.0.0/16"]
     subnet_address_prefixes = {
-      app_gateway    = "10.40.0.0/24"
       container_apps = "10.40.1.0/24"
       postgresql     = "10.40.2.0/24"
     }
-    gateway_ingress_allowed_cidrs = []
+    app_ingress_allowed_cidrs = []
   }
 
   assert {
-    condition     = azurerm_network_security_rule.inbound["app_gateway/AllowHttpsInbound"].source_address_prefix == "Internet"
-    error_message = "With no allowed ranges, HTTPS must be open to the internet."
-  }
-
-  assert {
-    condition     = !contains(keys(azurerm_network_security_rule.inbound), "app_gateway/DenyInternetInbound")
-    error_message = "With no allowed ranges there must be no deny-internet rule."
+    condition     = azurerm_network_security_rule.inbound["container_apps/AllowAppIngressInbound"].source_address_prefix == "Internet"
+    error_message = "With no allowed ranges, the ingress must be open to the internet."
   }
 }
 
@@ -234,7 +209,7 @@ run "key_vault_uses_rbac_with_per_secret_access" {
     }
     certificate_name                 = "app-origin"
     certificate_pfx_base64           = "cGxhY2Vob2xkZXI="
-    certificate_reader_principal_ids = { gateway = "55555555-5555-5555-5555-555555555555" }
+    certificate_reader_principal_ids = { app = "55555555-5555-5555-5555-555555555555" }
     log_analytics_workspace_id       = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.OperationalInsights/workspaces/log-test"
   }
 
@@ -254,8 +229,8 @@ run "key_vault_uses_rbac_with_per_secret_access" {
   }
 
   assert {
-    condition     = azurerm_role_assignment.certificate_reader["gateway"].scope == "${azurerm_key_vault.this.id}/secrets/app-origin"
-    error_message = "The gateway's access must be scoped to the certificate's secret."
+    condition     = azurerm_role_assignment.certificate_reader["app"].scope == "${azurerm_key_vault.this.id}/secrets/app-origin"
+    error_message = "The app's access to the certificate must be scoped to the certificate's secret."
   }
 
   assert {
@@ -307,7 +282,7 @@ run "key_vault_firewall_denies_by_default_when_enabled" {
 # container-app
 # ---------------------------------------------------------------------------------------------------------------------
 
-run "container_app_is_internal_single_replica_and_gateway_only" {
+run "container_app_is_public_single_replica_and_terminates_tls" {
   command = plan
 
   module {
@@ -318,14 +293,14 @@ run "container_app_is_internal_single_replica_and_gateway_only" {
     environment_name                   = "cae-loginapp-test"
     infrastructure_resource_group_name = "rg-loginapp-test-cae-managed"
     infrastructure_subnet_id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.Network/virtualNetworks/vnet/subnets/snet-aca"
-    virtual_network_id                 = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.Network/virtualNetworks/vnet"
     log_analytics_workspace_id         = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.OperationalInsights/workspaces/log-test"
     deploy_app                         = true
     app_name                           = "ca-loginapp-test"
     app_image                          = "crloginapptestabc123.azurecr.io/login-app:1a2b3c4"
     app_identity_id                    = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-app"
     registry_server                    = "crloginapptestabc123.azurecr.io"
-    app_target_port                    = 80
+    app_target_port                    = 443
+    app_exposed_port                   = 8443
     app_cpu                            = 0.5
     app_memory                         = "1Gi"
     app_min_replicas                   = 1
@@ -333,7 +308,7 @@ run "container_app_is_internal_single_replica_and_gateway_only" {
     app_secrets                        = { db-connection-string = "https://kv-test.vault.azure.net/secrets/ConnectionStrings--DefaultConnection" }
     app_secret_environment_variables   = { ConnectionStrings__DefaultConnection = "db-connection-string" }
     app_environment_variables          = { ASPNETCORE_ENVIRONMENT = "Production" }
-    ingress_allowed_cidrs              = { app-gateway-subnet = "10.40.0.0/24" }
+    ingress_allowed_cidrs              = { cloudflare-0 = "173.245.48.0/20" }
     db_bootstrap = {
       job_name                  = "caj-loginapp-test-dbinit"
       image                     = "mcr.microsoft.com/azurelinux/base/postgres:16.15-1-azl3.0.20261027"
@@ -348,8 +323,8 @@ run "container_app_is_internal_single_replica_and_gateway_only" {
   }
 
   assert {
-    condition     = azurerm_container_app_environment.this.internal_load_balancer_enabled
-    error_message = "The environment must be internal (reachable only from the VNet)."
+    condition     = !azurerm_container_app_environment.this.internal_load_balancer_enabled
+    error_message = "The environment must be external: Cloudflare connects to its public IP."
   }
 
   assert {
@@ -365,27 +340,38 @@ run "container_app_is_internal_single_replica_and_gateway_only" {
   assert {
     condition = (
       azurerm_container_app.this[0].ingress[0].external_enabled &&
-      azurerm_container_app.this[0].ingress[0].allow_insecure_connections &&
-      azurerm_container_app.this[0].ingress[0].target_port == 80
+      azurerm_container_app.this[0].ingress[0].transport == "tcp" &&
+      azurerm_container_app.this[0].ingress[0].exposed_port == 8443 &&
+      azurerm_container_app.this[0].ingress[0].target_port == 443
     )
-    error_message = "The ingress must accept plain HTTP from the VNet on the container's port 80."
+    error_message = "The ingress must pass TCP from 8443 straight through to the container on 443, so TLS ends in the container."
   }
 
   assert {
     condition = (
       length(azurerm_container_app.this[0].ingress[0].ip_security_restriction) == 1 &&
       azurerm_container_app.this[0].ingress[0].ip_security_restriction[0].action == "Allow" &&
-      azurerm_container_app.this[0].ingress[0].ip_security_restriction[0].ip_address_range == "10.40.0.0/24"
+      azurerm_container_app.this[0].ingress[0].ip_security_restriction[0].ip_address_range == "173.245.48.0/20"
     )
     error_message = "The ingress must allow only the listed ranges."
   }
 
   assert {
     condition = contains(
-      [for env in azurerm_container_app.this[0].template[0].container[0].env : env.name if env.name == "ASPNETCORE_HTTP_PORTS" && env.value == "80"],
-      "ASPNETCORE_HTTP_PORTS",
+      [for env in azurerm_container_app.this[0].template[0].container[0].env : env.value if env.name == "ASPNETCORE_URLS"],
+      "https://+:443",
     )
-    error_message = "Kestrel's port must follow the target port."
+    error_message = "Kestrel must listen for HTTPS only, on the target port."
+  }
+
+  assert {
+    condition = (
+      azurerm_container_app.this[0].template[0].container[0].startup_probe[0].transport == "HTTPS" &&
+      azurerm_container_app.this[0].template[0].container[0].liveness_probe[0].transport == "HTTPS" &&
+      azurerm_container_app.this[0].template[0].container[0].readiness_probe[0].transport == "HTTPS" &&
+      azurerm_container_app.this[0].template[0].container[0].readiness_probe[0].port == 443
+    )
+    error_message = "The probes must use HTTPS on the target port: nothing listens on plain HTTP."
   }
 
   assert {
@@ -413,18 +399,18 @@ run "container_app_waits_for_an_image" {
     environment_name                   = "cae-loginapp-test"
     infrastructure_resource_group_name = "rg-loginapp-test-cae-managed"
     infrastructure_subnet_id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.Network/virtualNetworks/vnet/subnets/snet-aca"
-    virtual_network_id                 = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.Network/virtualNetworks/vnet"
     log_analytics_workspace_id         = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.OperationalInsights/workspaces/log-test"
     deploy_app                         = false
     app_name                           = "ca-loginapp-test"
     app_identity_id                    = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-app"
     registry_server                    = "crloginapptestabc123.azurecr.io"
-    app_target_port                    = 80
+    app_target_port                    = 443
+    app_exposed_port                   = 8443
     app_cpu                            = 0.5
     app_memory                         = "1Gi"
     app_min_replicas                   = 1
     app_max_replicas                   = 1
-    ingress_allowed_cidrs              = { app-gateway-subnet = "10.40.0.0/24" }
+    ingress_allowed_cidrs              = { cloudflare-0 = "173.245.48.0/20" }
     db_bootstrap = {
       job_name                  = "caj-loginapp-test-dbinit"
       image                     = "mcr.microsoft.com/azurelinux/base/postgres:16.15-1-azl3.0.20261027"
@@ -441,73 +427,5 @@ run "container_app_waits_for_an_image" {
   assert {
     condition     = length(azurerm_container_app.this) == 0 && output.app_id == null
     error_message = "No Container App may be created before its image exists."
-  }
-}
-
-# ---------------------------------------------------------------------------------------------------------------------
-# application-gateway
-# ---------------------------------------------------------------------------------------------------------------------
-
-run "gateway_terminates_tls_and_forwards_http_80" {
-  command = plan
-
-  module {
-    source = "./modules/application-gateway"
-  }
-
-  variables {
-    name                                = "agw-loginapp-test"
-    public_ip_name                      = "pip-agw-loginapp-test"
-    subnet_id                           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.Network/virtualNetworks/vnet/subnets/snet-appgw"
-    autoscale                           = { min_capacity = 0, max_capacity = 2 }
-    identity_id                         = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-agw"
-    ssl_certificate_key_vault_secret_id = "https://kv-test.vault.azure.net/secrets/app-origin"
-    host_name                           = "app.biffkittz.com"
-    backend_fqdn                        = "ca-loginapp-test.example.eastus.azurecontainerapps.io"
-    health_probe_path                   = "/health/ready"
-    log_analytics_workspace_id          = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.OperationalInsights/workspaces/log-test"
-  }
-
-  assert {
-    condition     = azurerm_application_gateway.this.sku[0].name == "Standard_v2" && azurerm_application_gateway.this.sku[0].tier == "Standard_v2"
-    error_message = "The gateway must be Standard_v2."
-  }
-
-  assert {
-    condition = (
-      one(azurerm_application_gateway.this.http_listener).protocol == "Https" &&
-      one(azurerm_application_gateway.this.http_listener).host_names == toset(["app.biffkittz.com"]) &&
-      one(azurerm_application_gateway.this.frontend_port).port == 443
-    )
-    error_message = "The only listener must be HTTPS on 443 for app.biffkittz.com."
-  }
-
-  assert {
-    condition = (
-      one(azurerm_application_gateway.this.backend_http_settings).protocol == "Http" &&
-      one(azurerm_application_gateway.this.backend_http_settings).port == 80 &&
-      one(azurerm_application_gateway.this.backend_http_settings).pick_host_name_from_backend_address
-    )
-    error_message = "TLS must end at the gateway, with plain HTTP on port 80 to the Container App and its host name preserved."
-  }
-
-  assert {
-    condition     = one(azurerm_application_gateway.this.ssl_certificate).key_vault_secret_id == "https://kv-test.vault.azure.net/secrets/app-origin"
-    error_message = "The certificate must come from Key Vault."
-  }
-
-  assert {
-    condition     = azurerm_application_gateway.this.ssl_policy[0].policy_name == "AppGwSslPolicy20220101S"
-    error_message = "The listener must use the strict TLS 1.2+ policy."
-  }
-
-  assert {
-    condition     = one(azurerm_application_gateway.this.probe).path == "/health/ready"
-    error_message = "The gateway must probe the app's readiness endpoint."
-  }
-
-  assert {
-    condition     = azurerm_public_ip.this.sku == "Standard" && azurerm_public_ip.this.allocation_method == "Static" && azurerm_public_ip.this.zones == toset(["1", "2", "3"])
-    error_message = "The public IP must be a static, zone-redundant Standard IP."
   }
 }

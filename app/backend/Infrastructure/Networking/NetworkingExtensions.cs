@@ -45,14 +45,14 @@ internal static class NetworkingExtensions
 
     private static void ConfigureForwardedHeaders(ForwardedHeadersOptions forwarded, IOptions<NetworkOptions> network)
     {
-        // TLS terminates at Application Gateway / the Container Apps ingress, and Kestrel only ever sees plain HTTP
-        // on port 80. These headers restore the real client address (for rate limiting and logs) and scheme (so
-        // HSTS is emitted for HTTPS requests).
+        // Every request reaches Kestrel through proxies: in Azure, Cloudflare's edge and then the Container Apps
+        // ingress, which passes the TLS connection through. These headers restore the real client address (for
+        // rate limiting and logs) and the scheme the client used (so HSTS is emitted for HTTPS requests).
         forwarded.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
 
-        // A request crosses two proxies in Azure (Application Gateway, then the Container Apps ingress). The
-        // default ForwardLimit of 1 would stop at the gateway's address, so keep walking back through hops that
-        // come from trusted networks until reaching the first untrusted address: the real client.
+        // A request can cross more than one trusted hop (the Container Apps ingress, Cloudflare's edge), so rather
+        // than the default ForwardLimit of 1, keep walking back through hops that come from trusted networks until
+        // reaching the first untrusted address: the real client.
         forwarded.ForwardLimit = null;
 
         forwarded.KnownProxies.Clear();

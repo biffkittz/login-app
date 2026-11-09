@@ -1,6 +1,6 @@
-# One virtual network with three dedicated subnets. Each subnet hosts exactly one service (Application Gateway, the
-# Container Apps environment, PostgreSQL), so each subnet's network security group can list precisely the traffic
-# that service accepts and deny everything else.
+# One virtual network with two dedicated subnets. Each subnet hosts exactly one service (the Container Apps
+# environment, PostgreSQL), so each subnet's network security group can list precisely the traffic that service
+# accepts and deny everything else.
 
 resource "azurerm_virtual_network" "this" {
   name                = "vnet-${var.name}"
@@ -10,21 +10,8 @@ resource "azurerm_virtual_network" "this" {
   tags                = var.tags
 }
 
-# Application Gateway v2 needs a subnet that contains nothing but application gateways.
-resource "azurerm_subnet" "app_gateway" {
-  name                 = "snet-appgw"
-  resource_group_name  = var.resource_group_name
-  virtual_network_name = azurerm_virtual_network.this.name
-  address_prefixes     = [var.subnet_address_prefixes.app_gateway]
-
-  # The gateway reads its TLS certificate from Key Vault. With a service endpoint that call travels over the
-  # Microsoft backbone and can be allowed by the vault firewall's virtual network rules.
-  service_endpoint {
-    service = "Microsoft.KeyVault"
-  }
-}
-
-# The Container Apps environment (workload profiles) runs its nodes, ingress proxy and internal load balancer here.
+# The Container Apps environment (workload profiles) runs its nodes and ingress proxy here. Its public IP and load
+# balancer live in the platform-managed resource group.
 resource "azurerm_subnet" "container_apps" {
   name                 = "snet-aca"
   resource_group_name  = var.resource_group_name
@@ -41,7 +28,8 @@ resource "azurerm_subnet" "container_apps" {
     }
   }
 
-  # The app and the bootstrap job talk to Key Vault from this subnet (see the gateway subnet above).
+  # The app and the bootstrap job read their Key Vault secrets from this subnet. With a service endpoint that call
+  # travels over the Microsoft backbone and can be allowed by the vault firewall's virtual network rules.
   service_endpoint {
     service = "Microsoft.KeyVault"
   }
@@ -75,13 +63,12 @@ resource "azurerm_subnet" "postgresql" {
 
 locals {
   subnet_ids = {
-    app_gateway    = azurerm_subnet.app_gateway.id
     container_apps = azurerm_subnet.container_apps.id
     postgresql     = azurerm_subnet.postgresql.id
   }
 
-  prefixes                 = var.subnet_address_prefixes
-  restrict_gateway_ingress = length(var.gateway_ingress_allowed_cidrs) > 0
+  prefixes             = var.subnet_address_prefixes
+  restrict_app_ingress = length(var.app_ingress_allowed_cidrs) > 0
 
   # Inbound rules for each subnet, lowest priority number first. Outbound traffic keeps the platform defaults,
   # which every service here needs (Microsoft Entra ID, container registries, Azure Storage, Azure Monitor).
@@ -91,58 +78,19 @@ locals {
   # tags, and the VirtualNetwork tag also covers the Azure host address 168.63.129.16 that load balancer probes come
   # from. That is why every subnet explicitly re-allows AzureLoadBalancer ahead of its deny rule.
   inbound_rules = {
-    app_gateway = merge(
-      {
-        AllowGatewayManagerInbound = {
-          priority    = 100
-          access      = "Allow"
-          protocol    = "Tcp"
-          sources     = ["GatewayManager"]
-          destination = "*"
-          ports       = ["65200-65535"]
-          description = "Required by Application Gateway v2: infrastructure traffic from Azure."
-        }
-        AllowAzureLoadBalancerInbound = {
-          priority    = 110
-          access      = "Allow"
-          protocol    = "*"
-          sources     = ["AzureLoadBalancer"]
-          destination = "*"
-          ports       = ["*"]
-          description = "Required by Application Gateway v2: Azure load balancer health probes."
-        }
-        AllowHttpsInbound = {
-          priority    = 200
-          access      = "Allow"
-          protocol    = "Tcp"
-          sources     = local.restrict_gateway_ingress ? var.gateway_ingress_allowed_cidrs : ["Internet"]
-          destination = "*"
-          ports       = ["443"]
-          description = local.restrict_gateway_ingress ? "HTTPS from the allowed ranges (Cloudflare's edge) only." : "HTTPS from the internet."
-        }
-      },
-      local.restrict_gateway_ingress ? {
-        DenyInternetInbound = {
-          priority    = 4000
-          access      = "Deny"
-          protocol    = "*"
-          sources     = ["Internet"]
-          destination = "*"
-          ports       = ["*"]
-          description = "Blocks direct access to the gateway, so clients can't bypass Cloudflare."
-        }
-      } : {}
-    )
-
     container_apps = {
-      AllowAppGatewayHttpInbound = {
+      # In an external workload-profiles environment, internet traffic arrives through the public IP in the managed
+      # resource group and, per Microsoft, isn't subject to this NSG. The rule documents the intent and takes effect
+      # should the platform ever route that traffic through the subnet: the exposed port plus the node-port range
+      # that TCP ingress is mapped to.
+      AllowAppIngressInbound = {
         priority    = 100
         access      = "Allow"
         protocol    = "Tcp"
-        sources     = [local.prefixes.app_gateway]
+        sources     = local.restrict_app_ingress ? var.app_ingress_allowed_cidrs : ["Internet"]
         destination = local.prefixes.container_apps
-        ports       = ["80", "31080"]
-        description = "Application Gateway to the environment: internal load balancer (80) and edge proxy (31080)."
+        ports       = [tostring(var.app_ingress_port), "30000-32767"]
+        description = local.restrict_app_ingress ? "TLS to the app from the allowed ranges (Cloudflare's edge)." : "TLS to the app from the internet."
       }
       AllowAzureLoadBalancerInbound = {
         priority    = 110
@@ -151,7 +99,7 @@ locals {
         sources     = ["AzureLoadBalancer"]
         destination = "*"
         ports       = ["*"]
-        description = "Health probes of the environment's internal load balancer."
+        description = "Health probes of the environment's load balancer."
       }
       AllowIntraSubnetInbound = {
         priority    = 120
@@ -169,7 +117,7 @@ locals {
         sources     = ["VirtualNetwork"]
         destination = "*"
         ports       = ["*"]
-        description = "Anything else from inside the network: only Application Gateway may call the app."
+        description = "Anything else from inside the network or peered networks."
       }
     }
 
@@ -208,7 +156,7 @@ locals {
         sources     = ["VirtualNetwork"]
         destination = "*"
         ports       = ["*"]
-        description = "Anything else from inside the network, including the gateway subnet."
+        description = "Anything else from inside the network or peered networks."
       }
     }
   }
@@ -256,7 +204,6 @@ resource "azurerm_subnet_network_security_group_association" "this" {
   subnet_id                 = each.value
   network_security_group_id = azurerm_network_security_group.this[each.key].id
 
-  # Associate only once the rules exist: Application Gateway refuses a subnet whose NSG blocks its infrastructure
-  # ports, and nothing should run behind a half-configured NSG.
+  # Associate only once the rules exist: nothing should run behind a half-configured NSG.
   depends_on = [azurerm_network_security_rule.inbound]
 }

@@ -1,9 +1,9 @@
 # infra/: Terraform for Azure and Cloudflare
 
-Provisions the Login App: Cloudflare (proxied DNS) → Application Gateway Standard_v2 (TLS with the Cloudflare
-origin certificate from Key Vault) → HTTP :80 → internal Container Apps environment → PostgreSQL flexible server
-(private access). Details: `README.md`, `docs/ARCHITECTURE.md`, `docs/DEPLOYMENT.md`, `docs/AUTHENTICATION.md`,
-`docs/DEVELOPMENT.md`.
+Provisions the Login App: Cloudflare (proxied DNS, Authenticated Origin Pulls) → public IP of an external Container
+Apps environment → TCP ingress on 8443 (TLS passed through) → Kestrel terminates TLS with the origin certificate from
+Key Vault → PostgreSQL flexible server (private access). There is no Application Gateway (removed for cost).
+Details: `README.md`, `docs/ARCHITECTURE.md`, `docs/DEPLOYMENT.md`, `docs/AUTHENTICATION.md`, `docs/DEVELOPMENT.md`.
 
 ## Check loop (no credentials needed)
 
@@ -39,16 +39,17 @@ touches Azure. Run all of them before calling a change done.
 
 Root (`main.tf`, `variables.tf`, `outputs.tf`, `providers.tf`, `backend.tf`) holds naming, tags, identities,
 generated secrets and the Cloudflare record. Modules: `networking`, `registry`, `key-vault`, `database`,
-`container-app` (environment, app, DB bootstrap job), `application-gateway`. Environment values:
+`container-app` (environment, app, DB bootstrap job). Environment values:
 `environments/demo.tfvars`.
 
 ## Things that will bite
 
-- **`name_suffix` must stay set** in `demo.tfvars` (`85705a`). The fallback in `main.tf` currently uses
-  `timestamp()`, which changes every plan and would replace the registry, Key Vault and PostgreSQL server (losing
-  data).
+- **Names must not change.** The suffix comes from `name_suffix` in `demo.tfvars`, or else a deterministic hash of
+  the subscription and name. Changing either renames, and so replaces, the registry, Key Vault and PostgreSQL server
+  (losing data). Never derive it from something that varies, such as `timestamp()`.
 - **Two-phase app deploy:** the Container App exists only when `app_image_tag` is set. The image must already be in
-  ACR as `<app_image_repository>:<app_image_tag>`; demo uses repository `loginapp`, not the default `login-app`.
+  ACR as `<app_image_repository>:<app_image_tag>` (default repository `login-app`; `terraform output next_steps`
+  prints the matching `az acr build` command). Check with `az acr repository show-tags` when an apply says MANIFEST_UNKNOWN.
   Once set, keep `app_image_tag` set, or the app is destroyed.
 - **DB bootstrap job** (`az containerapp job start`) creates the `loginapp_app` role; run it after the first apply
   and before deploying the app. The SQL in `db-bootstrap.sh` uses psql variables and `\gexec` to stay
@@ -60,4 +61,11 @@ generated secrets and the Cloudflare record. Modules: `networking`, `registry`, 
 - **Lock file:** commit `.terraform.lock.hcl`. Don't use `TF_PLUGIN_CACHE_DIR` here; it leaves symlinks that break
   later installs.
 - PostgreSQL flexible server doesn't support service endpoints; private access (delegated subnet + private DNS) is
-  deliberate. NSGs are the authoritative control for "only App Gateway reaches the app".
+  deliberate.
+- **The public ingress can't be fenced by an NSG** (external workload-profiles environment). "Only Cloudflare" is
+  enforced by the app's client-certificate check, plus ingress IP restrictions. Keep
+  `require_cloudflare_client_certificate` and the app's `OriginTls` settings in step: Cloudflare must present the
+  certificate whenever the app requires it.
+- **The exposed port can't be 80 or 443:** the environment's HTTP ingress holds them ("exposedPort already in use").
+  `cloudflare_ruleset.origin_port` (an Origin Rule) sends Cloudflare to 8443; the container still listens on 443.
+  The Cloudflare token needs DNS, Zone Settings and Origin Rules edit.

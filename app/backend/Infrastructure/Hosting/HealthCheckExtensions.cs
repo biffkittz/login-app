@@ -4,7 +4,8 @@ using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 namespace LoginApp.Api.Infrastructure.Hosting;
 
 /// <summary>
-/// Health endpoints for Azure Container Apps probes and the Application Gateway backend health check.
+/// Health endpoints for the Azure Container Apps probes. They are the only paths served without Cloudflare's client
+/// certificate (see <c>ClientCertificateRequirementMiddleware</c>).
 /// </summary>
 internal static class HealthCheckExtensions
 {

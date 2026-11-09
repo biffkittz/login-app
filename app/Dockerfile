@@ -3,7 +3,8 @@
 # Builds the whole Login App site into a single Linux container image:
 #   1. frontend-build  compiles the Vue SPA (npm ci, type-check, Vite production build)
 #   2. backend-build   publishes the ASP.NET Core API with the SPA copied into wwwroot
-#   3. final           ASP.NET Core runtime only: Kestrel serves the API and the SPA over HTTP on port 80
+#   3. final           ASP.NET Core runtime only: Kestrel serves the API and the SPA (HTTP on port 80 by default;
+#                      HTTPS on port 443 when OriginTls is configured, as in Azure)
 #
 # The build context is the app/ directory. From the repository root:
 #   docker build --tag login-app:local app
@@ -56,10 +57,11 @@ RUN dotnet publish backend/LoginApp.Api.csproj \
 FROM mcr.microsoft.com/dotnet/aspnet:${DOTNET_VERSION} AS final
 
 LABEL org.opencontainers.image.title="login-app" \
-      org.opencontainers.image.description="Login App: Vue 3 SPA served by an ASP.NET Core API (Kestrel, port 80)"
+      org.opencontainers.image.description="Login App: Vue 3 SPA served by an ASP.NET Core API (Kestrel, port 80 or 443)"
 
-# Kestrel listens for plain HTTP on port 80. TLS terminates upstream (Application Gateway / Container Apps ingress),
-# and the app trusts X-Forwarded-For/-Proto only from the internal networks listed in appsettings.json.
+# By default Kestrel listens for plain HTTP on port 80 (local runs, compose.yaml). In Azure, Terraform sets
+# ASPNETCORE_URLS=https://+:443 and the OriginTls settings, so Kestrel terminates TLS itself with the Cloudflare
+# origin certificate. Either way the app trusts X-Forwarded-For/-Proto only from the networks in appsettings.json.
 ENV ASPNETCORE_HTTP_PORTS=80 \
     ASPNETCORE_ENVIRONMENT=Production
 
@@ -80,7 +82,7 @@ WORKDIR /app
 COPY --from=backend-build /app/publish ./
 
 USER $APP_UID
-EXPOSE 80
+EXPOSE 80 443
 
 # No HEALTHCHECK instruction: Azure Container Apps ignores it and uses its own probes against /health/live and
 # /health/ready (docs/BUILD_AND_DEPLOY.md), and the runtime image deliberately ships without curl.

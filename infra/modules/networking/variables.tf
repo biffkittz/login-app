@@ -21,16 +21,21 @@ variable "address_space" {
 variable "subnet_address_prefixes" {
   description = "Address prefix of each dedicated subnet. Each must lie inside address_space and must not overlap the others."
   type = object({
-    app_gateway    = string
     container_apps = string
     postgresql     = string
   })
 }
 
-variable "gateway_ingress_allowed_cidrs" {
-  description = "Source ranges allowed to reach Application Gateway on TCP 443. An empty list allows the whole internet."
+variable "app_ingress_allowed_cidrs" {
+  description = "Source ranges allowed to reach the app's public TCP ingress, in the Container Apps subnet's NSG. An empty list allows the whole internet."
   type        = list(string)
   default     = []
+}
+
+variable "app_ingress_port" {
+  description = "Public TCP port of the app's ingress (the Container App's exposed port)."
+  type        = number
+  default     = 8443
 }
 
 variable "tags" {

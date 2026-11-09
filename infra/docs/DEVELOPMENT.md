@@ -91,7 +91,7 @@ cd ~/login-app/infra
 terraform init -backend=false            # providers and modules only; works offline from Azure
 terraform fmt -recursive                 # format
 terraform validate                       # syntax and types
-terraform test                           # 24 runs against mocked providers (a few seconds)
+terraform test                           # 28 runs against mocked providers (a few seconds)
 tflint --init && tflint --recursive      # lint (the root module and every module)
 terraform-docs .                         # refresh the READMEs after changing variables, outputs or resources
 ```
@@ -115,7 +115,7 @@ Cloudflare credentials and create nothing.
 | File | Checks |
 | --- | --- |
 | `tests/root.tftest.hcl` | Region, required tags, naming, the two-phase app deployment, the DNS record, generated secrets, and the validation of every input that has rules |
-| `tests/modules.tftest.hcl` | Each module on its own: NSG rules and their order, delegations and service endpoints, private PostgreSQL on B1ms, Basic registry without admin user, Key Vault RBAC and per-secret scopes, internal single-replica Container App, gateway TLS and HTTP-80 backend |
+| `tests/modules.tftest.hcl` | Each module on its own: NSG rules and their order, delegations and service endpoints, private PostgreSQL on B1ms, Basic registry without admin user, Key Vault RBAC and per-secret scopes, public single-replica Container App with TCP ingress (8443 outside, HTTPS on 443 in the container) |
 | `tests/mocks/` | Realistic values for computed attributes (resource IDs, FQDNs), so mocked applies pass the provider's own validation |
 
 Assertions can reference only the root module's resources and the modules' outputs. To test a module's internals,
@@ -169,7 +169,7 @@ It never plans against Azure. To add plan and apply jobs, follow
 **Names.**
 - Resources follow the
   [Cloud Adoption Framework abbreviations](https://learn.microsoft.com/azure/cloud-adoption-framework/ready/azure-best-practices/resource-abbreviations)
-  (`rg-`, `vnet-`, `snet-`, `nsg-`, `agw-`, `cae-`, `ca-`, `caj-`, `kv`, `cr`, `psql-`, `id-`, `log-`), built in
+  (`rg-`, `vnet-`, `snet-`, `nsg-`, `cae-`, `ca-`, `caj-`, `kv`, `cr`, `psql-`, `id-`, `log-`), built in
   `local.names`.
 - In Terraform, a module's single resource of a type is named `this`.
 

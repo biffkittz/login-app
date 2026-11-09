@@ -14,19 +14,13 @@ output "default_domain" {
 }
 
 output "static_ip_address" {
-  description = "Private IP of the environment's internal load balancer."
+  description = "Public IP of the environment, which Cloudflare's DNS record points to."
   value       = azurerm_container_app_environment.this.static_ip_address
 }
 
 output "app_fqdn" {
-  description = "Private FQDN of the app. Known before the app exists, so Application Gateway can be configured first. Available once its private DNS records exist."
+  description = "The app's platform FQDN (<app name>.<default domain>), known before the app exists. With TCP ingress it answers on app_exposed_port; users reach the app through Cloudflare instead."
   value       = "${var.app_name}.${azurerm_container_app_environment.this.default_domain}"
-
-  depends_on = [
-    azurerm_private_dns_a_record.wildcard,
-    azurerm_private_dns_a_record.apex,
-    azurerm_private_dns_zone_virtual_network_link.environment,
-  ]
 }
 
 output "app_name" {
