@@ -1,8 +1,9 @@
-# app/: the Login App
+# app/: Nibbles (the Login App code base)
 
-ASP.NET Core 10 minimal API (`backend/`, project `LoginApp.Api`) that also serves the compiled Vue 3 SPA
-(`frontend/`) from `wwwroot`. Tests: `backend.tests/` (xUnit v3) and Vitest in `frontend/`. Full detail in
-`docs/DEVELOPMENT.md`, `docs/BUILD_AND_DEPLOY.md` and `docs/ARCHITECTURE.md` at the repo root.
+A realtime family grocery list. ASP.NET Core 10 minimal API (`backend/`, project `LoginApp.Api`) with a SignalR hub,
+which also serves the compiled Vue 3 SPA (`frontend/`) from `wwwroot`. Tests: `backend.tests/` (xUnit v3) and Vitest
+in `frontend/`. Full detail in `docs/DEVELOPMENT.md`, `docs/BUILD_AND_DEPLOY.md` and `docs/ARCHITECTURE.md` at the
+repo root.
 
 ## Commands (run from the repo root so `global.json` applies)
 
@@ -20,10 +21,14 @@ dotnet ef migrations add <Name> --project app/backend --output-dir Infrastructur
 
 ## Backend conventions
 
-- Feature folders: `Features/Auth/` holds the endpoints, service, options and log messages for auth.
-  Cross-cutting code is under `Infrastructure/` (Configuration, Data, Hosting, Networking, Security, Tls).
+- Feature folders: `Features/Auth/` (accounts, sessions) and `Features/GroceryList/` (the list and its hub) each hold
+  their endpoints, service, options and log messages. Cross-cutting code is under `Infrastructure/` (Configuration,
+  Data, Hosting, Networking, Security, Tls).
 - Central package versions in `Directory.Packages.props`; shared settings in `Directory.Build.props`. Analyzers
   and `.editorconfig` style are enforced: warnings are errors in Release, so build Release before calling it done.
+- The Docker build context is `app/`, so the image build doesn't see the root `.editorconfig`. An analyzer setting the
+  image needs (migrations as generated code, for example) belongs in an `.editorconfig` under `app/`. To check what
+  the image build will do, publish a copy of `app/backend` plus the `Directory.*.props` files from outside the repo.
 - Options classes are validated at startup and fail fast. Logging uses source-generated `LoggerMessage` methods
   (e.g. `AuthLog`); never log passwords, tokens or emails.
 - Cancellation: check the token at the start of a method, but never after a change has been saved. Cancelling
@@ -39,6 +44,33 @@ dotnet ef migrations add <Name> --project app/backend --output-dir Infrastructur
 - `/api/auth/me` re-reads the user from the database rather than trusting token claims.
 - Lockout after five failed sign-ins; per-client-IP rate limiting on login and register.
 - Passwords: minimum 12 characters, length-based policy (NIST SP 800-63B).
+
+## Grocery list and realtime (`Features/GroceryList/`, `frontend/src/stores/grocery-list.ts`)
+
+Read the "The grocery list" section of `docs/ARCHITECTURE.md` before changing this. The rules that keep phones in
+agreement:
+
+- Writes are REST (`/api/grocery-list/...`); each answers with a `GroceryListChange` and the hub broadcasts the same
+  change to everyone (author included) after the commit, without the request's cancellation token. The hub
+  (`/api/grocery-list/hub`) has no client-callable methods; keep it push-only.
+- Every change to an item, moves included, increments `Version` (also the EF concurrency token). The SPA keeps the
+  highest version, remembers deleted IDs, and reloads the whole list on every (re)connect. Don't add events that rely
+  on delivery order.
+- Store choices come from `GroceryList:Stores` (appsettings.json) and are sent with `GET /api/grocery-list`; the
+  server rejects other stores (400 on `Store`) and saves its own spelling. The SPA groups by store
+  (`utils/store-groups.ts`: no store first, then the configured order, then legacy stores) and items move only within
+  their group (`listIndexForGroupMove` turns that into a place in the whole list).
+- Order is a fractional `Position` (`ItemPositions`); a move names its neighbor (`afterItemId`), never an index.
+  Moving doesn't change `LastModifiedAt`/`LastModifiedById`.
+- `PATCH` carries only the changed fields (null = unchanged, `""` = clear); the editor sends only what the user edited.
+- Writes take turns on `GroceryListWriteLock` (in-process): fine because the app is one instance (SignalR has no
+  backplane; Terraform enforces one replica).
+- Client IDs: the SPA generates item UUIDs so optimistic adds match the server's copy.
+- The SPA connects WebSockets-only with `skipNegotiation`, waits about a second before any reconnect (an immediate
+  one lands on a server that is shutting down), reloads on resume after 15 s in the background, and reloads over
+  HTTP every 30 s while offline (that is also how it notices a 401).
+- Integration tests use `Shopper` and `RealtimeListener` (`backend.tests/Features/GroceryList/`); `LoginApiFactory`
+  uses a temporary SQLite file, because the hub and HTTP requests hit the database concurrently.
 
 ## Origin TLS (`Infrastructure/Tls/`)
 

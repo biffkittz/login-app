@@ -1,3 +1,4 @@
+using LoginApp.Api.Features.GroceryList;
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
 
@@ -16,11 +17,15 @@ namespace LoginApp.Api.Infrastructure.Data;
 internal sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options)
     : IdentityUserContext<ApplicationUser>(options)
 {
+    /// <summary>Gets the items on the shared grocery list.</summary>
+    public DbSet<GroceryItem> GroceryItems => Set<GroceryItem>();
+
     /// <inheritdoc />
     protected override void OnModelCreating(ModelBuilder builder)
     {
         // Identity's mappings must be applied first; the configuration below refines them.
         base.OnModelCreating(builder);
         builder.ApplyConfiguration(new ApplicationUserConfiguration());
+        builder.ApplyConfiguration(new GroceryItemConfiguration());
     }
 }

@@ -1,6 +1,7 @@
 # Development guide
 
-This guide takes you from a fresh Windows machine to running, debugging and testing Login App locally. The team
+This guide takes you from a fresh Windows machine to running, debugging and testing Nibbles (the code's
+`LoginApp` projects) locally. The team
 develops in **VS Code** connected to **WSL (Ubuntu)**: all code, tools and builds live inside Linux, and VS Code
 on Windows is the editor.
 
@@ -197,8 +198,8 @@ There are two ways to run locally. Both need the database from section 4.
 
 ### A. Day-to-day development (hot reload)
 
-The Vite dev server serves the SPA with instant hot module replacement and **proxies `/api` to the API**, so the
-browser sees a single origin, exactly like production.
+The Vite dev server serves the SPA with instant hot module replacement and **proxies `/api` to the API**, including
+the grocery list's WebSocket (`/api/grocery-list/hub`), so the browser sees a single origin, exactly like production.
 
 ```bash
 # Terminal 1: the API on http://localhost:5082 (applies database migrations on startup)
@@ -213,6 +214,10 @@ Browse to **<http://localhost:5173>**. In VS Code you can start both at once: *R
 
 The OpenAPI document is available in Development at <http://localhost:5082/openapi/v1.json>, and
 `app/backend/LoginApp.Api.http` contains ready-made requests.
+
+To watch the realtime updates, sign in as two different users in two windows side by side: a normal one and a
+private one (they keep separate cookies). For a phone-sized view, use the browser's device toolbar (F12, then
+Ctrl+Shift+M). The status pill next to the heading shows whether the list is live.
 
 ### B. The complete, production-like site
 
@@ -263,13 +268,21 @@ npm audit --omit=dev  # vulnerabilities in what ships to browsers
     in for PostgreSQL.
   - They cover registration, sign-in, sign-out and `/me`; cookie attributes; validation; lockout; rate limiting;
     CSRF-relevant content-type rejection; forged tokens; security headers; SPA routing; and health probes.
-  - Unit tests cover token issuing, options validation and the internal-network middleware.
+  - The grocery list: every endpoint (validation, partial updates, ordering and renumbering, the item cap, deleted
+    accounts), the per-user rate limit, and the realtime hub over real WebSockets (changes reach other users; anonymous
+    and cross-site connections are refused; a connection closes when its session expires).
+  - Unit tests cover token issuing, options validation, the internal-network middleware and item positions.
+  - The SQLite database is a temporary file, so the hub and HTTP requests can use the database at the same time.
 - **Frontend (`src/**/__tests__`):**
   - Validation rules and error normalization.
   - The composables (form validation, async actions, redirect safety).
   - The router guard and the auth store, including session expiry.
-  - The field components' `v-model` and accessibility wiring.
-  - The login view end to end.
+  - The grocery list store: ordering, versions and deletions applied in any order, optimistic writes and their
+    rollback, reloads that don't lose changes, and the offline fallback.
+  - The SignalR wrapper's retry, restart and stop behavior (with SignalR mocked).
+  - The field components' `v-model` and accessibility wiring; the add form, item list (including dragging with
+    pointer events and the arrow keys) and item editor.
+  - The login view and the grocery list view end to end, with the API mocked.
 
 The real EF Core migrations target PostgreSQL. They are exercised whenever the API starts against a real database,
 either locally or by `buildAndRunSite.sh`.
@@ -311,6 +324,9 @@ for example `Jwt--SigningKey`.
 | `Database:MigrateOnStartup` | `true` | Apply pending migrations when the app starts |
 | `Database:MigrationTimeout` | `00:05:00` | Gives up (and fails startup) after this long |
 | `RateLimiting:Authentication:PermitLimit` / `:Window` | `10` / `00:01:00` | Login and registration requests per client IP per window |
+| `RateLimiting:GroceryList:PermitLimit` / `:Window` | `120` / `00:01:00` | Changes to the list and realtime connection attempts per user per window |
+| `GroceryList:MaxItems` | `500` | How many items the shared list may hold |
+| `GroceryList:Stores` | `Whole Foods`, `Indian Grocery`, `Teeter/Lion`, `Costco` | The store choices, in the order the list is grouped by. Set in appsettings.json (an array; in environment variables `GroceryList__Stores__0` and so on). At least one, no duplicates |
 | `Network:RestrictToInternalNetworks` | `true` | Refuse (403) peers outside `Network:InternalNetworks` |
 | `Network:InternalNetworks` | RFC 1918, 100.64/10, link-local, loopback, IPv6 ULA | CIDR list; also the proxies trusted for `X-Forwarded-*` |
 | `KeyVault:Uri` | empty (off) | e.g. `https://kv-login-app.vault.azure.net/`; loads all vault secrets at startup |
@@ -324,7 +340,10 @@ unsafe, for example a short signing key or a `__Host-` cookie without `Secure`.
 ### Backend (C#)
 
 The rules live in `.editorconfig` and `app/Directory.Build.props`. They are enforced during every build, and Release
-builds (`buildAndRunSite.sh`, the Dockerfile) treat violations as errors.
+builds (`buildAndRunSite.sh`) treat violations as errors. The Docker build context is `app/`, which doesn't include
+the root `.editorconfig`, so the image build enforces only the analyzers' defaults; settings it must apply as well,
+such as treating EF migrations as generated code, live in an `.editorconfig` under `app/`
+(`app/backend/Infrastructure/Data/Migrations/.editorconfig`).
 
 - **Namespaces and layout:**
   - File-scoped namespaces; usings outside the namespace, with `System` first.
@@ -356,7 +375,9 @@ builds (`buildAndRunSite.sh`, the Dockerfile) treat violations as errors.
   - Type-based `defineProps<Props>()`, `defineEmits<Emits>()` and `defineSlots()`, also enforced by ESLint.
 - **Logic and state:**
   - Reusable logic lives in `src/composables/use*.ts`.
-  - Global state is in Pinia setup stores (`src/stores`), and API access only in `src/services`.
+  - Global state is in Pinia setup stores (`src/stores`), and API access only in `src/services` (including the
+    SignalR connection, `grocery-list-hub.ts`, which nothing else imports from `@microsoft/signalr`).
+  - Pure functions with no Vue in them (list order, formatting) live in `src/utils` and are unit tested directly.
 - **Naming and layout:** component **files are kebab-case** (`text-field.vue`) while **component names are
   PascalCase** (`<TextField>`). Views (route-level containers) are in `src/views`; presentational components are in
   `src/components`.
@@ -383,6 +404,7 @@ builds (`buildAndRunSite.sh`, the Dockerfile) treat violations as errors.
 | `/usr/bin/env: 'bash\r': No such file or directory` | A Windows editor saved the script with CRLF line endings. Convert it back with `sed -i 's/\r$//' app/buildAndRunSite.sh` (`.gitattributes` keeps LF in the repository) |
 | Hot reload doesn't notice changes; npm is very slow | The repository is under `/mnt/c`; clone it into the Linux file system instead |
 | `npm WARN EBADENGINE` | Your Node.js is older than the toolchain needs: `nvm install 24` |
+| The list's status pill stays on "Offline" or "Connecting…" in development | The API isn't running, or the Vite dev server was started before `vite.config.ts` gained `ws: true` for `/api`: restart `npm run dev` |
 | `Address already in use` on port 5082, 5173 or 8080 | Find the process with `ss -ltnp \| grep :5082` and stop it, or pass `--port` to `buildAndRunSite.sh` |
 | Sign-in works in Chrome/Edge but not Safari on `http://localhost:8080` in Production mode | Production cookies are `Secure`; Safari refuses them over plain HTTP even on localhost. Use the Development environment locally |
 | Workspace settings show "Value is not accepted" for formatters | The recommended extensions aren't installed yet (section 5) |

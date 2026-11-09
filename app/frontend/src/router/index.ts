@@ -4,7 +4,7 @@ import { useAuthStore } from '@/stores/auth'
 
 import { resolveAuthNavigation } from './guards'
 
-const APP_NAME = 'Login App'
+const APP_NAME = 'Nibbles'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -12,9 +12,10 @@ const router = createRouter({
     {
       path: '/',
       name: 'home',
-      // Route-level code splitting: each page is its own chunk, downloaded only when first visited.
-      component: () => import('@/views/home-view.vue'),
-      meta: { title: 'Welcome', requiresAuth: true },
+      // Route-level code splitting: each page is its own chunk, downloaded only when first visited. The list's chunk
+      // carries the realtime (SignalR) client, so the sign-in pages never download it.
+      component: () => import('@/views/grocery-list-view.vue'),
+      meta: { title: 'Grocery list', requiresAuth: true },
     },
     {
       path: '/login',

@@ -9,11 +9,11 @@ import type { App, Plugin } from 'vue'
 export const errorHandlerPlugin: Plugin = {
   install(app: App) {
     app.config.errorHandler = (error, _instance, info) => {
-      console.error(`[login-app] Unhandled error (${info}):`, error)
+      console.error(`[nibbles] Unhandled error (${info}):`, error)
     }
 
     window.addEventListener('unhandledrejection', (event) => {
-      console.error('[login-app] Unhandled promise rejection:', event.reason)
+      console.error('[nibbles] Unhandled promise rejection:', event.reason)
     })
 
     // After a deployment, a tab still running the previous build asks for code-split chunks that no longer exist.

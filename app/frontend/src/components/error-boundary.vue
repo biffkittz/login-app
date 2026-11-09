@@ -14,7 +14,7 @@ const hasFailed = ref(false)
 // A local error boundary: if a page throws while rendering, show a friendly fallback in its place instead of a
 // blank screen. Returning false marks the error as handled so it doesn't propagate further.
 onErrorCaptured((error) => {
-  console.error('[login-app] A page failed to render:', error)
+  console.error('[nibbles] A page failed to render:', error)
   hasFailed.value = true
   return false
 })

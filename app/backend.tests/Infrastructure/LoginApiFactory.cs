@@ -10,7 +10,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 namespace LoginApp.Api.Tests.Infrastructure;
 
 /// <summary>
-/// Hosts the real API pipeline in memory for integration tests, with PostgreSQL swapped for an in-memory SQLite
+/// Hosts the real API pipeline in memory for integration tests, with PostgreSQL swapped for a throwaway SQLite
 /// database so the suite needs no external services.
 /// </summary>
 /// <remarks>
@@ -18,6 +18,11 @@ namespace LoginApp.Api.Tests.Infrastructure;
 /// The "Testing" environment loads only appsettings.json, so tests exercise the production defaults: the
 /// <c>__Host-</c>, <c>Secure</c> auth cookie included. Clients therefore use an https base address, otherwise
 /// the cookie container would (correctly) refuse to send a Secure cookie.
+/// </para>
+/// <para>
+/// The database is a temporary file rather than SQLite's in-memory mode. An in-memory database can only be shared
+/// through a single connection, which can't serve two threads at once, and the realtime hub queries the database
+/// while HTTP requests do. A file lets every DbContext open its own connection, as with PostgreSQL.
 /// </para>
 /// <para>
 /// SQLite keeps the suite fast and hermetic, but it is not PostgreSQL. The real migrations are exercised by
@@ -29,9 +34,14 @@ public sealed class LoginApiFactory : WebApplicationFactory<Program>, IAsyncLife
     /// <summary>A throwaway 384-bit signing key used only by the tests.</summary>
     public const string TestSigningKey = "tzFgVZ1NKHOPM9fFJYqTZlZ/sWmc/SgrU/2l9oXT4YoU65GAA3pYPKUhIUrjxF3k";
 
-    // An in-memory SQLite database lives exactly as long as its first open connection, so one connection is held
-    // open for the lifetime of the factory and shared by every DbContext.
-    private readonly SqliteConnection _connection = new("DataSource=:memory:");
+    private readonly string _databasePath = Path.Combine(Path.GetTempPath(), $"loginapp-tests-{Guid.NewGuid():N}.db");
+
+    // Without pooling, no connection outlives its DbContext, so the file can be deleted when the factory is disposed.
+    private string ConnectionString => new SqliteConnectionStringBuilder
+    {
+        DataSource = _databasePath,
+        Pooling = false,
+    }.ToString();
 
     /// <summary>
     /// Creates a client that talks to the in-memory server over "https" and keeps cookies between requests,
@@ -49,20 +59,25 @@ public sealed class LoginApiFactory : WebApplicationFactory<Program>, IAsyncLife
     /// <inheritdoc />
     public async ValueTask InitializeAsync()
     {
-        await _connection.OpenAsync(TestContext.Current.CancellationToken);
-
         // Accessing Services builds the host; the schema is created from the model because the EF migrations
         // target PostgreSQL.
         await using AsyncServiceScope scope = Services.CreateAsyncScope();
         ApplicationDbContext dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
         await dbContext.Database.EnsureCreatedAsync(TestContext.Current.CancellationToken);
+
+        // Write-ahead logging lets readers carry on while another connection writes, instead of failing with
+        // "database is locked". The setting is stored in the file, so it applies to every later connection.
+        await dbContext.Database.ExecuteSqlRawAsync("PRAGMA journal_mode = 'wal';", TestContext.Current.CancellationToken);
     }
 
     /// <inheritdoc />
     public override async ValueTask DisposeAsync()
     {
         await base.DisposeAsync();
-        await _connection.DisposeAsync();
+        foreach (string file in new[] { _databasePath, $"{_databasePath}-wal", $"{_databasePath}-shm" })
+        {
+            File.Delete(file);
+        }
     }
 
     /// <inheritdoc />
@@ -78,8 +93,9 @@ public sealed class LoginApiFactory : WebApplicationFactory<Program>, IAsyncLife
         // The middleware has its own unit tests.
         builder.UseSetting("Network:RestrictToInternalNetworks", "false");
 
-        // Every test signs in from the same "client", so lift the per-client limit; AuthRateLimitingTests lowers it.
+        // Every test signs in from the same "client", so lift the per-client limits; the rate-limiting tests lower them.
         builder.UseSetting("RateLimiting:Authentication:PermitLimit", "10000");
+        builder.UseSetting("RateLimiting:GroceryList:PermitLimit", "10000");
 
         builder.ConfigureServices(services =>
         {
@@ -87,7 +103,7 @@ public sealed class LoginApiFactory : WebApplicationFactory<Program>, IAsyncLife
             // and the built options must be removed before registering SQLite, or EF sees two providers.
             services.RemoveAll<IDbContextOptionsConfiguration<ApplicationDbContext>>();
             services.RemoveAll<DbContextOptions<ApplicationDbContext>>();
-            services.AddDbContext<ApplicationDbContext>(options => options.UseSqlite(_connection));
+            services.AddDbContext<ApplicationDbContext>(options => options.UseSqlite(ConnectionString));
         });
     }
 }

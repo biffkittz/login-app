@@ -1,0 +1,405 @@
+import { createPinia, setActivePinia } from 'pinia'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+import { ApiError } from '@/services/api-error'
+import * as groceryApi from '@/services/grocery-api'
+import { createGroceryListHub, type GroceryListHubHandlers } from '@/services/grocery-list-hub'
+import type { GroceryItem, GroceryList, GroceryListChange } from '@/types/grocery'
+import { makeItem } from '@/utils/__tests__/test-items'
+
+import { useAuthStore } from '../auth'
+import { useGroceryListStore } from '../grocery-list'
+
+vi.mock('@/services/grocery-api')
+vi.mock('@/services/grocery-list-hub')
+
+function saved(...items: GroceryItem[]): GroceryListChange {
+  return { savedItems: items, deletedItemIds: [] }
+}
+
+function deleted(...itemIds: string[]): GroceryListChange {
+  return { savedItems: [], deletedItemIds: itemIds }
+}
+
+const STORES = ['Whole Foods', 'Indian Grocery', 'Teeter/Lion', 'Costco']
+
+const networkError = () => new ApiError("We couldn't reach the server.", { kind: 'network' })
+
+function signIn(): void {
+  useAuthStore().$patch({
+    user: {
+      id: 'me',
+      email: 'ada@example.com',
+      displayName: 'Ada',
+      sessionExpiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+    },
+  })
+}
+
+async function storeWith(...items: GroceryItem[]): Promise<ReturnType<typeof useGroceryListStore>> {
+  vi.mocked(groceryApi.getList).mockResolvedValue({ items, stores: STORES })
+  const store = useGroceryListStore()
+  await store.load()
+  return store
+}
+
+const ids = (store: ReturnType<typeof useGroceryListStore>): string[] =>
+  store.items.map((item) => item.id)
+
+describe('grocery list store', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    signIn()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  describe('loading', () => {
+    it('shows the list in position order', async () => {
+      const store = await storeWith(
+        makeItem({ id: 'b', position: 2 }),
+        makeItem({ id: 'a', position: 1 }),
+      )
+
+      expect(ids(store)).toEqual(['a', 'b'])
+      expect(store.loadState).toBe('ready')
+    })
+
+    it('reports a failed first load', async () => {
+      vi.mocked(groceryApi.getList).mockRejectedValue(networkError())
+      const store = useGroceryListStore()
+
+      await store.load()
+
+      expect(store.loadState).toBe('error')
+      expect(store.loadError?.kind).toBe('network')
+    })
+
+    it('keeps the list on screen when a later reload fails', async () => {
+      const store = await storeWith(makeItem({ id: 'a' }))
+      vi.mocked(groceryApi.getList).mockRejectedValue(networkError())
+
+      await store.load()
+
+      expect(ids(store)).toEqual(['a'])
+      expect(store.loadState).toBe('ready')
+    })
+
+    it('applies changes that arrive during a reload after it, so none are lost', async () => {
+      const store = await storeWith(makeItem({ id: 'a', version: 1 }))
+      let answer!: (list: GroceryList) => void
+      vi.mocked(groceryApi.getList).mockReturnValue(new Promise((resolve) => (answer = resolve)))
+
+      const reload = store.load()
+      // Sent after the snapshot was read, but received before the snapshot arrives.
+      store.applyChange(saved(makeItem({ id: 'b', version: 1, position: 5 })))
+      store.applyChange(deleted('a'))
+      answer({ items: [makeItem({ id: 'a', version: 1 })], stores: STORES })
+      await reload
+
+      expect(ids(store)).toEqual(['b'])
+    })
+
+    it('signs the user out when the server says the session has ended', async () => {
+      vi.mocked(groceryApi.getList).mockRejectedValue(
+        new ApiError('Your session has ended.', { kind: 'http', status: 401 }),
+      )
+      const store = useGroceryListStore()
+
+      await store.load()
+
+      expect(useAuthStore().isAuthenticated).toBe(false)
+      expect(useAuthStore().signOutReason).toBe('session-expired')
+    })
+
+    it('forgets the list when the user signs out', async () => {
+      const store = await storeWith(makeItem({ id: 'a' }))
+
+      useAuthStore().expireSession()
+      await vi.waitFor(() => expect(store.items).toEqual([]))
+
+      expect(store.loadState).toBe('idle')
+    })
+  })
+
+  describe('realtime changes', () => {
+    it('keeps the copy with the highest version, whatever order changes arrive in', async () => {
+      const store = await storeWith(makeItem({ id: 'a', name: 'Milk', version: 1 }))
+
+      store.applyChange(saved(makeItem({ id: 'a', name: 'Oat milk', version: 3 })))
+      store.applyChange(saved(makeItem({ id: 'a', name: 'Whole milk', version: 2 })))
+
+      expect(store.items[0]?.name).toBe('Oat milk')
+    })
+
+    it('never brings back an item that was removed', async () => {
+      const store = await storeWith(makeItem({ id: 'a', version: 1 }))
+
+      store.applyChange(deleted('a'))
+      store.applyChange(saved(makeItem({ id: 'a', version: 2 })))
+
+      expect(store.items).toEqual([])
+    })
+
+    it('holds changes back while asked to, then applies them in order', async () => {
+      const store = await storeWith(makeItem({ id: 'a', position: 1 }))
+
+      store.holdChanges()
+      store.applyChange(saved(makeItem({ id: 'b', position: 0 })))
+      expect(ids(store)).toEqual(['a'])
+
+      store.releaseChanges()
+      expect(ids(store)).toEqual(['b', 'a'])
+    })
+
+    it('offers the stores the server lists, and groups the list by them', async () => {
+      const store = await storeWith(
+        makeItem({ id: 'a', store: 'Costco', position: 1 }),
+        makeItem({ id: 'b', store: 'Whole Foods', position: 2 }),
+        makeItem({ id: 'c', store: 'Costco', position: 3 }),
+        makeItem({ id: 'd', position: 4 }),
+      )
+
+      expect(store.stores).toEqual(STORES)
+      expect(
+        store.groups.map((group) => [group.label, group.items.map((item) => item.id)]),
+      ).toEqual([
+        ['No store', ['d']],
+        ['Whole Foods', ['b']],
+        ['Costco', ['a', 'c']],
+      ])
+    })
+
+    it('regroups an item as soon as its store changes', async () => {
+      const store = await storeWith(makeItem({ id: 'a', store: 'Costco', version: 1 }))
+
+      store.applyChange(saved(makeItem({ id: 'a', store: 'Teeter/Lion', version: 2 })))
+
+      expect(store.groups.map((group) => group.label)).toEqual(['Teeter/Lion'])
+    })
+  })
+
+  describe('adding', () => {
+    it('shows the item at once, at the top, then settles on the server’s copy', async () => {
+      const store = await storeWith(makeItem({ id: 'a', position: 0 }))
+      let answer!: (change: GroceryListChange) => void
+      vi.mocked(groceryApi.createItem).mockReturnValue(new Promise((resolve) => (answer = resolve)))
+
+      const adding = store.addItem({ name: '  Milk ', quantity: ' 2 ' })
+
+      const optimistic = store.items[0]
+      expect(optimistic).toMatchObject({
+        name: 'Milk',
+        quantity: '2',
+        version: 0,
+        lastModifiedByName: 'Ada',
+      })
+      expect(groceryApi.createItem).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: optimistic?.id,
+          name: 'Milk',
+          quantity: '2',
+          afterItemId: null,
+        }),
+      )
+
+      answer(saved(makeItem({ id: optimistic!.id, name: 'Milk', version: 1, position: -1024 })))
+      await adding
+      expect(store.items[0]).toMatchObject({ id: optimistic?.id, version: 1 })
+      expect(store.items).toHaveLength(2)
+    })
+
+    it('puts an item back after a given neighbor, for "Undo"', async () => {
+      const store = await storeWith(
+        makeItem({ id: 'a', position: 0 }),
+        makeItem({ id: 'b', position: 10 }),
+      )
+      vi.mocked(groceryApi.createItem).mockReturnValue(new Promise(() => {}))
+
+      void store.addItem({ name: 'Restored' }, 'a')
+
+      expect(store.items.map((item) => item.name)).toEqual(['Item a', 'Restored', 'Item b'])
+      expect(groceryApi.createItem).toHaveBeenCalledWith(
+        expect.objectContaining({ afterItemId: 'a' }),
+      )
+    })
+
+    it('takes the item off the list again when the server refuses it', async () => {
+      const store = await storeWith()
+      vi.mocked(groceryApi.createItem).mockRejectedValue(
+        new ApiError('The list is full.', { kind: 'http', status: 409 }),
+      )
+
+      await expect(store.addItem({ name: 'Milk' })).rejects.toBeInstanceOf(ApiError)
+
+      expect(store.items).toEqual([])
+    })
+  })
+
+  describe('editing', () => {
+    it('shows changes at once and sends only the changed fields', async () => {
+      const store = await storeWith(makeItem({ id: 'a', name: 'Milk', brand: 'Organic Valley' }))
+      vi.mocked(groceryApi.updateItem).mockReturnValue(new Promise(() => {}))
+
+      void store.updateItem('a', { quantity: ' 2 ', brand: '' })
+
+      expect(store.items[0]).toMatchObject({ name: 'Milk', quantity: '2', brand: null })
+      expect(groceryApi.updateItem).toHaveBeenCalledWith('a', { quantity: '2', brand: '' })
+    })
+
+    it('puts the item back when the server refuses the change', async () => {
+      const original = makeItem({ id: 'a', name: 'Milk', version: 4 })
+      const store = await storeWith(original)
+      vi.mocked(groceryApi.updateItem).mockRejectedValue(networkError())
+
+      await expect(store.updateItem('a', { name: 'Oat milk' })).rejects.toBeInstanceOf(ApiError)
+
+      expect(store.items[0]).toEqual(original)
+    })
+  })
+
+  describe('moving', () => {
+    it('moves the item at once and tells the server which item it now follows', async () => {
+      const store = await storeWith(
+        makeItem({ id: 'a', position: 0 }),
+        makeItem({ id: 'b', position: 1024 }),
+        makeItem({ id: 'c', position: 2048 }),
+      )
+      vi.mocked(groceryApi.moveItem).mockReturnValue(new Promise(() => {}))
+
+      void store.moveItem('a', 2)
+      expect(ids(store)).toEqual(['b', 'c', 'a'])
+      expect(groceryApi.moveItem).toHaveBeenLastCalledWith('a', 'c')
+
+      void store.moveItem('c', 0)
+      expect(ids(store)).toEqual(['c', 'b', 'a'])
+      expect(groceryApi.moveItem).toHaveBeenLastCalledWith('c', null)
+    })
+
+    it('moves the item back when the server refuses', async () => {
+      const store = await storeWith(
+        makeItem({ id: 'a', position: 0 }),
+        makeItem({ id: 'b', position: 1024 }),
+      )
+      vi.mocked(groceryApi.moveItem).mockRejectedValue(networkError())
+
+      await expect(store.moveItem('a', 1)).rejects.toBeInstanceOf(ApiError)
+
+      expect(ids(store)).toEqual(['a', 'b'])
+    })
+  })
+
+  describe('removing', () => {
+    it('removes the item at once', async () => {
+      const store = await storeWith(makeItem({ id: 'a' }))
+      vi.mocked(groceryApi.deleteItem).mockResolvedValue(deleted('a'))
+
+      const removing = store.removeItem('a')
+
+      expect(store.items).toEqual([])
+      await removing
+      expect(groceryApi.deleteItem).toHaveBeenCalledWith('a')
+    })
+
+    it('counts an item someone else removed first as removed', async () => {
+      const store = await storeWith(makeItem({ id: 'a' }))
+      vi.mocked(groceryApi.deleteItem).mockRejectedValue(
+        new ApiError('Not found', { kind: 'http', status: 404 }),
+      )
+
+      await store.removeItem('a')
+
+      expect(store.items).toEqual([])
+    })
+
+    it('puts the item back when the server refuses', async () => {
+      const store = await storeWith(makeItem({ id: 'a' }))
+      vi.mocked(groceryApi.deleteItem).mockRejectedValue(networkError())
+
+      await expect(store.removeItem('a')).rejects.toBeInstanceOf(ApiError)
+
+      expect(ids(store)).toEqual(['a'])
+    })
+  })
+
+  describe('live connection', () => {
+    function connectWithFakeHub(): GroceryListHubHandlers {
+      let handlers: GroceryListHubHandlers | undefined
+      vi.mocked(createGroceryListHub).mockImplementation((given) => {
+        handlers = given
+        return { start: vi.fn().mockResolvedValue(undefined), stop: vi.fn(), restart: vi.fn() }
+      })
+      useGroceryListStore().connect()
+      return handlers!
+    }
+
+    it('applies changes pushed by the hub', async () => {
+      vi.mocked(groceryApi.getList).mockResolvedValue({ items: [], stores: STORES })
+      const hub = connectWithFakeHub()
+      const store = useGroceryListStore()
+      await vi.waitFor(() => expect(store.loadState).toBe('ready'))
+
+      hub.onChange(saved(makeItem({ id: 'pushed' })))
+
+      expect(ids(store)).toEqual(['pushed'])
+    })
+
+    it('reloads the list on every (re)connection, to catch up on missed changes', async () => {
+      vi.mocked(groceryApi.getList).mockResolvedValue({ items: [], stores: STORES })
+      const hub = connectWithFakeHub()
+      const store = useGroceryListStore()
+      await vi.waitFor(() => expect(store.loadState).toBe('ready'))
+      vi.mocked(groceryApi.getList).mockResolvedValue({
+        items: [makeItem({ id: 'missed' })],
+        stores: STORES,
+      })
+
+      hub.onConnected()
+
+      await vi.waitFor(() => expect(ids(store)).toEqual(['missed']))
+    })
+
+    it('checks in over HTTP while the live connection is down, which reveals an ended session', async () => {
+      vi.mocked(groceryApi.getList).mockResolvedValue({ items: [], stores: STORES })
+      const hub = connectWithFakeHub()
+      const store = useGroceryListStore()
+      await vi.waitFor(() => expect(store.loadState).toBe('ready'))
+      vi.mocked(groceryApi.getList).mockRejectedValue(
+        new ApiError('Your session has ended.', { kind: 'http', status: 401 }),
+      )
+
+      hub.onStateChange('disconnected')
+
+      await vi.waitFor(() => expect(useAuthStore().signOutReason).toBe('session-expired'))
+      await store.disconnect()
+    })
+
+    it('keeps the list fresh over HTTP every 30 seconds until the live connection is back', async () => {
+      vi.useFakeTimers()
+      vi.mocked(groceryApi.getList).mockResolvedValue({ items: [], stores: STORES })
+      const hub = connectWithFakeHub()
+      await vi.advanceTimersByTimeAsync(0)
+      vi.mocked(groceryApi.getList).mockClear()
+
+      hub.onStateChange('disconnected')
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(groceryApi.getList).toHaveBeenCalledTimes(3)
+
+      hub.onStateChange('connected')
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(groceryApi.getList).toHaveBeenCalledTimes(3)
+      await useGroceryListStore().disconnect()
+    })
+
+    it('reports the connection state', () => {
+      vi.mocked(groceryApi.getList).mockResolvedValue({ items: [], stores: STORES })
+      const hub = connectWithFakeHub()
+
+      hub.onStateChange('reconnecting')
+
+      expect(useGroceryListStore().connectionState).toBe('reconnecting')
+    })
+  })
+})

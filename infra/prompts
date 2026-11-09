@@ -133,4 +133,17 @@ I want you to refactor the app so that an Application Gateway is no longer neede
   the Cloudflare origin certificate for TLS termination at the container. Please provide an explanation of
   your solution before applying it.
 
-Your next goal is to create a realtime webapp to manage a grocery/todo list for a family (growing off the existing .NET backend and Vue frontend). The app will be accessed primarily from a mobile browser, so mobile performance and usability is paramount. The app will use the SignalR library for realtime communication via websockets. Every authenticated client will be able to update the grocery list, and changes will be reflected across all authenticated clients in realtime. Since this is a demo app with a single server instance, SignalR on the web server itself will handle all realtime websocket traffic, i.e. do not use Azure SignalR service for this project. The grocery app must be intuitive and simple. UI design should follow best practices and should not burden the user with an overly complex design. Users must be able to create/delete/update/rearrange grocery items. Grocery items should include expanded options for brand, quantity, store, and notes. Item name is a required field on each grocery item. The app should allow users to view and update saved grocery lists. Lists can be named and saved for future reference. To view the grocery list, a user must register and login. Any logged-in, registered user may access the app.
+Your next project is to create a realtime webapp to manage a family grocery list (by expanding off the existing Login App's .NET/PostgreSQL backend and Vue 3 frontend).
+The app is called `nibbles` and will be hosted at `app.biffkittz.com`.
+The app will be accessed primarily from a mobile browser, so mobile performance and usability are paramount.
+The app will use the `SignalR` library for realtime communication via websockets. Every authenticated client will be able to update the grocery list,
+and list changes will be reflected in the UI across all authenticated clients in realtime. Since this is a demo app with a single containerized server instance, SignalR on
+the web server itself will handle all realtime websocket traffic, i.e. do NOT use Azure SignalR service for this project. The nibbles app must be
+intuitive and simple. UI should follow industry best practices and should not burden the user with an overly complex design. Users must
+be able to create, delete, update, and rearrange grocery items. Grocery items should include properties for brand, quantity, store, and free text notes.
+Item `name` is a required field on each grocery item. Grocery items have `creation date` and `last modified date` properties. Grocery items also have a `last modified by`
+property that tracks who last made a change to the item. To view and interact with the grocery list, a user must register and login.
+Any logged-in, registered user may use the app.
+
+You need to implement a grouping-by-store functionality. Store choices should be displayed in a dropdown on the item edit view. The app should present these store choices:
+`Whole Foods`, `Indian Grocery`, `Teeter/Lion`, and `Costco`. The app should automatically group items by store in the UI. Items without a store defined are in the no-store group.

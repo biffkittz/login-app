@@ -17,6 +17,7 @@
     "format": "prettier --write --experimental-cli src/"
   },
   "dependencies": {
+    "@microsoft/signalr": "^10.0.11",
     "@tailwindcss/vite": "^4.3.3",
     "axios": "^1.21.0",
     "pinia": "^4.0.3",

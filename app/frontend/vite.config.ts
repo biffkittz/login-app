@@ -23,8 +23,9 @@ export default defineConfig({
     // Proxying keeps the SPA and the API on one origin during development, exactly like production, where the API
     // serves the built SPA. That single origin is what lets the auth cookie be HttpOnly + SameSite=Strict
     // without any CORS configuration.
+    // `ws` also forwards the grocery list's realtime WebSocket (/api/grocery-list/hub).
     proxy: {
-      '/api': { target: apiProxyTarget },
+      '/api': { target: apiProxyTarget, ws: true },
     },
   },
 })

@@ -1,4 +1,5 @@
 using LoginApp.Api.Features.Auth;
+using LoginApp.Api.Features.GroceryList;
 using LoginApp.Api.Infrastructure.Configuration;
 using LoginApp.Api.Infrastructure.Data;
 using LoginApp.Api.Infrastructure.Hosting;
@@ -21,6 +22,7 @@ builder.Services.AddValidation();
 builder.Services.AddOpenApi();
 builder.Services.AddApplicationDatabase();
 builder.Services.AddAuthFeature();
+builder.Services.AddGroceryListFeature();
 builder.Services.AddInternalNetworking();
 builder.Services.AddApplicationHealthChecks();
 
@@ -36,6 +38,7 @@ if (usesEphemeralSigningKey)
 // 2. In Azure, requests without Cloudflare's client certificate are refused before any other work is done.
 // 3. The internal-network check must see the *immediate* peer, so it runs before forwarded headers rewrite it.
 // 4. Forwarded headers then restore the client IP and scheme, which HSTS and per-client rate limiting rely on.
+// 5. Rate limiting comes after authentication, so the grocery list's limits can be counted per user.
 app.UseExceptionHandler();
 app.UseClientCertificateRequirement();
 app.UseInternalNetworkRestriction();
@@ -47,12 +50,13 @@ if (!app.Environment.IsDevelopment())
 
 app.UseSecurityHeaders();
 app.UseStatusCodePages();
-app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
+app.UseRateLimiter();
 
 app.MapApplicationHealthChecks();
 app.MapAuthEndpoints();
+app.MapGroceryListEndpoints();
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();

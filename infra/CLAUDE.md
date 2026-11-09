@@ -1,6 +1,6 @@
 # infra/: Terraform for Azure and Cloudflare
 
-Provisions the Login App: Cloudflare (proxied DNS, Authenticated Origin Pulls) → public IP of an external Container
+Provisions Nibbles, the realtime grocery list built on the Login App: Cloudflare (proxied DNS, Authenticated Origin Pulls) → public IP of an external Container
 Apps environment → TCP ingress on 8443 (TLS passed through) → Kestrel terminates TLS with the origin certificate from
 Key Vault → PostgreSQL flexible server (private access). There is no Application Gateway (removed for cost).
 Details: `README.md`, `docs/ARCHITECTURE.md`, `docs/DEPLOYMENT.md`, `docs/AUTHENTICATION.md`, `docs/DEVELOPMENT.md`.
@@ -66,6 +66,9 @@ generated secrets and the Cloudflare record. Modules: `networking`, `registry`, 
   enforced by the app's client-certificate check, plus ingress IP restrictions. Keep
   `require_cloudflare_client_certificate` and the app's `OriginTls` settings in step: Cloudflare must present the
   certificate whenever the app requires it.
+- **Exactly one replica.** The grocery list's realtime hub (SignalR) runs in-process with no backplane, so
+  `app_max_replicas` is validated to be 1. Don't relax that without adding a backplane (not Azure SignalR Service:
+  the requirements rule it out).
 - **The exposed port can't be 80 or 443:** the environment's HTTP ingress holds them ("exposedPort already in use").
   `cloudflare_ruleset.origin_port` (an Origin Rule) sends Cloudflare to 8443; the container still listens on 443.
   The Cloudflare token needs DNS, Zone Settings and Origin Rules edit.

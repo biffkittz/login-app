@@ -269,6 +269,16 @@ run "rejects_memory_that_does_not_match_the_cpu" {
   expect_failures = [var.app_memory]
 }
 
+run "rejects_a_second_replica_that_realtime_updates_would_not_reach" {
+  command = plan
+
+  variables {
+    app_max_replicas = 2
+  }
+
+  expect_failures = [var.app_max_replicas]
+}
+
 run "rejects_more_minimum_than_maximum_replicas" {
   command = plan
 

@@ -1,0 +1,338 @@
+<script setup lang="ts">
+import { computed, ref, shallowRef, useId } from 'vue'
+import { storeToRefs } from 'pinia'
+
+import StarburstMark from '@/components/brand/starburst-mark.vue'
+import AddItemForm from '@/components/grocery/add-item-form.vue'
+import ConnectionStatus from '@/components/grocery/connection-status.vue'
+import GroceryItemList from '@/components/grocery/grocery-item-list.vue'
+import ItemEditor from '@/components/grocery/item-editor.vue'
+import BaseButton from '@/components/ui/base-button.vue'
+import FormAlert from '@/components/ui/form-alert.vue'
+import ToastNotice from '@/components/ui/toast-notice.vue'
+import { useEventListener } from '@/composables/useEventListener'
+import { useGroceryListLiveUpdates } from '@/composables/useGroceryListLiveUpdates'
+import { useToast } from '@/composables/useToast'
+import { vFocusOnMount } from '@/directives/focus-on-mount'
+import { toApiError, type ApiError } from '@/services/api-error'
+import { useAuthStore } from '@/stores/auth'
+import { useGroceryListStore } from '@/stores/grocery-list'
+import type { GroceryItem, GroceryItemChanges, RemovedItem } from '@/types/grocery'
+import { listIndexForGroupMove } from '@/utils/list-order'
+import type { StoreGroup } from '@/utils/store-groups'
+
+// A checked-off item shows its check mark this long before it leaves the list: enough to see that the tap landed.
+const CHECK_OFF_DELAY_MS = 350
+
+const CARD_CLASS =
+  'rounded-[1.75rem] border-2 border-walnut-800 bg-cream-100 shadow-[6px_6px_0_0_var(--color-walnut-800)]'
+
+const auth = useAuthStore()
+const groceryList = useGroceryListStore()
+const { items, stores, groups, loadState, loadError, connectionState } = storeToRefs(groceryList)
+const toast = useToast()
+useGroceryListLiveUpdates()
+
+const announcement = ref('')
+const checkedIds = shallowRef<ReadonlySet<string>>(new Set())
+
+const editorOpen = ref(false)
+const editingId = ref<string | null>(null)
+const saving = ref(false)
+const saveError = shallowRef<ApiError | null>(null)
+const groupIdPrefix = useId()
+// The editor works within the item's store group: its position and its move buttons are relative to that group.
+const editingGroup = computed(
+  () =>
+    groups.value.find((group) => group.items.some((item) => item.id === editingId.value)) ?? null,
+)
+const editingIndex = computed(
+  () => editingGroup.value?.items.findIndex((item) => item.id === editingId.value) ?? -1,
+)
+const editingItem = computed(() => editingGroup.value?.items[editingIndex.value] ?? null)
+
+function announce(message: string): void {
+  announcement.value = message
+}
+
+function showError(error: unknown, fallback: string): void {
+  const apiError = toApiError(error)
+  if (!apiError.isUnauthorized) {
+    toast.show(apiError.status === null ? apiError.message : `${fallback} ${apiError.message}`, {
+      tone: 'error',
+    })
+  }
+}
+
+async function addItem(name: string): Promise<void> {
+  announce(`Added ${name}.`)
+  try {
+    await groceryList.addItem({ name })
+  } catch (error: unknown) {
+    showError(error, `Couldn't add ${name}.`)
+  }
+}
+
+// Removing is instant and undoable rather than confirmed first: in a store, nobody wants a dialog for every item
+// that goes into the cart.
+function removeWithUndo(item: GroceryItem, message: string): void {
+  const index = items.value.findIndex((existing) => existing.id === item.id)
+  const removed: RemovedItem = { item, afterItemId: items.value[index - 1]?.id ?? null }
+  toast.show(message, { action: { label: 'Undo', run: () => void undo(removed) } })
+  groceryList
+    .removeItem(item.id)
+    .catch((error: unknown) => showError(error, `Couldn't remove ${item.name}.`))
+}
+
+async function undo({ item, afterItemId }: RemovedItem): Promise<void> {
+  toast.dismiss()
+  announce(`${item.name} is back on the list.`)
+  try {
+    await groceryList.addItem(
+      {
+        name: item.name,
+        quantity: item.quantity ?? '',
+        brand: item.brand ?? '',
+        store: item.store ?? '',
+        notes: item.notes ?? '',
+      },
+      afterItemId,
+    )
+  } catch (error: unknown) {
+    showError(error, `Couldn't put ${item.name} back.`)
+  }
+}
+
+function checkOff(item: GroceryItem): void {
+  if (checkedIds.value.has(item.id)) {
+    return
+  }
+  checkedIds.value = new Set(checkedIds.value).add(item.id)
+  setTimeout(() => {
+    const next = new Set(checkedIds.value)
+    next.delete(item.id)
+    checkedIds.value = next
+    removeWithUndo(item, `Checked off ${item.name}.`)
+  }, CHECK_OFF_DELAY_MS)
+}
+
+// Items are reordered within their store's group. The group is part of the whole list, so the move is translated
+// into a place in the whole list; how groups interleave there doesn't matter, because each is shown on its own.
+async function moveWithinGroup(
+  group: StoreGroup,
+  item: GroceryItem,
+  toIndex: number,
+): Promise<void> {
+  const fromIndex = group.items.findIndex((existing) => existing.id === item.id)
+  const listIndex = listIndexForGroupMove(items.value, group.items, fromIndex, toIndex)
+  if (listIndex === null) {
+    return
+  }
+
+  announce(
+    `${item.name} moved to position ${toIndex + 1} of ${group.items.length} in ${group.label}.`,
+  )
+  try {
+    await groceryList.moveItem(item.id, listIndex)
+  } catch (error: unknown) {
+    showError(error, `Couldn't move ${item.name}.`)
+  }
+}
+
+function openEditor(item: GroceryItem): void {
+  editingId.value = item.id
+  saveError.value = null
+  editorOpen.value = true
+}
+
+async function saveChanges(changes: GroceryItemChanges): Promise<void> {
+  const itemId = editingId.value
+  if (itemId === null) {
+    return
+  }
+  saving.value = true
+  saveError.value = null
+  try {
+    await groceryList.updateItem(itemId, changes)
+    editorOpen.value = false
+  } catch (error: unknown) {
+    saveError.value = toApiError(error)
+  } finally {
+    saving.value = false
+  }
+}
+
+function removeFromEditor(): void {
+  const item = editingItem.value
+  editorOpen.value = false
+  if (item !== null) {
+    removeWithUndo(item, `Deleted ${item.name}.`)
+  }
+}
+
+function moveFromEditor(delta: -1 | 1): void {
+  const item = editingItem.value
+  const group = editingGroup.value
+  if (item !== null && group !== null) {
+    void moveWithinGroup(group, item, editingIndex.value + delta)
+  }
+}
+
+// Ctrl+Z (Cmd+Z on a Mac) undoes the last removal while its toast is up, except while typing in a field, where it
+// keeps undoing typing as usual.
+useEventListener(document, 'keydown', (event) => {
+  const action = toast.toast.value?.action
+  const target = event.target
+  const isTyping =
+    target instanceof HTMLElement &&
+    (target.isContentEditable || ['INPUT', 'TEXTAREA'].includes(target.tagName))
+  if (
+    action &&
+    !isTyping &&
+    event instanceof KeyboardEvent &&
+    (event.ctrlKey || event.metaKey) &&
+    event.key.toLowerCase() === 'z'
+  ) {
+    event.preventDefault()
+    action.run()
+  }
+})
+</script>
+
+<template>
+  <section aria-labelledby="grocery-list-title" class="w-full max-w-xl self-start pb-24">
+    <div class="mb-3 flex items-center justify-between gap-3">
+      <h1
+        id="grocery-list-title"
+        v-focus-on-mount
+        tabindex="-1"
+        class="font-display text-3xl leading-tight font-bold text-walnut-900 focus:outline-none"
+      >
+        Grocery list
+      </h1>
+      <ConnectionStatus :state="connectionState" />
+    </div>
+
+    <!-- Sticky, so adding is always one tap away however far down the list the user has scrolled. -->
+    <div
+      data-sticky-header
+      class="sticky top-0 z-10 -mx-4 bg-cream-50 px-4 pt-2 pb-3 sm:-mx-6 sm:px-6"
+    >
+      <AddItemForm @add="addItem" />
+    </div>
+
+    <div v-if="items.length === 0" :class="CARD_CLASS">
+      <div
+        v-if="loadState === 'loading'"
+        class="flex items-center justify-center gap-3 px-6 py-12 text-walnut-700"
+        role="status"
+      >
+        <svg
+          class="size-5 motion-safe:animate-spin"
+          viewBox="0 0 24 24"
+          fill="none"
+          aria-hidden="true"
+        >
+          <circle
+            cx="12"
+            cy="12"
+            r="9"
+            stroke="currentColor"
+            stroke-opacity="0.3"
+            stroke-width="3"
+          />
+          <path
+            d="M21 12a9 9 0 0 0-9-9"
+            stroke="currentColor"
+            stroke-width="3"
+            stroke-linecap="round"
+          />
+        </svg>
+        Loading the list…
+      </div>
+
+      <div v-else-if="loadState === 'error'" class="flex flex-col gap-4 p-5">
+        <FormAlert>{{ loadError?.message ?? "We couldn't load the list." }}</FormAlert>
+        <BaseButton variant="secondary" @click="groceryList.load()">Try again</BaseButton>
+      </div>
+
+      <div v-else class="flex flex-col items-center px-6 py-12 text-center">
+        <StarburstMark class="size-14" />
+        <p class="mt-4 font-display text-xl font-bold text-walnut-900">The list is empty.</p>
+        <p class="mt-1 text-walnut-700">
+          Add what you need above; everyone signed in sees it straight away.
+        </p>
+      </div>
+    </div>
+
+    <!-- The list, grouped by store. Each group is its own reorderable list: items move within their store. -->
+    <div v-else class="flex flex-col gap-6">
+      <section
+        v-for="(group, groupIndex) in groups"
+        :key="group.key"
+        :aria-labelledby="`${groupIdPrefix}-${groupIndex}`"
+      >
+        <h2
+          :id="`${groupIdPrefix}-${groupIndex}`"
+          class="mb-2 flex items-center gap-2 px-1 font-display text-lg font-bold text-walnut-900"
+        >
+          <svg
+            v-if="group.store"
+            class="size-5 shrink-0 text-ember-700"
+            viewBox="0 0 24 24"
+            fill="none"
+            aria-hidden="true"
+          >
+            <path
+              d="M4 9l1.5-5h13L20 9M4 9h16M4 9v11h16V9M9 20v-6h6v6"
+              stroke="currentColor"
+              stroke-width="2.25"
+              stroke-linejoin="round"
+            />
+          </svg>
+          <span class="min-w-0 flex-1 truncate">{{ group.label }}</span>
+          <span class="sr-only">: </span>
+          <span class="shrink-0 font-sans text-sm font-semibold text-walnut-700">
+            {{ group.items.length }} {{ group.items.length === 1 ? 'item' : 'items' }}
+          </span>
+        </h2>
+        <div :class="CARD_CLASS">
+          <GroceryItemList
+            :items="group.items"
+            :checked-ids="checkedIds"
+            :label="`${group.label} items`"
+            @check="checkOff"
+            @edit="openEditor"
+            @move="(item, toIndex) => moveWithinGroup(group, item, toIndex)"
+            @drag-start="groceryList.holdChanges()"
+            @drag-end="groceryList.releaseChanges()"
+          />
+        </div>
+      </section>
+    </div>
+
+    <p class="sr-only" aria-live="polite" aria-atomic="true">{{ announcement }}</p>
+
+    <ItemEditor
+      v-model:open="editorOpen"
+      :item="editingItem"
+      :index="editingIndex"
+      :count="editingGroup?.items.length ?? 0"
+      :group-label="editingGroup?.label ?? ''"
+      :stores="stores"
+      :current-user-id="auth.user?.id"
+      :saving="saving"
+      :error="saveError"
+      @save="saveChanges"
+      @remove="removeFromEditor"
+      @move-by="moveFromEditor"
+    />
+
+    <ToastNotice
+      :toast="toast.toast.value"
+      @dismiss="toast.dismiss()"
+      @pause="toast.pause()"
+      @resume="toast.resume()"
+    />
+  </section>
+</template>

@@ -32,6 +32,24 @@
   --color-brick-700: #9b2c1c;
   --color-sage-700: #3f5b3a;
 
+  /* Entrances for the item sheet (slides up from the bottom edge) and toasts. Used with motion-safe: only. */
+  --animate-sheet-in: sheet-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  --animate-toast-in: toast-in 180ms ease-out;
+
+  @keyframes sheet-in {
+    from {
+      transform: translateY(2.5rem);
+      opacity: 0;
+    }
+  }
+
+  @keyframes toast-in {
+    from {
+      transform: translateY(0.75rem);
+      opacity: 0;
+    }
+  }
+
   /* Geometric sans-serifs (Futura, Avenir, Century Gothic) carry the mid-century look. They ship with macOS,
      Windows and Office, so no web font is downloaded and the strict Content-Security-Policy stays intact. */
   --font-display:

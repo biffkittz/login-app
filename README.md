@@ -1,22 +1,26 @@
-# Login App
+# Nibbles
 
-A small, deliberately focused web app: people can **create an account**, **sign in** and **sign out**, and nothing
-else. It is built to production standards so it can serve as a solid foundation:
+A realtime grocery list for a family, built for phones. Everyone who signs in shares one list: they can add, edit,
+check off, delete and drag items into order, and every change appears on everybody else's screen as it happens.
+Items carry a quantity, brand, store and notes, and remember who changed them last and when.
 
-- **Backend:** ASP.NET Core 10 minimal API, ASP.NET Core Identity, JWTs in an `HttpOnly` cookie, and EF Core on
-  PostgreSQL.
+Nibbles grew out of a sign-up / sign-in app built to production standards, which is still its foundation (the code
+keeps its original `LoginApp` names):
+
+- **Backend:** ASP.NET Core 10 minimal API, ASP.NET Core Identity, JWTs in an `HttpOnly` cookie, EF Core on
+  PostgreSQL, and SignalR (WebSockets) for realtime updates, hosted in the app itself.
 - **Frontend:** Vue 3 with TypeScript, Vite, Pinia, Vue Router and Tailwind CSS, in a cozy mid-century-modern palette
-  of orange and brown.
-- **Hosting:** one Linux container in which Kestrel serves the API and the compiled SPA. In Azure Container Apps it
-  terminates TLS itself on port 443 with the Cloudflare origin certificate, accepts only requests that carry
-  Cloudflare's client certificate, and reads its secrets from Azure Key Vault. Locally it serves plain HTTP.
+  of orange and brown, designed mobile first.
+- **Hosting:** one Linux container in which Kestrel serves the API, the realtime hub and the compiled SPA. In Azure
+  Container Apps it terminates TLS itself on port 443 with the Cloudflare origin certificate, accepts only requests
+  that carry Cloudflare's client certificate, and reads its secrets from Azure Key Vault. Locally it serves plain HTTP.
 
 ```mermaid
 flowchart LR
-  user([Browser]) -->|HTTPS| cf[Cloudflare<br/>app.biffkittz.com]
+  user([Phones and browsers]) -->|"HTTPS and WebSockets"| cf[Cloudflare<br/>app.biffkittz.com]
   cf -->|"TLS :8443 + Cloudflare<br/>client certificate"| ingress[Container Apps ingress<br/>TCP pass-through]
   subgraph vnet[Azure virtual network]
-    ingress -->|"TLS :443"| app[login-app container<br/>Kestrel: TLS, API + Vue SPA]
+    ingress -->|"TLS :443"| app[login-app container<br/>Kestrel: TLS, API, SignalR hub, Vue SPA]
     app -->|TLS :5432| pg[(Azure Database<br/>for PostgreSQL)]
   end
   kv[Azure Key Vault] -.->|secrets and certificate via managed identity| app
@@ -40,6 +44,9 @@ sudo -u postgres createdb --owner=loginapp loginapp
 # then browse to http://localhost:8080
 ```
 
+To see the realtime updates, register two accounts in two browser windows (one of them private) and put them side by
+side.
+
 For day-to-day work with hot reload, run the API and the Vite dev server separately (or press F5 in VS Code on
 **Full stack: API + Vite**):
 
@@ -54,7 +61,7 @@ cd app/frontend && npm run dev                                   # SPA on http:/
 | --- | --- |
 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Setting up WSL, VS Code, extensions and tooling; running, debugging and testing locally; conventions; troubleshooting |
 | [docs/BUILD_AND_DEPLOY.md](docs/BUILD_AND_DEPLOY.md) | `buildAndRunSite.sh`, the container image, and deployment to Azure Container Apps with Key Vault and PostgreSQL |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | How the pieces fit together, the authentication flow, and the security decisions behind them |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | How the pieces fit together: authentication, the grocery list and its realtime updates, and the security decisions behind them |
 | [infra/README.md](infra/README.md) | The Terraform project for Azure and Cloudflare, with its own docs: [architecture](infra/docs/ARCHITECTURE.md), [authentication](infra/docs/AUTHENTICATION.md), [deployment](infra/docs/DEPLOYMENT.md), [development setup](infra/docs/DEVELOPMENT.md) |
 
 ## Repository layout
@@ -83,25 +90,39 @@ login-app/
 
 ## What's in the box
 
+- **The grocery list:**
+  - Add an item with one field at the top of the screen; tap it for quantity, brand, store and notes. The store is
+    picked from a dropdown (Whole Foods, Indian Grocery, Teeter/Lion, Costco), and the list groups itself by store,
+    with items that have none in a "No store" section at the top.
+  - Check items off with one tap and undo the mistake from the toast; drag the handle to reorder (or use the arrow
+    keys, or the move buttons in an item's details).
+  - Every change shows at once (optimistically) and reaches every other open list within a fraction of a second over
+    SignalR. A list reconnects and catches up by itself after a dropped connection, a server restart, or a phone
+    coming out of a pocket.
+  - Each item records when it was added and last changed, and by whom.
 - **Accounts:** registration with name, email and password. Passwords need at least 12 characters (a length-based
-  policy per NIST SP 800-63B) and are hashed with PBKDF2 by ASP.NET Core Identity.
+  policy per NIST SP 800-63B) and are hashed with PBKDF2 by ASP.NET Core Identity. Any registered user can use the
+  list.
 - **Sessions:** a signed JWT, valid for 60 minutes, stored in an `HttpOnly`, `Secure`, `SameSite=Strict`, `__Host-`
-  cookie. JavaScript never sees the token, and the UI signs out automatically when it expires.
-- **Abuse protection:** accounts lock for 15 minutes after five failed sign-ins, and each client IP is rate-limited
-  on the login and registration endpoints.
+  cookie. JavaScript never sees the token; the UI signs out automatically when it expires, and the realtime
+  connection closes with it.
+- **Abuse protection:** accounts lock for 15 minutes after five failed sign-ins; each client IP is rate-limited on the
+  login and registration endpoints, and each user on changes to the list. The list holds at most 500 items.
 - **Hardening:**
   - A strict Content-Security-Policy and security headers on every response.
-  - A 64 KB request body limit.
+  - A 64 KB request body limit, and a cap on concurrent WebSocket connections.
   - No `Server` header.
   - An internal-network allow-list.
   - TLS 1.2+ terminated in the container, and HSTS.
   - Only Cloudflare gets in: its Authenticated Origin Pulls client certificate is required.
+  - The realtime hub refuses connections opened by pages on other sites, and accounts that no longer exist.
 - **Operations:**
   - Liveness and readiness health endpoints.
-  - Structured JSON logs.
-  - EF Core migrations applied at startup, safely even with several replicas.
+  - Structured JSON logs that never contain item contents, emails or tokens.
+  - EF Core migrations applied at startup.
   - Validated configuration that fails fast.
 - **Quality gates:**
-  - Backend unit and in-memory integration tests (xUnit v3), and frontend unit and component tests (Vitest).
+  - Backend unit and in-memory integration tests (xUnit v3), including realtime tests over WebSockets, and frontend
+    unit and component tests (Vitest).
   - Analyzers and code style enforced at build time.
   - ESLint with oxlint, Prettier, and strict TypeScript.

@@ -12,9 +12,10 @@ in Azure Container Apps with secrets from Azure Key Vault and data in Azure Data
 
 ## How the site is put together
 
-The Vue SPA is compiled to static files and **served by the ASP.NET Core API itself**, so the browser only ever
-talks to one origin. That single origin is what allows the session cookie to be `HttpOnly` and `SameSite=Strict`
-without any CORS configuration (see [ARCHITECTURE.md](ARCHITECTURE.md)).
+The Vue SPA is compiled to static files and **served by the ASP.NET Core API itself**, together with the grocery
+list's realtime hub (SignalR over WebSockets), so the browser only ever talks to one origin. That single origin is what
+allows the session cookie to be `HttpOnly` and `SameSite=Strict`, and to authenticate the WebSocket too, without any
+CORS configuration (see [ARCHITECTURE.md](ARCHITECTURE.md)).
 
 ```text
 app/frontend ──npm run build──► frontend/dist ──copy──► app/backend/wwwroot ──dotnet publish──► site/
@@ -122,6 +123,10 @@ visitor ──HTTPS──► Cloudflare (app.biffkittz.com, proxied)
         ──TLS──► PostgreSQL flexible server (private access, no public endpoint)
 ```
 
+The grocery list's WebSocket (`wss://app.biffkittz.com/api/grocery-list/hub`) takes the same path. Cloudflare proxies
+WebSockets when the zone's **WebSockets** setting is on (the default), and the TCP ingress passes them through like
+any other connection. SignalR's keep-alive pings every 15 seconds stop either from closing an idle connection.
+
 ### What the infrastructure provides to the app
 
 | The app needs | How `infra/` provides it |
@@ -134,7 +139,8 @@ visitor ──HTTPS──► Cloudflare (app.biffkittz.com, proxied)
 | `OriginTls__RequireCloudflareClientCertificate` | `true` (Terraform's `require_cloudflare_client_certificate`), together with Authenticated Origin Pulls in Cloudflare |
 | Port 443 | TCP ingress exposing 8443 (Cloudflare's Origin Rule points there; Azure keeps 443 for HTTP ingress) and targeting 443, and `ASPNETCORE_URLS=https://+:443`. Set `app_target_port = 8443` if the platform refuses the low-port capability (section 2) |
 | Real client IPs for rate limiting | The app's TCP peer is the ingress proxy (an internal address), so it trusts the `X-Forwarded-For` entry Cloudflare appended. Cloudflare's ranges are also added as `Network__InternalNetworks__100+` |
-| One replica, 0.5 vCPU, 1 GiB | `app_min_replicas` / `app_max_replicas` = 1 (a demonstration environment) |
+| Exactly one replica, 0.5 vCPU, 1 GiB | `app_min_replicas` / `app_max_replicas` = 1. A second replica isn't allowed (validation): realtime updates are broadcast in-process, with no SignalR backplane, so users on different replicas wouldn't see each other's changes |
+| WebSockets end to end | Cloudflare's WebSockets setting (on by default, see [infra/docs/AUTHENTICATION.md](../infra/docs/AUTHENTICATION.md#zone-settings-to-check-once)); the TCP ingress passes them through |
 
 Secrets reach the app as Container Apps Key Vault references. The app could also load Key Vault itself (set
 `KeyVault__Uri` and `AZURE_CLIENT_ID`), but that provider reads *every* secret in the vault, including the
@@ -194,8 +200,8 @@ it; don't point an older image at a newer schema unless the change was backward 
 | **Roll back** | Set `app_image_tag` back to the previous tag and apply. Mind schema changes (section 4) |
 | **Rotate the database password** | `terraform apply -replace=random_password.postgresql_app`, then run the bootstrap job and restart the revision |
 | **Rotate the JWT signing key** | `terraform apply -replace=random_bytes.jwt_signing_key`. Every session ends and users sign in again |
-| **Scale** | `app_min_replicas` / `app_max_replicas` in the tfvars file. The app is stateless; sessions live in the cookie |
-| **Logs** | `az containerapp logs show --name ca-loginapp-demo --resource-group rg-loginapp-demo`, or Log Analytics (`ContainerAppConsoleLogs_CL`). Logs are JSON, one event per line, and never contain passwords, tokens or email addresses |
+| **Scale** | Up, not out: raise `app_cpu` / `app_memory`. The app must stay one replica, because the realtime hub has no backplane (see ARCHITECTURE.md). Scaling out would first need one, such as Redis |
+| **Logs** | `az containerapp logs show --name ca-loginapp-demo --resource-group rg-loginapp-demo`, or Log Analytics (`ContainerAppConsoleLogs_CL`). Logs are JSON, one event per line, and never contain passwords, tokens, email addresses or what is on the list |
 
 Running replicas read their configuration only at startup. With versionless Key Vault references, Container Apps
 picks up a new secret version within 30 minutes and restarts the revision itself.
@@ -207,7 +213,7 @@ the bootstrap job) are in [infra/docs/DEPLOYMENT.md](../infra/docs/DEPLOYMENT.md
 
 | Symptom | Cause and fix |
 | --- | --- |
-| Container exits with `SocketException (13): Permission denied` | The platform refused the port-80 capability (section 2). Set `app_target_port = 8080` and apply |
+| Container exits with `SocketException (13): Permission denied` | The platform refused the low-port capability (section 2). Set `app_target_port = 8443` and apply |
 | Startup: `Jwt:SigningKey is not configured` / `ConnectionStrings:DefaultConnection is not configured` | The secrets didn't reach the app: check the app's Key Vault references and its identity's **Key Vault Secrets User** role on both secrets |
 | Startup times out connecting to PostgreSQL | Private DNS for the server isn't linked to the VNet, or the NSG on the PostgreSQL subnet blocks the Container Apps subnet |
 | `password authentication failed for user "loginapp_app"` | The bootstrap job hasn't run since the password was created or rotated |
@@ -215,3 +221,5 @@ the bootstrap job) are in [infra/docs/DEPLOYMENT.md](../infra/docs/DEPLOYMENT.md
 | Every request gets `403` and the log says `Refused a request from ...` | The ingress connects from a range missing in `Network:InternalNetworks`; add that CIDR |
 | Users share one rate-limit bucket | A proxy in front of the app is outside `Network:InternalNetworks`, so the app stops walking `X-Forwarded-For` at that proxy. Cloudflare's ranges are added by `infra/`; add any other proxy's range |
 | Readiness probe failing, liveness fine | The database is unreachable from the replica (see above); the app stays up and recovers by itself |
+| The list's status pill stays on "Offline", and other people's changes appear only every 30 seconds | WebSockets don't get through: Cloudflare's **WebSockets** setting is off, or the phone's network blocks them. The list falls back to reloading over HTTP every 30 seconds. The browser's developer tools show the failing `wss://.../api/grocery-list/hub` request |
+| Log warning `Refused a realtime connection opened by a page on another site` | A page on another origin tried to open the hub with a user's cookie (cross-site WebSocket hijacking), or a proxy rewrote the `Host` header so it no longer matches the browser's `Origin`. The first is refused correctly; for the second, make the proxy preserve `Host` |

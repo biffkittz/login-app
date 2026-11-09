@@ -4,7 +4,7 @@ export {}
 
 declare module 'vue-router' {
   interface RouteMeta {
-    /** Shown in the browser tab as "<title> · Login App". */
+    /** Shown in the browser tab as "<title> · Nibbles". */
     title?: string
     /** Only signed-in users may visit; everyone else is sent to the login page. */
     requiresAuth?: boolean

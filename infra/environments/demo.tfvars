@@ -20,7 +20,7 @@ app_hostname  = "app.biffkittz.com"
 
 # Image tag of the app to run, e.g. the short commit SHA pushed with `az acr build`. Leave it commented out for the
 # first apply (no image exists yet). Once set, keep it set: removing it again would delete the Container App.
-app_image_tag = "aa3cf3d"
+app_image_tag = "v4"
 
 # One replica: this is a demonstration environment.
 app_min_replicas = 1

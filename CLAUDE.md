@@ -1,7 +1,9 @@
-# Login App
+# Nibbles (the Login App code base)
 
-A sign-up / sign-in / sign-out web app built to production standards, hosted on Azure Container Apps behind
-Cloudflare at https://app.biffkittz.com. The container terminates TLS itself; there is no Application Gateway.
+A realtime family grocery list for phones, at https://app.biffkittz.com: every signed-in user shares one list, and
+changes reach every open list over SignalR (WebSockets) hosted in the app. It is built on a production-grade
+sign-up / sign-in app whose names it keeps (`LoginApp.Api`, `loginapp` in Terraform; renaming Azure resources would
+replace them). Hosted on Azure Container Apps behind Cloudflare; the container terminates TLS itself.
 
 - `app/`: ASP.NET Core 10 API + Vue 3 SPA in one container. See `app/CLAUDE.md`.
 - `infra/`: Terraform for Azure and Cloudflare. See `infra/CLAUDE.md`.
@@ -26,6 +28,8 @@ Cloudflare at https://app.biffkittz.com. The container terminates TLS itself; th
 - HTTPS for every request; validate all input; log errors without sensitive data; follow OWASP guidance.
 - In Azure, Kestrel serves HTTPS on 443 with the Cloudflare origin certificate and accepts only requests carrying
   Cloudflare's Authenticated Origin Pulls client certificate (health endpoints excepted). Locally it serves HTTP.
+- SignalR runs in-process, never Azure SignalR Service (a requirement), so the app is exactly one instance. Writes go
+  through the REST API; the hub only pushes.
 
 ## Documentation
 

@@ -203,6 +203,7 @@ affect every record in `biffkittz.com`, so set them in the dashboard:
 | SSL/TLS → Edge Certificates → Always Use HTTPS | On | Visitors who type `http://` are redirected at the edge |
 | SSL/TLS → Edge Certificates → Minimum TLS Version | 1.2 | Matches the app's TLS 1.2+ setting |
 | SSL/TLS → Edge Certificates → HSTS | Optional | Add it once HTTPS works end to end; it is hard to undo, because browsers cache it |
+| Network → WebSockets | On (the default) | The grocery list's realtime updates are a WebSocket. With it off, the app falls back to reloading the list every 30 seconds |
 
 ## The origin certificate (PFX)
 

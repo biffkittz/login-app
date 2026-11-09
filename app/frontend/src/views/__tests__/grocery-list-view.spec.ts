@@ -1,0 +1,188 @@
+import { flushPromises, mount } from '@vue/test-utils'
+import { createPinia, setActivePinia } from 'pinia'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { h } from 'vue'
+import { createMemoryHistory, createRouter } from 'vue-router'
+
+import { polyfillDialog } from '@/components/grocery/__tests__/dialog-polyfill'
+import * as groceryApi from '@/services/grocery-api'
+import { createGroceryListHub } from '@/services/grocery-list-hub'
+import { useAuthStore } from '@/stores/auth'
+import type { GroceryItem } from '@/types/grocery'
+import { makeItem } from '@/utils/__tests__/test-items'
+
+import GroceryListView from '../grocery-list-view.vue'
+
+vi.mock('@/services/grocery-api')
+vi.mock('@/services/grocery-list-hub')
+
+async function mountView(...items: GroceryItem[]) {
+  vi.mocked(groceryApi.getList).mockResolvedValue({
+    items,
+    stores: ['Whole Foods', 'Indian Grocery', 'Teeter/Lion', 'Costco'],
+  })
+  const router = createRouter({
+    history: createMemoryHistory(),
+    routes: [
+      { path: '/', name: 'home', component: GroceryListView },
+      { path: '/login', name: 'login', component: { render: () => h('p', 'login') } },
+    ],
+  })
+  await router.push('/')
+  await router.isReady()
+
+  const wrapper = mount(GroceryListView, { global: { plugins: [router] }, attachTo: document.body })
+  await flushPromises()
+  return wrapper
+}
+
+const rowNames = (wrapper: Awaited<ReturnType<typeof mountView>>): string[] =>
+  wrapper.findAll('li').map((row) => row.find('button:nth-of-type(2) span span').text())
+
+describe('GroceryListView', () => {
+  beforeAll(polyfillDialog)
+
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    document.body.innerHTML = ''
+    useAuthStore().$patch({
+      user: {
+        id: 'me',
+        email: 'ada@example.com',
+        displayName: 'Ada',
+        sessionExpiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+      },
+    })
+    vi.mocked(createGroceryListHub).mockReturnValue({
+      start: vi.fn().mockResolvedValue(undefined),
+      stop: vi.fn().mockResolvedValue(undefined),
+      restart: vi.fn().mockResolvedValue(undefined),
+    })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('shows the shared list in order and connects for live updates', async () => {
+    const wrapper = await mountView(
+      makeItem({ id: 'b', name: 'Bread', position: 2 }),
+      makeItem({ id: 'a', name: 'Apples', position: 1 }),
+    )
+
+    expect(rowNames(wrapper)).toEqual(['Apples', 'Bread'])
+    expect(createGroceryListHub).toHaveBeenCalledOnce()
+    expect(wrapper.get('h1').text()).toBe('Grocery list')
+  })
+
+  it('groups the list by store: no store first, then the stores in their offered order', async () => {
+    const wrapper = await mountView(
+      makeItem({ id: 'a', name: 'Apples', position: 1, store: 'Costco' }),
+      makeItem({ id: 'b', name: 'Bread', position: 2 }),
+      makeItem({ id: 'c', name: 'Chai', position: 3, store: 'Indian Grocery' }),
+      makeItem({ id: 'd', name: 'Dates', position: 4, store: 'Costco' }),
+    )
+
+    const sections = wrapper.findAll('section section')
+    expect(sections.map((section) => section.get('h2').text().replace(/\s+/g, ' '))).toEqual([
+      'No store: 1 item',
+      'Indian Grocery: 1 item',
+      'Costco: 2 items',
+    ])
+    expect(
+      sections[2]?.findAll('li').map((row) => row.find('button:nth-of-type(2) span span').text()),
+    ).toEqual(['Apples', 'Dates'])
+    expect(sections[2]?.get('ul').attributes('aria-label')).toBe('Costco items')
+  })
+
+  it('moves an item within its store, placing it next to the right neighbor in the whole list', async () => {
+    const wrapper = await mountView(
+      makeItem({ id: 'a', name: 'Apples', position: 1, store: 'Costco' }),
+      makeItem({ id: 'b', name: 'Bread', position: 2 }),
+      makeItem({ id: 'd', name: 'Dates', position: 3, store: 'Costco' }),
+    )
+    vi.mocked(groceryApi.moveItem).mockReturnValue(new Promise(() => {}))
+
+    await wrapper.get('[aria-label="Move Apples"]').trigger('keydown', { key: 'ArrowDown' })
+
+    expect(groceryApi.moveItem).toHaveBeenCalledWith('a', 'd')
+  })
+
+  it('invites the user to add something when the list is empty', async () => {
+    const wrapper = await mountView()
+
+    expect(wrapper.text()).toContain('The list is empty.')
+  })
+
+  it('adds an item at the top of the list', async () => {
+    const wrapper = await mountView(makeItem({ id: 'a', name: 'Apples' }))
+    vi.mocked(groceryApi.createItem).mockReturnValue(new Promise(() => {}))
+
+    await wrapper.get('form input').setValue('Milk')
+    await wrapper.get('form').trigger('submit')
+
+    expect(rowNames(wrapper)).toEqual(['Milk', 'Apples'])
+    expect(groceryApi.createItem).toHaveBeenCalledWith(expect.objectContaining({ name: 'Milk' }))
+  })
+
+  it('checks an item off, then offers to undo it', async () => {
+    vi.useFakeTimers()
+    const wrapper = await mountView(
+      makeItem({ id: 'a', name: 'Apples', position: 1 }),
+      makeItem({ id: 'b', name: 'Bread', position: 2, store: 'Aldi' }),
+    )
+    vi.mocked(groceryApi.deleteItem).mockResolvedValue({ savedItems: [], deletedItemIds: ['b'] })
+    vi.mocked(groceryApi.createItem).mockReturnValue(new Promise(() => {}))
+
+    await wrapper.get('[aria-label="Check off Bread"]').trigger('click')
+    expect(wrapper.get('[aria-label="Check off Bread"]').attributes('aria-pressed')).toBe('true')
+
+    await vi.advanceTimersByTimeAsync(400)
+    expect(rowNames(wrapper)).toEqual(['Apples'])
+    expect(groceryApi.deleteItem).toHaveBeenCalledWith('b')
+    expect(wrapper.text()).toContain('Checked off Bread.')
+
+    const undo = wrapper.findAll('button').find((button) => button.text() === 'Undo')
+    await undo?.trigger('click')
+
+    expect(rowNames(wrapper)).toEqual(['Apples', 'Bread'])
+    expect(groceryApi.createItem).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'Bread', store: 'Aldi', afterItemId: 'a' }),
+    )
+  })
+
+  it('saves the changed details of an item from its editor', async () => {
+    const wrapper = await mountView(makeItem({ id: 'a', name: 'Apples', version: 1 }))
+    vi.mocked(groceryApi.updateItem).mockResolvedValue({
+      savedItems: [makeItem({ id: 'a', name: 'Apples', quantity: '6', version: 2 })],
+      deletedItemIds: [],
+    })
+
+    await wrapper.get('li button:nth-of-type(2)').trigger('click')
+    const quantityId = wrapper
+      .findAll('dialog label')
+      .find((label) => label.text() === 'Quantity')
+      ?.attributes('for')
+    await wrapper.get(`[id="${quantityId}"]`).setValue('6')
+    await wrapper.get('dialog form').trigger('submit')
+    await flushPromises()
+
+    expect(groceryApi.updateItem).toHaveBeenCalledWith('a', { quantity: '6' })
+    expect(wrapper.get('dialog').attributes('open')).toBeUndefined()
+    expect(wrapper.get('li').text()).toContain('6')
+  })
+
+  it('tells the user when a change could not be saved', async () => {
+    const wrapper = await mountView()
+    vi.mocked(groceryApi.createItem).mockRejectedValue(
+      Object.assign(new Error('offline'), { isAxiosError: true, code: 'ERR_NETWORK' }),
+    )
+
+    await wrapper.get('form input').setValue('Milk')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain("We couldn't reach the server.")
+    expect(wrapper.findAll('li')).toHaveLength(0)
+  })
+})

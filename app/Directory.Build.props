@@ -15,8 +15,10 @@
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
 
     <!--
-      Release builds (buildAndRunSite.sh and the Dockerfile) fail on any warning, so analyzer and style
-      violations cannot reach a deployable artifact. Debug builds only warn, keeping the inner loop fast.
+      Release builds fail on any warning. buildAndRunSite.sh builds with the repository's root .editorconfig, so it
+      stops analyzer and style violations alike. The Dockerfile's build context (app/) doesn't contain that file, so
+      the image build enforces the analyzers' defaults only: run the script before building an image. Debug builds
+      only warn, keeping the inner loop fast.
     -->
     <TreatWarningsAsErrors Condition="'$(Configuration)' == 'Release'">true</TreatWarningsAsErrors>
 

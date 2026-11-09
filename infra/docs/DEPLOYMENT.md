@@ -1,6 +1,6 @@
 # Deployment
 
-How to deploy the Login App's infrastructure from nothing, verify it, operate it, and tear it down. Commands run in
+How to deploy the infrastructure of Nibbles (the Login App's code base) from nothing, verify it, operate it, and tear it down. Commands run in
 WSL from `infra/` unless they say otherwise.
 
 - [How a first deployment works](#how-a-first-deployment-works)
@@ -212,7 +212,7 @@ terraform plan -var-file=environments/demo.tfvars -detailed-exitcode   # exit co
 | **Renew the TLS certificate** | Put the new PFX at `TF_VAR_tls_certificate_pfx_path` and apply. A new certificate version is imported; Container Apps picks it up within 30 minutes and restarts the revision, and the app loads it on start. To switch at once, use the `secret set` and `revision restart` commands from [Rotating the app's database password](#rotating-the-apps-database-password) with the secret `origin-certificate` |
 | **Cloudflare publishes new IP ranges** | The next plan shows the ingress IP restrictions and NSG rule changing; apply it. Plan regularly, e.g. weekly, so new edge locations aren't blocked |
 | **Cloudflare replaces its origin-pull CA** | The current one expires on 2029-11-01. Replace `app/backend/Infrastructure/Tls/cloudflare-origin-pull-ca.pem` and release a new image before Cloudflare switches |
-| **Scale** | Change `app_min_replicas` / `app_max_replicas`; the app is stateless |
+| **Scale** | Up only: `app_cpu` / `app_memory`. `app_max_replicas` must stay 1 (validated): the realtime hub broadcasts in-process, without a backplane, so a second replica's users would miss each other's changes |
 | **Detect drift** | `terraform plan -detailed-exitcode` (exit code 2 = changes). Fix by re-applying, or by moving the change into code |
 | **Upgrade Terraform or providers** | See [DEVELOPMENT.md](DEVELOPMENT.md#8-upgrading-terraform-and-providers) |
 

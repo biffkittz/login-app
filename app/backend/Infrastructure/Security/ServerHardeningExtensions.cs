@@ -7,9 +7,13 @@ namespace LoginApp.Api.Infrastructure.Security;
 /// </summary>
 internal static class ServerHardeningExtensions
 {
-    // The largest legitimate request is a registration form of a few hundred bytes. A small cap stops clients
+    // The largest legitimate request is a grocery item with long notes, a few kilobytes. A small cap stops clients
     // from tying up the server with huge bodies (Kestrel's default allows 30 MB).
     private const long MaxRequestBodyBytes = 64 * 1024;
+
+    // Each open grocery list holds a WebSocket. A family needs a handful; the cap stops a flood of connections from
+    // exhausting the container's memory (Kestrel's default is unlimited).
+    private const long MaxConcurrentWebSocketConnections = 1000;
 
     /// <summary>
     /// Configures Kestrel and HSTS.
@@ -23,10 +27,11 @@ internal static class ServerHardeningExtensions
             // Don't advertise the server software ("Server: Kestrel") to potential attackers.
             kestrel.AddServerHeader = false;
             kestrel.Limits.MaxRequestBodySize = MaxRequestBodyBytes;
+            kestrel.Limits.MaxConcurrentUpgradedConnections = MaxConcurrentWebSocketConnections;
         });
 
-        // TLS terminates upstream, so Kestrel itself never serves HTTPS. Once UseForwardedHeaders has restored the
-        // original scheme, UseHsts adds this header to HTTPS responses so browsers refuse plain HTTP afterwards.
+        // UseHsts adds this header to HTTPS responses (Kestrel's own HTTPS in Azure, or the scheme restored by
+        // UseForwardedHeaders behind another TLS-terminating proxy), so browsers refuse plain HTTP afterwards.
         services.AddHsts(static hsts => hsts.MaxAge = TimeSpan.FromDays(365));
 
         return services;

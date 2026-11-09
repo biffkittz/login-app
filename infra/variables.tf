@@ -225,13 +225,13 @@ variable "app_min_replicas" {
 }
 
 variable "app_max_replicas" {
-  description = "Maximum number of app replicas. The demo runs exactly one."
+  description = "Maximum number of app replicas. Must be 1: the grocery list's realtime updates (SignalR) run inside the app with no backplane, so users connected to a second replica would never see each other's changes."
   type        = number
   default     = 1
 
   validation {
-    condition     = var.app_max_replicas >= 1 && var.app_min_replicas >= 0 && var.app_min_replicas <= var.app_max_replicas
-    error_message = "Replica counts need 0 <= app_min_replicas <= app_max_replicas, with app_max_replicas at least 1."
+    condition     = var.app_max_replicas == 1 && var.app_min_replicas >= 0 && var.app_min_replicas <= var.app_max_replicas
+    error_message = "app_max_replicas must be 1 (SignalR runs in-process, without a backplane), and app_min_replicas 0 or 1."
   }
 }
 

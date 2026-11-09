@@ -91,7 +91,7 @@ cd ~/login-app/infra
 terraform init -backend=false            # providers and modules only; works offline from Azure
 terraform fmt -recursive                 # format
 terraform validate                       # syntax and types
-terraform test                           # 28 runs against mocked providers (a few seconds)
+terraform test                           # 29 runs against mocked providers (a few seconds)
 tflint --init && tflint --recursive      # lint (the root module and every module)
 terraform-docs .                         # refresh the READMEs after changing variables, outputs or resources
 ```

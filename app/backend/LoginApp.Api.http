@@ -2,7 +2,7 @@
 # Works with the VS Code REST Client extension (humao.rest-client) and Visual Studio.
 #
 # The auth token travels in an HttpOnly cookie that REST Client stores and re-sends automatically, so run the
-# requests from top to bottom: register -> me -> logout -> login.
+# requests from top to bottom: register -> me -> logout -> login -> the grocery list.
 
 @baseUrl = http://localhost:5082
 
@@ -30,6 +30,43 @@ Content-Type: application/json
   "email": "ada@example.com",
   "password": "analytical engine notes"
 }
+
+### The shared grocery list (needs a signed-in session: run "Sign in again" first)
+GET {{baseUrl}}/api/grocery-list
+
+### Add an item at the top. The id is optional; the SPA sends one it generated, so it can show the item at once.
+# @name addItem
+POST {{baseUrl}}/api/grocery-list/items
+Content-Type: application/json
+
+{
+  "id": "{{$guid}}",
+  "name": "Milk",
+  "quantity": "2 gallons",
+  "brand": "Organic Valley",
+  "store": "Costco",
+  "notes": "The lactose-free one"
+}
+
+### Change only the quantity. Fields left out keep their value; "" clears an optional field.
+PATCH {{baseUrl}}/api/grocery-list/items/{{addItem.response.body.$.savedItems[0].id}}
+Content-Type: application/json
+
+{
+  "quantity": "1 gallon",
+  "brand": ""
+}
+
+### Move it to the top ("afterItemId": null), or directly after another item
+POST {{baseUrl}}/api/grocery-list/items/{{addItem.response.body.$.savedItems[0].id}}/move
+Content-Type: application/json
+
+{
+  "afterItemId": null
+}
+
+### Remove it
+DELETE {{baseUrl}}/api/grocery-list/items/{{addItem.response.body.$.savedItems[0].id}}
 
 ### Liveness probe (no dependencies)
 GET {{baseUrl}}/health/live

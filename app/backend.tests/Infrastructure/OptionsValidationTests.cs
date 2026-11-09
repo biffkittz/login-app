@@ -1,5 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 using LoginApp.Api.Features.Auth;
+using LoginApp.Api.Features.GroceryList;
 using LoginApp.Api.Infrastructure.Networking;
 
 namespace LoginApp.Api.Tests.Infrastructure;
@@ -52,6 +53,35 @@ public sealed class OptionsValidationTests
 
         // Assert
         Assert.Equal(expectedValid, errors.Count == 0);
+    }
+
+    [Theory]
+    [InlineData("")] // no stores at all
+    [InlineData("Costco|costco")]
+    [InlineData("Costco| ")]
+    [InlineData(" Costco")]
+    public void GroceryListOptions_WithMissingDuplicateOrBlankStores_FailValidation(string stores)
+    {
+        // Arrange: stores separated by "|".
+        GroceryListOptions options = new() { Stores = stores.Length == 0 ? [] : [.. stores.Split('|')] };
+
+        // Act
+        List<ValidationResult> errors = Validate(options);
+
+        // Assert
+        Assert.NotEmpty(errors);
+    }
+
+    [Fact]
+    public void GroceryListOptions_FindStore_MatchesIgnoringCaseAndSpaces()
+    {
+        // Arrange
+        GroceryListOptions options = new() { Stores = ["Whole Foods", "Teeter/Lion"] };
+
+        // Act + Assert
+        Assert.Empty(Validate(options));
+        Assert.Equal("Teeter/Lion", options.FindStore(" teeter/lion "));
+        Assert.Null(options.FindStore("Aldi"));
     }
 
     [Fact]

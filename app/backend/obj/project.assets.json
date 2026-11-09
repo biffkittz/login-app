@@ -3183,6 +3183,7 @@
           "Microsoft.AspNetCore.Identity.EntityFrameworkCore": "10.0.14",
           "Microsoft.AspNetCore.Mvc.Testing": "10.0.14",
           "Microsoft.AspNetCore.OpenApi": "10.0.14",
+          "Microsoft.AspNetCore.SignalR.Client": "10.0.14",
           "Microsoft.EntityFrameworkCore.Design": "10.0.14",
           "Microsoft.EntityFrameworkCore.Sqlite": "10.0.14",
           "Microsoft.Extensions.Diagnostics.HealthChecks.EntityFrameworkCore": "10.0.14",

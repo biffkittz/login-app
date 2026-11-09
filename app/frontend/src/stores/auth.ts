@@ -96,6 +96,16 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
+  /**
+   * Ends the session after the API refused it (401) before its scheduled expiry, e.g. because the account was
+   * deleted. The API has already deleted the cookie.
+   */
+  function expireSession(): void {
+    if (user.value !== null) {
+      endSession('session-expired')
+    }
+  }
+
   /** Forgets why the user was signed out, once the login page has told them. */
   function clearSignOutReason(): void {
     signOutReason.value = null
@@ -109,6 +119,7 @@ export const useAuthStore = defineStore('auth', () => {
     login,
     register,
     logout,
+    expireSession,
     clearSignOutReason,
   }
 })

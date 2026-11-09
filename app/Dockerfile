@@ -44,7 +44,8 @@ COPY backend/ backend/
 # (gzip/Brotli) everything in wwwroot at publish time.
 COPY --from=frontend-build /src/frontend/dist/ backend/wwwroot/
 
-# Release builds treat analyzer and code-style warnings as errors, so a non-compliant change fails here.
+# Release builds treat warnings as errors, so an analyzer violation fails here. The code-style rules are in the
+# repository's root .editorconfig, outside this build context: buildAndRunSite.sh is what enforces those.
 RUN dotnet publish backend/LoginApp.Api.csproj \
         --configuration Release \
         --no-restore \

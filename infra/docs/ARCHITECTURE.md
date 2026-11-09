@@ -1,6 +1,6 @@
 # Architecture
 
-How the Login App runs in Azure: the request path, the network, identities, secrets and DNS, and why each part is
+How Nibbles (the app's code still calls itself the Login App) runs in Azure: the request path, the network, identities, secrets and DNS, and why each part is
 built the way it is. For the application's own design (authentication flow, security headers, forwarded headers),
 see the app's [docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md).
 
@@ -54,7 +54,7 @@ flowchart LR
 | Component | Resource | Purpose |
 | --- | --- | --- |
 | Edge | Cloudflare (proxied DNS record, Authenticated Origin Pulls) | Visitor-facing TLS, DDoS protection and Cloudflare's security features; hides the origin IP; presents a client certificate to the origin |
-| Compute and entry point | Container Apps environment (workload profiles, external) + Container App with TCP ingress | Public IP for Cloudflare; runs the Login App image (one replica, 0.5 vCPU, 1 GiB), which terminates TLS itself |
+| Compute and entry point | Container Apps environment (workload profiles, external) + Container App with TCP ingress | Public IP for Cloudflare; runs the app image (exactly one replica, 0.5 vCPU, 1 GiB), which terminates TLS itself and hosts the realtime hub (SignalR over WebSockets) |
 | One-off task | Container Apps job | Creates the app's least-privilege database role |
 | Data | Azure Database for PostgreSQL flexible server (B1ms, PostgreSQL 18) + database `loginapp` | The app's data; private IP only |
 | Secrets | Key Vault (RBAC) | Connection string, JWT signing key, database passwords, TLS certificate |
@@ -77,6 +77,11 @@ flowchart LR
    `X-Forwarded-For` header Cloudflare added and uses it for rate limiting and logs.
 6. The app connects to PostgreSQL's private IP with `SSL Mode=VerifyFull`. The PostgreSQL subnet's NSG admits only
    the Container Apps subnet on 5432.
+
+The grocery list's realtime connection (a WebSocket to `/api/grocery-list/hub`) follows the same path: Cloudflare
+proxies WebSockets (the zone's WebSockets setting, on by default) and the TCP ingress passes the upgraded connection
+through like any other. SignalR's keep-alive pings every 15 seconds stop Cloudflare or the ingress from closing it
+as idle.
 
 The platform's health probes connect to the container directly over HTTPS on 443. They present no client
 certificate, which is why `/health/live` and `/health/ready` are the exception in step 4.
@@ -379,8 +384,10 @@ the plan shows clearly.
 - **Workload profiles environment, Consumption profile.** This is the current environment type. It supports a /27
   subnet, NSGs and private endpoints, and is billed per use. External TCP ingress requires an environment in a
   custom virtual network, which this is.
-- **Single replica, no zone redundancy for the app or database.** This is a demonstration environment. The database
-  runs on Burstable B1ms, the smallest size, which offers no high availability.
+- **Exactly one replica, no zone redundancy for the app or database.** The realtime hub is SignalR inside the app,
+  with no backplane (Azure SignalR Service was ruled out by the requirements), so it only reaches clients connected
+  to its own replica. `app_max_replicas` is therefore validated to be 1. The database runs on Burstable B1ms, the
+  smallest size, which offers no high availability.
 - **No WAF.** Cloudflare filters traffic at the edge; its WAF rules apply before anything reaches Azure.
 - **Container Registry Basic.** No network rules or private endpoints exist on this SKU, so its endpoint is public.
   The admin user is disabled; pulls use Entra ID only.
@@ -410,7 +417,7 @@ Measured against Microsoft's
 | Logs to Log Analytics | Applied | Container logs, Key Vault audit logs |
 | Consistent tagging; infrastructure as code | Applied | `project`, `environment`, `managed_by` on every taggable resource |
 | Encryption in transit on every hop | Applied | TLS from the visitor to the container and from the app to PostgreSQL |
-| At least three replicas and availability zones | Not applied | One replica, as required for the demo |
+| At least three replicas and availability zones | Not applied | One replica, as required for the demo and by the in-process realtime hub |
 | Egress control with UDRs and a firewall | Not applied | Cost; see limitations |
 | Defender for Containers image scanning | Not applied | Cost; consider for production |
 
@@ -448,7 +455,8 @@ When the demo isn't needed, `terraform destroy` removes everything; see [DEPLOYM
   Firewall with user-defined routes. Workload profile environments support this.
 - **Key Vault and the registry have public endpoints.** Private endpoints need Premium for the registry, and a CI
   agent inside the VNet.
-- **One replica and Burstable PostgreSQL.** There is no high availability. Raise `app_min_replicas`, and move
-  PostgreSQL to General Purpose with zone-redundant high availability for production.
+- **One replica and Burstable PostgreSQL.** There is no high availability. More replicas first need a SignalR
+  backplane (Redis, for example); then raise the replica counts, and move PostgreSQL to General Purpose with
+  zone-redundant high availability for production.
 - **The app setting `Network:InternalNetworks` serves two purposes,** guarding the TCP peer and trusting proxies.
   Splitting it would make the Cloudflare configuration more explicit.
