@@ -1,3 +1,4 @@
+using LoginApp.Api.Features.GroceryList.Images;
 using LoginApp.Api.Infrastructure.Data;
 
 namespace LoginApp.Api.Features.GroceryList;
@@ -74,4 +75,24 @@ internal sealed class GroceryItem
 
     /// <summary>Gets or sets the user identified by <see cref="LastModifiedById"/>.</summary>
     public ApplicationUser? LastModifiedBy { get; set; }
+
+    /// <summary>
+    /// Gets or sets the ID of the item's picture, or <see langword="null"/> when it has none: pictures were off when
+    /// the item got its name, drawing one failed, or <see cref="ImagePending"/> is still true.
+    /// </summary>
+    /// <remarks>
+    /// A picture belongs to the name it was drawn for, so renaming an item replaces it (see
+    /// <c>GroceryListService.PlanImageAsync</c>). Attaching a picture increments <see cref="Version"/> like any other
+    /// change, but leaves <see cref="LastModifiedAt"/> and <see cref="LastModifiedById"/> alone: nobody edited the item.
+    /// </remarks>
+    public Guid? ImageId { get; set; }
+
+    /// <summary>Gets or sets the picture identified by <see cref="ImageId"/>.</summary>
+    public GroceryItemImage? Image { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether a picture is still to be drawn for the item. The flag lives in the
+    /// database rather than in a queue in memory, so pictures interrupted by a restart are drawn when the app is back.
+    /// </summary>
+    public bool ImagePending { get; set; }
 }

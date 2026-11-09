@@ -17,4 +17,11 @@ public interface IGroceryListClient
     /// <param name="change">What changed.</param>
     /// <returns>A task that completes when the message has been queued for sending.</returns>
     public Task ListChanged(GroceryListChange change);
+
+    /// <summary>
+    /// Tells the client that someone changed the list's settings, such as turning AI pictures off.
+    /// </summary>
+    /// <param name="settings">The settings as they are now.</param>
+    /// <returns>A task that completes when the message has been queued for sending.</returns>
+    public Task SettingsChanged(GroceryListSettingsResponse settings);
 }

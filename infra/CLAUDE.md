@@ -2,7 +2,9 @@
 
 Provisions Nibbles, the realtime grocery list built on the Login App: Cloudflare (proxied DNS, Authenticated Origin Pulls) → public IP of an external Container
 Apps environment → TCP ingress on 8443 (TLS passed through) → Kestrel terminates TLS with the origin certificate from
-Key Vault → PostgreSQL flexible server (private access). There is no Application Gateway (removed for cost).
+Key Vault → PostgreSQL flexible server (private access). There is no Application Gateway (removed for cost). Two
+instances run side by side: `main` (app.biffkittz.com, 8443, database `loginapp`) and `grocery`
+(grocery.biffkittz.com, 8444, database `grocery`), from `additional_app_instances` in `environments/demo.tfvars`.
 Details: `README.md`, `docs/ARCHITECTURE.md`, `docs/DEPLOYMENT.md`, `docs/AUTHENTICATION.md`, `docs/DEVELOPMENT.md`.
 
 ## Check loop (no credentials needed)
@@ -22,7 +24,8 @@ touches Azure. Run all of them before calling a change done.
 ## Rules
 
 - **Never `terraform apply` without the user's go-ahead.** A real plan needs `CLOUDFLARE_API_TOKEN`,
-  `TF_VAR_tls_certificate_pfx_path` and `TF_VAR_tls_certificate_pfx_password`. Don't touch `backend.tf` (the
+  `TF_VAR_tls_certificate_pfx_path` and `TF_VAR_tls_certificate_pfx_password`, plus `TF_VAR_gemini_api_key` once the
+  app uses one (an apply without it removes the key and stops AI pictures). Don't touch `backend.tf` (the
   user's remote state config) or `.terraform/terraform.tfstate`.
 - **Providers:** azurerm, cloudflare, random, time only. Anything else (including azapi or external modules) needs
   the user's approval and a comment explaining why. Prefer azurerm over azapi.
@@ -69,6 +72,12 @@ generated secrets and the Cloudflare record. Modules: `networking`, `registry`, 
 - **Exactly one replica.** The grocery list's realtime hub (SignalR) runs in-process with no backplane, so
   `app_max_replicas` is validated to be 1. Don't relax that without adding a backplane (not Azure SignalR Service:
   the requirements rule it out).
+- **Instances** (`local.app_instances`: `"main"` plus `additional_app_instances`) share the environment, image,
+  identity, Key Vault secrets and database role; each has its own Container App, DNS record, Origin Rule, exposed port,
+  database and connection-string secret (`<key>-db-connection-string`), and additional ones set `Jwt__Audience` to
+  their host name. Exposed ports must be unique (two TCP apps can't share one). After adding an instance, the
+  bootstrap job must run again (it grants per database). The `moved` blocks in `main.tf` keep the pre-instance
+  addresses of the main app and DNS record; keep them.
 - **The exposed port can't be 80 or 443:** the environment's HTTP ingress holds them ("exposedPort already in use").
   `cloudflare_ruleset.origin_port` (an Origin Rule) sends Cloudflare to 8443; the container still listens on 443.
   The Cloudflare token needs DNS, Zone Settings and Origin Rules edit.

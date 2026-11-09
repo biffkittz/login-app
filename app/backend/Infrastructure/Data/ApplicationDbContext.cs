@@ -1,4 +1,5 @@
 using LoginApp.Api.Features.GroceryList;
+using LoginApp.Api.Features.GroceryList.Images;
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
 
@@ -20,6 +21,12 @@ internal sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext
     /// <summary>Gets the items on the shared grocery list.</summary>
     public DbSet<GroceryItem> GroceryItems => Set<GroceryItem>();
 
+    /// <summary>Gets the AI-drawn pictures of grocery items, one per item name.</summary>
+    public DbSet<GroceryItemImage> GroceryItemImages => Set<GroceryItemImage>();
+
+    /// <summary>Gets the list's in-app settings: a single row.</summary>
+    public DbSet<GroceryListSettings> GroceryListSettings => Set<GroceryListSettings>();
+
     /// <inheritdoc />
     protected override void OnModelCreating(ModelBuilder builder)
     {
@@ -27,5 +34,7 @@ internal sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext
         base.OnModelCreating(builder);
         builder.ApplyConfiguration(new ApplicationUserConfiguration());
         builder.ApplyConfiguration(new GroceryItemConfiguration());
+        builder.ApplyConfiguration(new GroceryItemImageConfiguration());
+        builder.ApplyConfiguration(new GroceryListSettingsConfiguration());
     }
 }

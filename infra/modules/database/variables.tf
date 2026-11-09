@@ -54,6 +54,12 @@ variable "database_name" {
   type        = string
 }
 
+variable "additional_database_names" {
+  description = "More databases on the same server, one per additional instance of the app: map of a static key (the instance) to the database name."
+  type        = map(string)
+  default     = {}
+}
+
 variable "delegated_subnet_id" {
   description = "Subnet delegated to Microsoft.DBforPostgreSQL/flexibleServers, where the server gets its private IP."
   type        = string

@@ -7,6 +7,7 @@
 #   export CLOUDFLARE_API_TOKEN=...                                   # Cloudflare provider
 #   export TF_VAR_tls_certificate_pfx_path=~/.secrets/biffkittz-origin.pfx
 #   export TF_VAR_tls_certificate_pfx_password=...                    # if the PFX has one
+#   export TF_VAR_gemini_api_key=...                                  # optional: AI pictures of items
 # Every other variable keeps its default from variables.tf.
 
 subscription_id = "3c3f379f-8161-4631-a30c-a3af82622a6a"
@@ -20,11 +21,23 @@ app_hostname  = "app.biffkittz.com"
 
 # Image tag of the app to run, e.g. the short commit SHA pushed with `az acr build`. Leave it commented out for the
 # first apply (no image exists yet). Once set, keep it set: removing it again would delete the Container App.
-app_image_tag = "v4"
+app_image_tag = "v5"
 
 # One replica: this is a demonstration environment.
 app_min_replicas = 1
 app_max_replicas = 1
+
+# A second, independent instance of the app at grocery.biffkittz.com: the same image, Key Vault secrets and settings,
+# its own Container App, database (on the same server) and list. 8444 is its port on the environment's IP, next to the
+# main instance's 8443; Cloudflare's Origin Rule sends grocery.biffkittz.com there. After the first apply that adds it,
+# run the database bootstrap job (docs/DEPLOYMENT.md, "Add an instance").
+additional_app_instances = {
+  grocery = {
+    hostname      = "grocery.biffkittz.com"
+    exposed_port  = 8444
+    database_name = "grocery"
+  }
+}
 
 # Smallest PostgreSQL size available.
 postgresql_sku_name = "B_Standard_B1ms"

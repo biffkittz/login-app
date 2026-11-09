@@ -212,7 +212,8 @@ browsers don't, which is fine, because browsers only ever see Cloudflare's edge 
 
 1. **Create it.** In the dashboard for `biffkittz.com`, open **SSL/TLS → Origin Server → Create Certificate**:
    - **Generate private key and CSR with Cloudflare**, with an RSA (2048) key;
-   - host names `*.biffkittz.com` and `biffkittz.com`;
+   - host names `*.biffkittz.com` and `biffkittz.com` (the wildcard covers every instance of the app:
+     app.biffkittz.com, grocery.biffkittz.com and any added later);
    - a validity of up to 15 years.
 
    Copy the certificate into `origin.pem` and the private key into `origin.key`. The key is shown only once.

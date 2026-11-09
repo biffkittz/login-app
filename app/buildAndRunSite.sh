@@ -120,7 +120,10 @@ build_backend() {
     dotnet test --solution "${SOLUTION}" --configuration Release
   fi
   rm -rf "${SITE_DIR}"
-  dotnet publish "${BACKEND_PROJECT}" --configuration Release --output "${SITE_DIR}"
+  # For this machine's platform only: a portable build would also carry SkiaSharp's native library for every other
+  # OS and CPU (over 450 MB).
+  dotnet publish "${BACKEND_PROJECT}" --configuration Release --use-current-runtime --no-self-contained \
+    --output "${SITE_DIR}"
   printf '  Published the combined site to %s\n' "${SITE_DIR}"
 }
 

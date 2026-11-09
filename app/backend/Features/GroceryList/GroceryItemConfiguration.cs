@@ -32,5 +32,12 @@ internal sealed class GroceryItemConfiguration : IEntityTypeConfiguration<Grocer
             .WithMany()
             .HasForeignKey(item => item.LastModifiedById)
             .OnDelete(DeleteBehavior.SetNull);
+
+        // Pictures are kept for reuse after their items go (see GroceryItemImage), and removing one only costs the
+        // items that showed it their picture.
+        builder.HasOne(item => item.Image)
+            .WithMany()
+            .HasForeignKey(item => item.ImageId)
+            .OnDelete(DeleteBehavior.SetNull);
     }
 }

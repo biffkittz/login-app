@@ -34,17 +34,17 @@ run "networking_restricts_every_subnet" {
       container_apps = "10.40.1.0/24"
       postgresql     = "10.40.2.0/24"
     }
-    app_ingress_port          = 8443
+    app_ingress_ports         = [8443, 8444]
     app_ingress_allowed_cidrs = ["173.245.48.0/20", "103.21.244.0/22"]
   }
 
   assert {
     condition = (
       azurerm_network_security_rule.inbound["container_apps/AllowAppIngressInbound"].source_address_prefixes == toset(["173.245.48.0/20", "103.21.244.0/22"]) &&
-      azurerm_network_security_rule.inbound["container_apps/AllowAppIngressInbound"].destination_port_ranges == toset(["8443", "30000-32767"]) &&
+      azurerm_network_security_rule.inbound["container_apps/AllowAppIngressInbound"].destination_port_ranges == toset(["8443", "8444", "30000-32767"]) &&
       azurerm_network_security_rule.inbound["container_apps/DenyVirtualNetworkInbound"].access == "Deny"
     )
-    error_message = "The app's ingress must be open to the allowed (Cloudflare) ranges only, on the exposed port and the node-port range."
+    error_message = "The apps' ingress must be open to the allowed (Cloudflare) ranges only, on every exposed port and the node-port range."
   }
 
   assert {
@@ -122,16 +122,17 @@ run "database_is_private_and_smallest_size" {
   }
 
   variables {
-    server_name            = "psql-loginapp-test-abc123"
-    postgresql_version     = "18"
-    sku_name               = "B_Standard_B1ms"
-    storage_mb             = 32768
-    backup_retention_days  = 7
-    administrator_login    = "loginapp_admin"
-    administrator_password = "not-a-real-password"
-    database_name          = "loginapp"
-    delegated_subnet_id    = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.Network/virtualNetworks/vnet/subnets/snet-psql"
-    virtual_network_id     = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.Network/virtualNetworks/vnet"
+    server_name               = "psql-loginapp-test-abc123"
+    postgresql_version        = "18"
+    sku_name                  = "B_Standard_B1ms"
+    storage_mb                = 32768
+    backup_retention_days     = 7
+    administrator_login       = "loginapp_admin"
+    administrator_password    = "not-a-real-password"
+    database_name             = "loginapp"
+    additional_database_names = { grocery = "grocery" }
+    delegated_subnet_id       = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.Network/virtualNetworks/vnet/subnets/snet-psql"
+    virtual_network_id        = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.Network/virtualNetworks/vnet"
   }
 
   assert {
@@ -146,6 +147,15 @@ run "database_is_private_and_smallest_size" {
   assert {
     condition     = azurerm_postgresql_flexible_server_database.this.name == "loginapp"
     error_message = "The database must be called loginapp."
+  }
+
+  assert {
+    condition = (
+      azurerm_postgresql_flexible_server_database.additional["grocery"].name == "grocery" &&
+      azurerm_postgresql_flexible_server_database.additional["grocery"].charset == "UTF8" &&
+      output.additional_database_names == { grocery = "grocery" }
+    )
+    error_message = "Each additional instance gets its own UTF-8 database on the same server."
   }
 
   assert {
@@ -295,26 +305,38 @@ run "container_app_is_public_single_replica_and_terminates_tls" {
     infrastructure_subnet_id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.Network/virtualNetworks/vnet/subnets/snet-aca"
     log_analytics_workspace_id         = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.OperationalInsights/workspaces/log-test"
     deploy_app                         = true
-    app_name                           = "ca-loginapp-test"
     app_image                          = "crloginapptestabc123.azurecr.io/login-app:1a2b3c4"
     app_identity_id                    = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-app"
     registry_server                    = "crloginapptestabc123.azurecr.io"
     app_target_port                    = 443
-    app_exposed_port                   = 8443
     app_cpu                            = 0.5
     app_memory                         = "1Gi"
     app_min_replicas                   = 1
     app_max_replicas                   = 1
-    app_secrets                        = { db-connection-string = "https://kv-test.vault.azure.net/secrets/ConnectionStrings--DefaultConnection" }
-    app_secret_environment_variables   = { ConnectionStrings__DefaultConnection = "db-connection-string" }
-    app_environment_variables          = { ASPNETCORE_ENVIRONMENT = "Production" }
-    ingress_allowed_cidrs              = { cloudflare-0 = "173.245.48.0/20" }
+    apps = {
+      main = {
+        name                  = "ca-loginapp-test"
+        exposed_port          = 8443
+        secrets               = { db-connection-string = "https://kv-test.vault.azure.net/secrets/ConnectionStrings--DefaultConnection" }
+        environment_variables = {}
+      }
+      grocery = {
+        name                  = "ca-loginapp-test-grocery"
+        exposed_port          = 8444
+        secrets               = { db-connection-string = "https://kv-test.vault.azure.net/secrets/grocery-db-connection-string" }
+        environment_variables = { Jwt__Audience = "grocery.example.com" }
+      }
+    }
+    app_secret_environment_variables = { ConnectionStrings__DefaultConnection = "db-connection-string" }
+    app_environment_variables        = { ASPNETCORE_ENVIRONMENT = "Production" }
+    ingress_allowed_cidrs            = { cloudflare-0 = "173.245.48.0/20" }
     db_bootstrap = {
       job_name                  = "caj-loginapp-test-dbinit"
       image                     = "mcr.microsoft.com/azurelinux/base/postgres:16.15-1-azl3.0.20261027"
       identity_id               = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-dbinit"
       postgresql_host           = "psql-loginapp-test-abc123.postgres.database.azure.com"
       database_name             = "loginapp"
+      app_databases             = ["loginapp", "grocery"]
       administrator_login       = "loginapp_admin"
       administrator_password_id = "https://kv-test.vault.azure.net/secrets/postgresql-admin-password"
       app_role                  = "loginapp_app"
@@ -333,32 +355,32 @@ run "container_app_is_public_single_replica_and_terminates_tls" {
   }
 
   assert {
-    condition     = azurerm_container_app.this[0].template[0].min_replicas == 1 && azurerm_container_app.this[0].template[0].max_replicas == 1
+    condition     = azurerm_container_app.this["main"].template[0].min_replicas == 1 && azurerm_container_app.this["main"].template[0].max_replicas == 1
     error_message = "The demo must run exactly one replica."
   }
 
   assert {
     condition = (
-      azurerm_container_app.this[0].ingress[0].external_enabled &&
-      azurerm_container_app.this[0].ingress[0].transport == "tcp" &&
-      azurerm_container_app.this[0].ingress[0].exposed_port == 8443 &&
-      azurerm_container_app.this[0].ingress[0].target_port == 443
+      azurerm_container_app.this["main"].ingress[0].external_enabled &&
+      azurerm_container_app.this["main"].ingress[0].transport == "tcp" &&
+      azurerm_container_app.this["main"].ingress[0].exposed_port == 8443 &&
+      azurerm_container_app.this["main"].ingress[0].target_port == 443
     )
     error_message = "The ingress must pass TCP from 8443 straight through to the container on 443, so TLS ends in the container."
   }
 
   assert {
     condition = (
-      length(azurerm_container_app.this[0].ingress[0].ip_security_restriction) == 1 &&
-      azurerm_container_app.this[0].ingress[0].ip_security_restriction[0].action == "Allow" &&
-      azurerm_container_app.this[0].ingress[0].ip_security_restriction[0].ip_address_range == "173.245.48.0/20"
+      length(azurerm_container_app.this["main"].ingress[0].ip_security_restriction) == 1 &&
+      azurerm_container_app.this["main"].ingress[0].ip_security_restriction[0].action == "Allow" &&
+      azurerm_container_app.this["main"].ingress[0].ip_security_restriction[0].ip_address_range == "173.245.48.0/20"
     )
     error_message = "The ingress must allow only the listed ranges."
   }
 
   assert {
     condition = contains(
-      [for env in azurerm_container_app.this[0].template[0].container[0].env : env.value if env.name == "ASPNETCORE_URLS"],
+      [for env in azurerm_container_app.this["main"].template[0].container[0].env : env.value if env.name == "ASPNETCORE_URLS"],
       "https://+:443",
     )
     error_message = "Kestrel must listen for HTTPS only, on the target port."
@@ -366,16 +388,16 @@ run "container_app_is_public_single_replica_and_terminates_tls" {
 
   assert {
     condition = (
-      azurerm_container_app.this[0].template[0].container[0].startup_probe[0].transport == "HTTPS" &&
-      azurerm_container_app.this[0].template[0].container[0].liveness_probe[0].transport == "HTTPS" &&
-      azurerm_container_app.this[0].template[0].container[0].readiness_probe[0].transport == "HTTPS" &&
-      azurerm_container_app.this[0].template[0].container[0].readiness_probe[0].port == 443
+      azurerm_container_app.this["main"].template[0].container[0].startup_probe[0].transport == "HTTPS" &&
+      azurerm_container_app.this["main"].template[0].container[0].liveness_probe[0].transport == "HTTPS" &&
+      azurerm_container_app.this["main"].template[0].container[0].readiness_probe[0].transport == "HTTPS" &&
+      azurerm_container_app.this["main"].template[0].container[0].readiness_probe[0].port == 443
     )
     error_message = "The probes must use HTTPS on the target port: nothing listens on plain HTTP."
   }
 
   assert {
-    condition     = one([for secret in azurerm_container_app.this[0].secret : secret.key_vault_secret_id]) == "https://kv-test.vault.azure.net/secrets/ConnectionStrings--DefaultConnection"
+    condition     = one([for secret in azurerm_container_app.this["main"].secret : secret.key_vault_secret_id]) == "https://kv-test.vault.azure.net/secrets/ConnectionStrings--DefaultConnection"
     error_message = "App secrets must be Key Vault references, not inline values."
   }
 
@@ -386,6 +408,77 @@ run "container_app_is_public_single_replica_and_terminates_tls" {
     )
     error_message = "The bootstrap job must be manual and verify the server's TLS certificate."
   }
+
+  assert {
+    condition     = contains([for env in azurerm_container_app_job.db_bootstrap.template[0].container[0].env : env.value if env.name == "APP_DATABASES"], "loginapp grocery")
+    error_message = "The bootstrap job must let the app's role into every instance's database."
+  }
+
+  assert {
+    condition = (
+      azurerm_container_app.this["grocery"].name == "ca-loginapp-test-grocery" &&
+      azurerm_container_app.this["grocery"].ingress[0].exposed_port == 8444 &&
+      azurerm_container_app.this["grocery"].template[0].container[0].image == azurerm_container_app.this["main"].template[0].container[0].image
+    )
+    error_message = "A second app runs the same image on its own exposed port."
+  }
+
+  assert {
+    condition = (
+      one([for secret in azurerm_container_app.this["grocery"].secret : secret.key_vault_secret_id]) == "https://kv-test.vault.azure.net/secrets/grocery-db-connection-string" &&
+      contains([for env in azurerm_container_app.this["grocery"].template[0].container[0].env : env.value if env.name == "Jwt__Audience"], "grocery.example.com") &&
+      contains([for env in azurerm_container_app.this["grocery"].template[0].container[0].env : env.value if env.name == "ASPNETCORE_ENVIRONMENT"], "Production") &&
+      length([for env in azurerm_container_app.this["main"].template[0].container[0].env : env if env.name == "Jwt__Audience"]) == 0
+    )
+    error_message = "Each app gets its own secrets and extra variables on top of the shared ones."
+  }
+
+  assert {
+    condition     = output.app_names == { main = "ca-loginapp-test", grocery = "ca-loginapp-test-grocery" }
+    error_message = "The outputs must name every app, keyed like apps."
+  }
+}
+
+run "container_apps_cannot_share_an_exposed_port" {
+  command = plan
+
+  module {
+    source = "./modules/container-app"
+  }
+
+  variables {
+    environment_name                   = "cae-loginapp-test"
+    infrastructure_resource_group_name = "rg-loginapp-test-cae-managed"
+    infrastructure_subnet_id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.Network/virtualNetworks/vnet/subnets/snet-aca"
+    log_analytics_workspace_id         = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.OperationalInsights/workspaces/log-test"
+    deploy_app                         = false
+    app_identity_id                    = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-app"
+    registry_server                    = "crloginapptestabc123.azurecr.io"
+    app_target_port                    = 443
+    app_cpu                            = 0.5
+    app_memory                         = "1Gi"
+    app_min_replicas                   = 1
+    app_max_replicas                   = 1
+    apps = {
+      main    = { name = "ca-loginapp-test", exposed_port = 8443, secrets = {}, environment_variables = {} }
+      grocery = { name = "ca-loginapp-test-grocery", exposed_port = 8443, secrets = {}, environment_variables = {} }
+    }
+    ingress_allowed_cidrs = {}
+    db_bootstrap = {
+      job_name                  = "caj-loginapp-test-dbinit"
+      image                     = "mcr.microsoft.com/azurelinux/base/postgres:16.15-1-azl3.0.20261027"
+      identity_id               = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-dbinit"
+      postgresql_host           = "psql-loginapp-test-abc123.postgres.database.azure.com"
+      database_name             = "loginapp"
+      app_databases             = ["loginapp"]
+      administrator_login       = "loginapp_admin"
+      administrator_password_id = "https://kv-test.vault.azure.net/secrets/postgresql-admin-password"
+      app_role                  = "loginapp_app"
+      app_password_id           = "https://kv-test.vault.azure.net/secrets/postgresql-app-password"
+    }
+  }
+
+  expect_failures = [var.apps]
 }
 
 run "container_app_waits_for_an_image" {
@@ -401,11 +494,10 @@ run "container_app_waits_for_an_image" {
     infrastructure_subnet_id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.Network/virtualNetworks/vnet/subnets/snet-aca"
     log_analytics_workspace_id         = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.OperationalInsights/workspaces/log-test"
     deploy_app                         = false
-    app_name                           = "ca-loginapp-test"
     app_identity_id                    = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-app"
     registry_server                    = "crloginapptestabc123.azurecr.io"
     app_target_port                    = 443
-    app_exposed_port                   = 8443
+    apps                               = { main = { name = "ca-loginapp-test", exposed_port = 8443, secrets = {}, environment_variables = {} } }
     app_cpu                            = 0.5
     app_memory                         = "1Gi"
     app_min_replicas                   = 1
@@ -417,6 +509,7 @@ run "container_app_waits_for_an_image" {
       identity_id               = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-dbinit"
       postgresql_host           = "psql-loginapp-test-abc123.postgres.database.azure.com"
       database_name             = "loginapp"
+      app_databases             = ["loginapp"]
       administrator_login       = "loginapp_admin"
       administrator_password_id = "https://kv-test.vault.azure.net/secrets/postgresql-admin-password"
       app_role                  = "loginapp_app"
@@ -425,7 +518,7 @@ run "container_app_waits_for_an_image" {
   }
 
   assert {
-    condition     = length(azurerm_container_app.this) == 0 && output.app_id == null
+    condition     = length(azurerm_container_app.this) == 0 && length(output.app_ids) == 0
     error_message = "No Container App may be created before its image exists."
   }
 }

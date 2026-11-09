@@ -42,22 +42,34 @@ variable "log_analytics_workspace_id" {
 # ---------------------------------------------------------------------------------------------------------------------
 
 variable "deploy_app" {
-  description = "Whether to create the Container App. False until an image exists in the registry."
+  description = "Whether to create the Container Apps. False until an image exists in the registry."
   type        = bool
 }
 
-variable "app_name" {
-  description = "Name of the Container App (2-32 lowercase letters, digits and hyphens). It is also the first label of the app's FQDN."
-  type        = string
+variable "apps" {
+  description = "The app's instances, keyed by a short, stable name: each becomes a Container App running app_image with the shared settings below. name: the Container App's name (2-32 lowercase letters, digits and hyphens; also the first label of its FQDN). exposed_port: its public TCP port on the environment's IP, unique across the environment. secrets: its Container App secrets, as a map of secret name (lowercase, digits, hyphens) to a versionless Key Vault secret URI; app_secret_environment_variables refers to them by name. environment_variables: plain variables of its own, added to (and overriding) app_environment_variables."
+  type = map(object({
+    name                  = string
+    exposed_port          = number
+    secrets               = map(string)
+    environment_variables = map(string)
+  }))
 
   validation {
-    condition     = can(regex("^[a-z][a-z0-9-]{0,30}[a-z0-9]$", var.app_name)) && !strcontains(var.app_name, "--")
+    condition = alltrue([
+      for app in values(var.apps) : can(regex("^[a-z][a-z0-9-]{0,30}[a-z0-9]$", app.name)) && !strcontains(app.name, "--")
+    ])
     error_message = "Container App names are 2-32 lowercase letters, digits and single hyphens, starting with a letter."
+  }
+
+  validation {
+    condition     = length(distinct([for app in values(var.apps) : app.exposed_port])) == length(var.apps) && length(distinct([for app in values(var.apps) : app.name])) == length(var.apps)
+    error_message = "Every app needs its own name and exposed port: TCP ingress can't share a port on the environment's IP."
   }
 }
 
 variable "app_image" {
-  description = "Full image reference, e.g. crexample.azurecr.io/login-app:1a2b3c4. Ignored while deploy_app is false."
+  description = "Full image reference, e.g. crexample.azurecr.io/login-app:1a2b3c4, run by every app. Ignored while deploy_app is false."
   type        = string
   default     = null
 }
@@ -74,11 +86,6 @@ variable "registry_server" {
 
 variable "app_target_port" {
   description = "Port the container listens on for HTTPS. The ingress, health probes and ASPNETCORE_URLS all follow it."
-  type        = number
-}
-
-variable "app_exposed_port" {
-  description = "Public TCP port of the app's ingress on the environment's IP. Must be unique across the environment."
   type        = number
 }
 
@@ -102,20 +109,14 @@ variable "app_max_replicas" {
   type        = number
 }
 
-variable "app_secrets" {
-  description = "Container App secrets backed by Key Vault: map of secret name (lowercase, digits, hyphens) to a versionless Key Vault secret URI."
-  type        = map(string)
-  default     = {}
-}
-
 variable "app_secret_environment_variables" {
-  description = "Environment variables that take their value from app_secrets: map of variable name to secret name."
+  description = "Environment variables that take their value from each app's secrets, the same for every app: map of variable name to secret name. Every app's secrets must define these names."
   type        = map(string)
   default     = {}
 }
 
 variable "app_environment_variables" {
-  description = "Plain (non-secret) environment variables for the app container."
+  description = "Plain (non-secret) environment variables for every app's container."
   type        = map(string)
   default     = {}
 }
@@ -142,13 +143,14 @@ variable "readiness_probe_path" {
 # ---------------------------------------------------------------------------------------------------------------------
 
 variable "db_bootstrap" {
-  description = "Manually triggered job that creates the app's PostgreSQL role. Secrets are versionless Key Vault secret URIs."
+  description = "Manually triggered job that creates the app's PostgreSQL role and lets it into app_databases (every instance's database). database_name is the one the job connects to first. Secrets are versionless Key Vault secret URIs."
   type = object({
     job_name                  = string
     image                     = string
     identity_id               = string
     postgresql_host           = string
     database_name             = string
+    app_databases             = list(string)
     administrator_login       = string
     administrator_password_id = string
     app_role                  = string

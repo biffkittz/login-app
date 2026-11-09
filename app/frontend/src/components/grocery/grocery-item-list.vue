@@ -13,9 +13,11 @@ interface Props {
   checkedIds: ReadonlySet<string>
   /** Names the list for assistive technology, e.g. "Costco items". */
   label: string
+  /** Some items on the page have pictures: line every name up as if all had one. */
+  pictureColumn?: boolean
 }
 
-const { items, checkedIds, label } = defineProps<Props>()
+const { items, checkedIds, label, pictureColumn = false } = defineProps<Props>()
 
 const emit = defineEmits<{
   check: [item: GroceryItem]
@@ -74,6 +76,7 @@ async function moveBy(index: number, delta: -1 | 1): Promise<void> {
         :dragging="draggingIndex === index"
         :checked="checkedIds.has(item.id)"
         :move-hint-id="moveHintId"
+        :picture-column="pictureColumn"
         @check="emit('check', item)"
         @edit="emit('edit', item)"
         @drag-start="start($event, index)"

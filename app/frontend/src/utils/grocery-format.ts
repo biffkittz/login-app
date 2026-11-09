@@ -58,3 +58,13 @@ export function describeEditor(
   }
   return item.lastModifiedByName ?? 'a former member'
 }
+
+/**
+ * Normalizes an item name the way the server decides which items share a picture: spacing and capitalization don't
+ * count, so "oat milk" and "Oat  Milk" are one name. Mirrors `GroceryImageNames.KeyFor` in the backend.
+ *
+ * @param name - An item name.
+ */
+export function pictureNameKey(name: string): string {
+  return name.trim().split(/\s+/).join(' ').toUpperCase()
+}

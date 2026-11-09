@@ -102,7 +102,7 @@ variable "dns_zone_name" {
 }
 
 variable "app_hostname" {
-  description = "Public host name of the app. Terraform creates a proxied A record for it in the Cloudflare zone."
+  description = "Public host name of the app's main instance. Terraform creates a proxied A record for it in the Cloudflare zone. Further instances are in additional_app_instances."
   type        = string
   default     = "app.biffkittz.com"
 
@@ -152,6 +152,18 @@ variable "tls_certificate_pfx_password" {
   sensitive   = true
 }
 
+variable "gemini_api_key" {
+  description = "Google Gemini API key with which the app draws pictures of grocery items. Gemini's image models have no free tier, so the key's Google Cloud project needs billing. Null leaves pictures unavailable (the app's switch for them says so). Pass it as TF_VAR_gemini_api_key; never put it in a tfvars file."
+  type        = string
+  default     = null
+  sensitive   = true
+
+  validation {
+    condition     = var.gemini_api_key == null || try(trimspace(var.gemini_api_key) != "", false)
+    error_message = "gemini_api_key must be null or a key; an empty string would look configured to Terraform but not to the app."
+  }
+}
+
 # ---------------------------------------------------------------------------------------------------------------------
 # Container registry and the Container App
 # ---------------------------------------------------------------------------------------------------------------------
@@ -169,7 +181,7 @@ variable "app_image_repository" {
 }
 
 variable "app_image_tag" {
-  description = "Tag of the app image to run, e.g. the short commit SHA. Null (the default) skips creating the Container App until a first image has been pushed; see docs/DEPLOYMENT.md."
+  description = "Tag of the app image every instance runs, e.g. the short commit SHA. Null (the default) skips creating the Container Apps until a first image has been pushed; see docs/DEPLOYMENT.md."
   type        = string
   default     = null
 
@@ -191,13 +203,56 @@ variable "app_target_port" {
 }
 
 variable "app_exposed_port" {
-  description = "Public TCP port of the environment that Cloudflare connects to. Not 80 or 443: the environment's own HTTP ingress holds those (Azure answers \"exposedPort already in use\"). Terraform adds a Cloudflare Origin Rule so visitors still use 443."
+  description = "Public TCP port of the environment that Cloudflare connects to for the main instance (additional instances have their own). Not 80 or 443: the environment's own HTTP ingress holds those (Azure answers \"exposedPort already in use\"). Terraform adds a Cloudflare Origin Rule so visitors still use 443."
   type        = number
   default     = 8443
 
   validation {
     condition     = var.app_exposed_port >= 1 && var.app_exposed_port <= 65535 && !contains([80, 443, 36985], var.app_exposed_port)
     error_message = "app_exposed_port must be a TCP port other than 80 and 443 (the environment's HTTP ingress) and 36985 (Container Apps health checks)."
+  }
+}
+
+variable "additional_app_instances" {
+  description = "More instances of the app, keyed by a short, stable name (e.g. grocery). Each runs the main instance's image with its identity, Key Vault secrets and settings, but has its own Container App (<main app name>-<key>), public host name (a proxied DNS record and an Origin Rule), exposed port and database on the same PostgreSQL server, so its list and accounts are its own. After adding one, run the database bootstrap job (docs/DEPLOYMENT.md)."
+  type = map(object({
+    hostname      = string
+    exposed_port  = number
+    database_name = string
+  }))
+  default = {}
+
+  validation {
+    condition     = alltrue([for key in keys(var.additional_app_instances) : can(regex("^[a-z][a-z0-9]{1,11}$", key)) && key != "main"])
+    error_message = "Instance keys are 2-12 lowercase letters or digits, starting with a letter, and not \"main\" (the instance at app_hostname)."
+  }
+
+  validation {
+    condition = (
+      alltrue([for instance in values(var.additional_app_instances) : endswith(lower(instance.hostname), ".${lower(var.dns_zone_name)}")]) &&
+      length(distinct(concat([lower(var.app_hostname)], [for instance in values(var.additional_app_instances) : lower(instance.hostname)]))) == length(var.additional_app_instances) + 1
+    )
+    error_message = "Each instance's hostname must be a name inside dns_zone_name, different from app_hostname and from the other instances'."
+  }
+
+  validation {
+    condition = (
+      alltrue([for instance in values(var.additional_app_instances) : instance.exposed_port >= 1 && instance.exposed_port <= 65535 && !contains([80, 443, 36985], instance.exposed_port)]) &&
+      length(distinct(concat([var.app_exposed_port], [for instance in values(var.additional_app_instances) : instance.exposed_port]))) == length(var.additional_app_instances) + 1
+    )
+    error_message = "Each instance's exposed_port must be a TCP port other than 80, 443 and 36985 (see app_exposed_port), and differ from app_exposed_port and the other instances': TCP ingress can't share a port."
+  }
+
+  validation {
+    condition = (
+      alltrue([
+        for instance in values(var.additional_app_instances) :
+        can(regex("^[a-z][a-z0-9_]{0,62}$", instance.database_name)) && !startswith(instance.database_name, "pg_") &&
+        !contains(["postgres", "azure_maintenance", "azure_sys", "template0", "template1"], instance.database_name)
+      ]) &&
+      length(distinct(concat([var.database_name], [for instance in values(var.additional_app_instances) : instance.database_name]))) == length(var.additional_app_instances) + 1
+    )
+    error_message = "Each instance's database_name must be a lowercase identifier that isn't a system database, and differ from database_name and the other instances': every instance keeps its own data."
   }
 }
 
@@ -316,7 +371,7 @@ variable "postgresql_app_role" {
 }
 
 variable "database_name" {
-  description = "Name of the application database."
+  description = "Name of the main instance's database. Additional instances name theirs in additional_app_instances."
   type        = string
   default     = "loginapp"
 }

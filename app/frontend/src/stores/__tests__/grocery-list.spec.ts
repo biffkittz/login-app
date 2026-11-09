@@ -4,7 +4,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@/services/api-error'
 import * as groceryApi from '@/services/grocery-api'
 import { createGroceryListHub, type GroceryListHubHandlers } from '@/services/grocery-list-hub'
-import type { GroceryItem, GroceryList, GroceryListChange } from '@/types/grocery'
+import type {
+  GroceryItem,
+  GroceryList,
+  GroceryListChange,
+  GroceryListSettings,
+} from '@/types/grocery'
 import { makeItem } from '@/utils/__tests__/test-items'
 
 import { useAuthStore } from '../auth'
@@ -23,6 +28,16 @@ function deleted(...itemIds: string[]): GroceryListChange {
 
 const STORES = ['Whole Foods', 'Indian Grocery', 'Teeter/Lion', 'Costco']
 
+const PICTURES_ON: GroceryListSettings = {
+  version: 1,
+  imageGenerationEnabled: true,
+  imageGenerationAvailable: true,
+}
+
+function listOf(items: GroceryItem[], settings: GroceryListSettings = PICTURES_ON): GroceryList {
+  return { items, stores: STORES, settings }
+}
+
 const networkError = () => new ApiError("We couldn't reach the server.", { kind: 'network' })
 
 function signIn(): void {
@@ -37,7 +52,7 @@ function signIn(): void {
 }
 
 async function storeWith(...items: GroceryItem[]): Promise<ReturnType<typeof useGroceryListStore>> {
-  vi.mocked(groceryApi.getList).mockResolvedValue({ items, stores: STORES })
+  vi.mocked(groceryApi.getList).mockResolvedValue(listOf(items))
   const store = useGroceryListStore()
   await store.load()
   return store
@@ -96,7 +111,7 @@ describe('grocery list store', () => {
       // Sent after the snapshot was read, but received before the snapshot arrives.
       store.applyChange(saved(makeItem({ id: 'b', version: 1, position: 5 })))
       store.applyChange(deleted('a'))
-      answer({ items: [makeItem({ id: 'a', version: 1 })], stores: STORES })
+      answer(listOf([makeItem({ id: 'a', version: 1 })]))
       await reload
 
       expect(ids(store)).toEqual(['b'])
@@ -226,6 +241,29 @@ describe('grocery list store', () => {
       )
     })
 
+    it('shows a new item waiting for its picture while pictures are on', async () => {
+      const store = await storeWith()
+      vi.mocked(groceryApi.createItem).mockReturnValue(new Promise(() => {}))
+
+      void store.addItem({ name: 'Milk' })
+
+      expect(store.items[0]).toMatchObject({ imageUrl: null, imagePending: true })
+    })
+
+    it.each([
+      ['off', { ...PICTURES_ON, imageGenerationEnabled: false }],
+      ['unavailable', { ...PICTURES_ON, imageGenerationAvailable: false }],
+    ])('expects no picture for a new item while pictures are %s', async (_, settings) => {
+      vi.mocked(groceryApi.getList).mockResolvedValue(listOf([], settings))
+      const store = useGroceryListStore()
+      await store.load()
+      vi.mocked(groceryApi.createItem).mockReturnValue(new Promise(() => {}))
+
+      void store.addItem({ name: 'Milk' })
+
+      expect(store.items[0]).toMatchObject({ imageUrl: null, imagePending: false })
+    })
+
     it('takes the item off the list again when the server refuses it', async () => {
       const store = await storeWith()
       vi.mocked(groceryApi.createItem).mockRejectedValue(
@@ -257,6 +295,94 @@ describe('grocery list store', () => {
       await expect(store.updateItem('a', { name: 'Oat milk' })).rejects.toBeInstanceOf(ApiError)
 
       expect(store.items[0]).toEqual(original)
+    })
+  })
+
+  describe('pictures of renamed items', () => {
+    const pictured = () =>
+      makeItem({ id: 'a', name: 'Oat milk', imageUrl: '/api/grocery-list/images/1' })
+
+    it('expects a new picture when the name really changes', async () => {
+      const store = await storeWith(pictured())
+      vi.mocked(groceryApi.updateItem).mockReturnValue(new Promise(() => {}))
+
+      void store.updateItem('a', { name: 'Almond milk' })
+
+      expect(store.items[0]).toMatchObject({ imageUrl: null, imagePending: true })
+    })
+
+    it.each([
+      ['its capitalization or spacing changes', { name: ' OAT   milk ' }],
+      ['other details change', { quantity: '2' }],
+    ])('keeps the picture when %s', async (_, changes) => {
+      const store = await storeWith(pictured())
+      vi.mocked(groceryApi.updateItem).mockReturnValue(new Promise(() => {}))
+
+      void store.updateItem('a', changes)
+
+      expect(store.items[0]).toMatchObject({
+        imageUrl: '/api/grocery-list/images/1',
+        imagePending: false,
+      })
+    })
+  })
+
+  describe('settings', () => {
+    it('takes the settings from the list', async () => {
+      const store = await storeWith()
+
+      expect(store.settings).toEqual(PICTURES_ON)
+    })
+
+    it('keeps the newest settings, whatever order they arrive in', async () => {
+      const store = await storeWith()
+      const off = { ...PICTURES_ON, version: 3, imageGenerationEnabled: false }
+
+      store.applySettings(off)
+      store.applySettings({ ...PICTURES_ON, version: 2 })
+
+      expect(store.settings).toEqual(off)
+    })
+
+    it('turns pictures off at once, then settles on the server’s answer', async () => {
+      const store = await storeWith()
+      let answer!: (settings: GroceryListSettings) => void
+      vi.mocked(groceryApi.updateSettings).mockReturnValue(
+        new Promise((resolve) => (answer = resolve)),
+      )
+
+      const turningOff = store.setImageGeneration(false)
+
+      expect(store.settings?.imageGenerationEnabled).toBe(false)
+      expect(groceryApi.updateSettings).toHaveBeenCalledWith({ imageGenerationEnabled: false })
+      answer({ ...PICTURES_ON, version: 2, imageGenerationEnabled: false })
+      await turningOff
+      expect(store.settings).toEqual({ ...PICTURES_ON, version: 2, imageGenerationEnabled: false })
+    })
+
+    it('puts the switch back when the server refuses', async () => {
+      const store = await storeWith()
+      vi.mocked(groceryApi.updateSettings).mockRejectedValue(networkError())
+
+      await expect(store.setImageGeneration(false)).rejects.toBeInstanceOf(ApiError)
+
+      expect(store.settings).toEqual(PICTURES_ON)
+    })
+
+    it('sends nothing when the setting already has that value', async () => {
+      const store = await storeWith()
+
+      await store.setImageGeneration(true)
+
+      expect(groceryApi.updateSettings).not.toHaveBeenCalled()
+    })
+
+    it('forgets the settings when the user signs out', async () => {
+      const store = await storeWith()
+
+      useAuthStore().expireSession()
+
+      await vi.waitFor(() => expect(store.settings).toBeNull())
     })
   })
 
@@ -336,7 +462,7 @@ describe('grocery list store', () => {
     }
 
     it('applies changes pushed by the hub', async () => {
-      vi.mocked(groceryApi.getList).mockResolvedValue({ items: [], stores: STORES })
+      vi.mocked(groceryApi.getList).mockResolvedValue(listOf([]))
       const hub = connectWithFakeHub()
       const store = useGroceryListStore()
       await vi.waitFor(() => expect(store.loadState).toBe('ready'))
@@ -346,15 +472,23 @@ describe('grocery list store', () => {
       expect(ids(store)).toEqual(['pushed'])
     })
 
-    it('reloads the list on every (re)connection, to catch up on missed changes', async () => {
-      vi.mocked(groceryApi.getList).mockResolvedValue({ items: [], stores: STORES })
+    it('applies settings pushed by the hub', async () => {
+      vi.mocked(groceryApi.getList).mockResolvedValue(listOf([]))
       const hub = connectWithFakeHub()
       const store = useGroceryListStore()
       await vi.waitFor(() => expect(store.loadState).toBe('ready'))
-      vi.mocked(groceryApi.getList).mockResolvedValue({
-        items: [makeItem({ id: 'missed' })],
-        stores: STORES,
-      })
+
+      hub.onSettingsChange({ ...PICTURES_ON, version: 2, imageGenerationEnabled: false })
+
+      expect(store.settings?.imageGenerationEnabled).toBe(false)
+    })
+
+    it('reloads the list on every (re)connection, to catch up on missed changes', async () => {
+      vi.mocked(groceryApi.getList).mockResolvedValue(listOf([]))
+      const hub = connectWithFakeHub()
+      const store = useGroceryListStore()
+      await vi.waitFor(() => expect(store.loadState).toBe('ready'))
+      vi.mocked(groceryApi.getList).mockResolvedValue(listOf([makeItem({ id: 'missed' })]))
 
       hub.onConnected()
 
@@ -362,7 +496,7 @@ describe('grocery list store', () => {
     })
 
     it('checks in over HTTP while the live connection is down, which reveals an ended session', async () => {
-      vi.mocked(groceryApi.getList).mockResolvedValue({ items: [], stores: STORES })
+      vi.mocked(groceryApi.getList).mockResolvedValue(listOf([]))
       const hub = connectWithFakeHub()
       const store = useGroceryListStore()
       await vi.waitFor(() => expect(store.loadState).toBe('ready'))
@@ -378,7 +512,7 @@ describe('grocery list store', () => {
 
     it('keeps the list fresh over HTTP every 30 seconds until the live connection is back', async () => {
       vi.useFakeTimers()
-      vi.mocked(groceryApi.getList).mockResolvedValue({ items: [], stores: STORES })
+      vi.mocked(groceryApi.getList).mockResolvedValue(listOf([]))
       const hub = connectWithFakeHub()
       await vi.advanceTimersByTimeAsync(0)
       vi.mocked(groceryApi.getList).mockClear()
@@ -394,7 +528,7 @@ describe('grocery list store', () => {
     })
 
     it('reports the connection state', () => {
-      vi.mocked(groceryApi.getList).mockResolvedValue({ items: [], stores: STORES })
+      vi.mocked(groceryApi.getList).mockResolvedValue(listOf([]))
       const hub = connectWithFakeHub()
 
       hub.onStateChange('reconnecting')

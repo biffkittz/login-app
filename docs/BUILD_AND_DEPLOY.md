@@ -35,7 +35,7 @@ commit it (it is git-ignored).
 | Prerequisites | checks for the .NET 10 SDK and Node 22+ | |
 | Frontend | `npm ci`, `npm run test`, `npm run build` (vue-tsc + Vite) | `app/frontend/dist` |
 | Combine | copy `dist/` into `backend/wwwroot/` | `app/backend/wwwroot` |
-| Backend | `dotnet test`, then `dotnet publish -c Release` | `app/artifacts/site` |
+| Backend | `dotnet test`, then `dotnet publish -c Release --use-current-runtime` | `app/artifacts/site` |
 | Run | `dotnet LoginApp.Api.dll` | <http://localhost:8080> |
 
 ```bash
@@ -50,6 +50,10 @@ commit it (it is git-ignored).
 Release builds treat compiler, analyzer and code-style warnings as **errors**, so the script doubles as the quality
 gate. Run it before opening a pull request. It can run from any directory and stops at the first failing step.
 
+The site is published for the machine that builds it (`--use-current-runtime`). SkiaSharp, which shrinks the AI
+pictures of items, brings a native library for every platform it supports; a portable build would carry all of them,
+over 450 MB, where one platform needs 12.
+
 By default the script runs in the **Development** environment, so it uses the local database from
 `appsettings.Development.json` (see [DEVELOPMENT.md](DEVELOPMENT.md#4-local-database)). It binds to `localhost`
 only; WSL forwards that port to Windows, so browse to <http://localhost:8080> from Windows.
@@ -61,7 +65,7 @@ only; WSL forwards that port to Windows, so browse to <http://localhost:8080> fr
 | Stage | Base image | Does |
 | --- | --- | --- |
 | `frontend-build` | `node:24-slim` | `npm ci` (cached by lockfile), `npm run build` |
-| `backend-build` | `mcr.microsoft.com/dotnet/sdk:10.0` | `dotnet restore` (cached by project files), copies the SPA into `wwwroot`, `dotnet publish -c Release` |
+| `backend-build` | `mcr.microsoft.com/dotnet/sdk:10.0` | `dotnet restore` (cached by project files), copies the SPA into `wwwroot`, `dotnet publish -c Release` for the image's own platform (`--use-current-runtime`: linux-x64, or linux-arm64 for an Arm image), which keeps other platforms' native libraries out |
 | `final` | `mcr.microsoft.com/dotnet/aspnet:10.0` (Ubuntu 24.04) | Only the published site; runs `dotnet LoginApp.Api.dll` |
 
 The runtime image contains no SDK, no Node.js, no source code, no tests and no development settings. `.dockerignore`
@@ -109,8 +113,9 @@ Safari does not.
 ## 3. Deploying to Azure Container Apps
 
 The Terraform project in [`infra/`](../infra/README.md) creates the Azure infrastructure and deploys the image. It
-covers the network, the Container Apps environment and app, PostgreSQL, Key Vault, the registry, and the Cloudflare
-DNS record and Authenticated Origin Pulls. **[infra/docs/DEPLOYMENT.md](../infra/docs/DEPLOYMENT.md) is the step-by-step
+covers the network, the Container Apps environment and a Container App per instance of the app (app.biffkittz.com
+and grocery.biffkittz.com, the same image), PostgreSQL with a database per instance, Key Vault, the registry, and the
+Cloudflare DNS records, Origin Rules and Authenticated Origin Pulls. **[infra/docs/DEPLOYMENT.md](../infra/docs/DEPLOYMENT.md) is the step-by-step
 guide**; this section describes what the app expects from that infrastructure.
 
 ### Request path
@@ -132,14 +137,17 @@ any other connection. SignalR's keep-alive pings every 15 seconds stop either fr
 | The app needs | How `infra/` provides it |
 | --- | --- |
 | The image | `<registry>.azurecr.io/login-app:<tag>`, pulled with the app's user-assigned identity (AcrPull). `app_image_tag` in `infra/environments/demo.tfvars` selects the tag |
-| `ConnectionStrings__DefaultConnection` | Key Vault secret `ConnectionStrings--DefaultConnection` (as a Container Apps Key Vault reference): `Host=<server>.postgres.database.azure.com;Port=5432;Database=loginapp;Username=loginapp_app;Password=…;SSL Mode=VerifyFull` |
+| `ConnectionStrings__DefaultConnection` | Key Vault secret `ConnectionStrings--DefaultConnection` (as a Container Apps Key Vault reference): `Host=<server>.postgres.database.azure.com;Port=5432;Database=loginapp;Username=loginapp_app;Password=…;SSL Mode=VerifyFull`. The grocery instance reads `grocery-db-connection-string` instead, which names its database `grocery` |
+| `Jwt__Audience` (grocery instance only) | Its host name, `grocery.biffkittz.com`. The instances share the signing key; a different audience keeps one instance's sessions from being accepted by the other. The main instance keeps the default `login-app` |
 | `Jwt__SigningKey` | Key Vault secret `Jwt--SigningKey`: 64 random bytes, Base64 |
+| `ImageGeneration__ApiKey` (optional) | Key Vault secret `ImageGeneration--ApiKey`, created only when Terraform gets `TF_VAR_gemini_api_key`. Without it the app runs without AI pictures |
+| Outbound HTTPS to `generativelanguage.googleapis.com` | Container Apps allows outbound internet by default, and the networking module adds no egress rules |
 | A database role that owns its schema | The bootstrap job `caj-loginapp-demo-dbinit` creates `loginapp_app` with only `CONNECT` on `loginapp` and `CREATE` on schema `public`. The app then applies its own migrations |
 | `OriginTls__CertificatePfxBase64` | The Key Vault certificate's secret (the origin certificate as a passwordless PFX, Base64) |
 | `OriginTls__RequireCloudflareClientCertificate` | `true` (Terraform's `require_cloudflare_client_certificate`), together with Authenticated Origin Pulls in Cloudflare |
 | Port 443 | TCP ingress exposing 8443 (Cloudflare's Origin Rule points there; Azure keeps 443 for HTTP ingress) and targeting 443, and `ASPNETCORE_URLS=https://+:443`. Set `app_target_port = 8443` if the platform refuses the low-port capability (section 2) |
 | Real client IPs for rate limiting | The app's TCP peer is the ingress proxy (an internal address), so it trusts the `X-Forwarded-For` entry Cloudflare appended. Cloudflare's ranges are also added as `Network__InternalNetworks__100+` |
-| Exactly one replica, 0.5 vCPU, 1 GiB | `app_min_replicas` / `app_max_replicas` = 1. A second replica isn't allowed (validation): realtime updates are broadcast in-process, with no SignalR backplane, so users on different replicas wouldn't see each other's changes |
+| Exactly one replica, 0.5 vCPU, 1 GiB, per instance | `app_min_replicas` / `app_max_replicas` = 1. A second replica isn't allowed (validation): realtime updates are broadcast in-process, with no SignalR backplane, so users on different replicas wouldn't see each other's changes |
 | WebSockets end to end | Cloudflare's WebSockets setting (on by default, see [infra/docs/AUTHENTICATION.md](../infra/docs/AUTHENTICATION.md#zone-settings-to-check-once)); the TCP ingress passes them through |
 
 Secrets reach the app as Container Apps Key Vault references. The app could also load Key Vault itself (set

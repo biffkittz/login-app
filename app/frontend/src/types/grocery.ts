@@ -17,13 +17,36 @@ export interface GroceryItem {
   /** Who added the item or last changed its details; `null` once that account no longer exists. */
   lastModifiedById: string | null
   lastModifiedByName: string | null
+  /**
+   * Where the item's AI-drawn picture is (a few kilobytes of WebP), or `null` when it has none. A URL always shows the
+   * same picture, so the browser keeps it once downloaded.
+   */
+  imageUrl: string | null
+  /** A picture is being drawn for the item; it arrives as a later change. */
+  imagePending: boolean
 }
+
+/** The list's in-app settings, shared by everyone (`GroceryListSettingsResponse` in the backend). */
+export interface GroceryListSettings {
+  /** Increases with every change on the server. The settings with the highest version are the newest. */
+  version: number
+  /** New and renamed items get an AI-drawn picture. */
+  imageGenerationEnabled: boolean
+  /** The server can draw pictures at all: it has a Gemini API key. */
+  imageGenerationAvailable: boolean
+}
+
+/** The body of `PATCH /api/grocery-list/settings`: only the settings to change. */
+export type GroceryListSettingsChanges = Partial<
+  Pick<GroceryListSettings, 'imageGenerationEnabled'>
+>
 
 /** The body of `GET /api/grocery-list`. */
 export interface GroceryList {
   items: GroceryItem[]
   /** The stores an item's `store` may name, in the order the list is grouped by. Configured on the server. */
   stores: string[]
+  settings: GroceryListSettings
 }
 
 /**

@@ -18,6 +18,8 @@ export function makeItem(overrides: Partial<GroceryItem> & Pick<GroceryItem, 'id
     lastModifiedAt: '2026-11-09T10:00:00.000Z',
     lastModifiedById: 'user-1',
     lastModifiedByName: 'Ada',
+    imageUrl: null,
+    imagePending: false,
     ...overrides,
   }
 }

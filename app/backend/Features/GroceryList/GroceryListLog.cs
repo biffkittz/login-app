@@ -33,6 +33,10 @@ internal static partial class GroceryListLog
         Message = "A write to item {ItemId} conflicted with a concurrent change and was not saved")]
     public static partial void ConcurrentChange(ILogger logger, Guid itemId);
 
+    [LoggerMessage(EventId = 5007, Level = LogLevel.Information,
+        Message = "User {UserId} turned AI pictures {State}")]
+    public static partial void ImageGenerationChanged(ILogger logger, string userId, string state);
+
     [LoggerMessage(EventId = 5010, Level = LogLevel.Debug, Message = "User {UserId} connected for realtime updates ({ConnectionId})")]
     public static partial void ClientConnected(ILogger logger, string userId, string connectionId);
 

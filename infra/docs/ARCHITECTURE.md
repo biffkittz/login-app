@@ -20,8 +20,8 @@ see the app's [docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md).
 
 ```mermaid
 flowchart LR
-  visitor([Visitor]) -->|"HTTPS (Cloudflare edge certificate)"| cf["Cloudflare<br/>app.biffkittz.com (proxied)"]
-  cf -->|"TLS :8443 (Origin Rule)<br/>+ Cloudflare client certificate"| pip
+  visitor([Visitor]) -->|"HTTPS (Cloudflare edge certificate)"| cf["Cloudflare (proxied)<br/>app.biffkittz.com<br/>grocery.biffkittz.com"]
+  cf -->|"TLS :8443 / :8444 (Origin Rules)<br/>+ Cloudflare client certificate"| pip
 
   subgraph rg["rg-loginapp-demo"]
     subgraph managed["rg-loginapp-demo-cae-managed (platform-managed)"]
@@ -29,11 +29,12 @@ flowchart LR
     end
     subgraph vnet["vnet-loginapp-demo 10.40.0.0/16"]
       subgraph snet_aca["snet-aca 10.40.1.0/24 (external Container Apps environment)"]
-        ingress["Ingress proxy<br/>TCP pass-through"] --> app["ca-loginapp-demo<br/>Kestrel HTTPS :443<br/>origin certificate"]
+        ingress["Ingress proxy<br/>TCP pass-through"] -->|":8443"| app["ca-loginapp-demo<br/>Kestrel HTTPS :443<br/>origin certificate"]
+        ingress -->|":8444"| app2["ca-loginapp-demo-grocery<br/>same image and secrets"]
         job["caj-loginapp-demo-dbinit<br/>manual job (psql)"]
       end
       subgraph snet_psql["snet-psql 10.40.2.0/24"]
-        pg[("PostgreSQL 18<br/>B1ms, private access")]
+        pg[("PostgreSQL 18, B1ms, private access<br/>databases loginapp and grocery")]
       end
     end
     kv[Key Vault<br/>RBAC]
@@ -43,10 +44,13 @@ flowchart LR
 
   pip --> ingress
   app -->|"TLS :5432"| pg
+  app2 -->|"TLS :5432"| pg
   job -->|"TLS :5432"| pg
   kv -.->|"secret references<br/>(incl. TLS certificate)"| app
+  kv -.->|"the same, own connection string"| app2
   kv -.->|secret references| job
   acr -.->|image pull| app
+  acr -.->|image pull| app2
   app -.-> law
   kv -.-> law
 ```
@@ -54,14 +58,16 @@ flowchart LR
 | Component | Resource | Purpose |
 | --- | --- | --- |
 | Edge | Cloudflare (proxied DNS record, Authenticated Origin Pulls) | Visitor-facing TLS, DDoS protection and Cloudflare's security features; hides the origin IP; presents a client certificate to the origin |
-| Compute and entry point | Container Apps environment (workload profiles, external) + Container App with TCP ingress | Public IP for Cloudflare; runs the app image (exactly one replica, 0.5 vCPU, 1 GiB), which terminates TLS itself and hosts the realtime hub (SignalR over WebSockets) |
-| One-off task | Container Apps job | Creates the app's least-privilege database role |
-| Data | Azure Database for PostgreSQL flexible server (B1ms, PostgreSQL 18) + database `loginapp` | The app's data; private IP only |
-| Secrets | Key Vault (RBAC) | Connection string, JWT signing key, database passwords, TLS certificate |
+| Compute and entry point | Container Apps environment (workload profiles, external) + a Container App with TCP ingress per instance of the app: `ca-loginapp-demo` (app.biffkittz.com) and `ca-loginapp-demo-grocery` (grocery.biffkittz.com) | Public IP for Cloudflare; each runs the app image (exactly one replica, 0.5 vCPU, 1 GiB), terminates TLS itself and hosts its own realtime hub (SignalR over WebSockets) |
+| One-off task | Container Apps job | Creates the app's least-privilege database role and lets it into every instance's database |
+| Data | Azure Database for PostgreSQL flexible server (B1ms, PostgreSQL 18) + databases `loginapp` and `grocery` | Each instance's data, in a database of its own; private IP only |
+| Secrets | Key Vault (RBAC) | A connection string per instance; the JWT signing key, Gemini API key, database passwords and TLS certificate, shared by the instances |
 | Images | Azure Container Registry (Basic) | The app's images |
 | Observability | Log Analytics workspace | Container logs, Key Vault audit events |
 
 ## Request path
+
+The path is the same for both instances; only the host name and port differ (grocery.biffkittz.com uses 8444).
 
 1. The browser resolves `app.biffkittz.com` to Cloudflare's anycast addresses (the record is proxied), and Cloudflare
    terminates the TLS connection with its edge certificate.
@@ -90,7 +96,7 @@ certificate, which is why `/health/live` and `/health/ready` are the exception i
 
 | Subnet | Prefix | Holds | Delegation | Service endpoints | Inbound allowed (everything else is denied) |
 | --- | --- | --- | --- | --- | --- |
-| `snet-aca` | 10.40.1.0/24 | Container Apps environment | `Microsoft.App/environments` | `Microsoft.KeyVault` | TCP 8443 and 30000-32767 from Cloudflare IPv4 ranges (+ `ingress_additional_allowed_cidrs`); Azure Load Balancer; within the subnet |
+| `snet-aca` | 10.40.1.0/24 | Container Apps environment | `Microsoft.App/environments` | `Microsoft.KeyVault` | TCP 8443 and 8444 (every instance's exposed port) and 30000-32767 from Cloudflare IPv4 ranges (+ `ingress_additional_allowed_cidrs`); Azure Load Balancer; within the subnet |
 | `snet-psql` | 10.40.2.0/24 | PostgreSQL flexible server | `Microsoft.DBforPostgreSQL/flexibleServers` | `Microsoft.Storage` | TCP 5432 from `snet-aca`; Azure Load Balancer; within the subnet |
 
 - **The NSG can't fence the public ingress.** In an external workload-profiles environment, internet traffic reaches
@@ -120,7 +126,7 @@ Container App or job first needs them. A system-assigned identity only exists on
 | Principal | Role | Scope | Why |
 | --- | --- | --- | --- |
 | `id-loginapp-demo-app` (the app) | AcrPull | the registry | Pull the app image |
-| | Key Vault Secrets User | secrets `ConnectionStrings--DefaultConnection` and `Jwt--SigningKey`, and the certificate's secret | Its secrets and its TLS certificate, nothing else |
+| | Key Vault Secrets User | secrets `ConnectionStrings--DefaultConnection`, `grocery-db-connection-string`, `Jwt--SigningKey` and (with a Gemini key) `ImageGeneration--ApiKey`, and the certificate's secret | Its secrets and its TLS certificate, nothing else. Both instances run as this identity |
 | `id-loginapp-demo-dbinit` (bootstrap job) | Key Vault Secrets User | secrets `postgresql-admin-password` and `postgresql-app-password` | The only identity that can read the administrator password |
 | Whoever runs Terraform | Key Vault Secrets Officer, Key Vault Certificates Officer | the vault | Create and update secrets and import the certificate; Terraform grants these itself |
 
@@ -135,15 +141,17 @@ only after the wait.
 
 | Key Vault object | Generated by | Read by | Contents |
 | --- | --- | --- | --- |
-| `ConnectionStrings--DefaultConnection` | Terraform (composed) | app | `Host=<server>.postgres.database.azure.com;Port=5432;Database=loginapp;Username=loginapp_app;Password=…;SSL Mode=VerifyFull` |
+| `ConnectionStrings--DefaultConnection` | Terraform (composed) | app (main instance) | `Host=<server>.postgres.database.azure.com;Port=5432;Database=loginapp;Username=loginapp_app;Password=…;SSL Mode=VerifyFull` |
+| `grocery-db-connection-string` | Terraform (composed) | app (grocery instance) | The same, with `Database=grocery`. One such secret per additional instance |
 | `Jwt--SigningKey` | `random_bytes` (64 bytes, Base64) | app | HMAC-SHA256 signing key for session tokens |
+| `ImageGeneration--ApiKey` | you (`TF_VAR_gemini_api_key`); only when given | app | Google Gemini API key for AI pictures of items |
 | `postgresql-admin-password` | `random_password` (32 characters) | bootstrap job | Server administrator password |
 | `postgresql-app-password` | `random_password` (40 alphanumerics) | bootstrap job | Password the job sets on `loginapp_app` |
 | certificate `app-biffkittz-com-origin` | imported from your PFX | app | Cloudflare origin certificate and private key |
 
 - **How the app receives them.** The app gets its secrets as Container Apps Key Vault references, which the platform
   resolves with the app's identity and exposes as environment variables: `ConnectionStrings__DefaultConnection`,
-  `Jwt__SigningKey` and `OriginTls__CertificatePfxBase64`. A Key Vault certificate is served through a secret of the
+  `Jwt__SigningKey`, `OriginTls__CertificatePfxBase64` and, when there is a Gemini key, `ImageGeneration__ApiKey`. A Key Vault certificate is served through a secret of the
   same name, whose value is the PFX in Base64 without a password; the app loads it at startup and refuses to start
   if it can't (no private key, expired, unreadable).
 - **Rotation.** The references carry no version. A new secret or certificate version therefore reaches the app
@@ -161,7 +169,7 @@ only after the wait.
 
 | Zone | Type | Records | Purpose |
 | --- | --- | --- | --- |
-| `biffkittz.com` (Cloudflare) | public | `app` A → environment public IP, **proxied** | Public name of the app |
+| `biffkittz.com` (Cloudflare) | public | `app` and `grocery` A → environment public IP, **proxied** | Public names of the app's two instances |
 | `<server>.private.postgres.database.azure.com` | private, linked to the VNet | managed by the PostgreSQL service | Makes `<server>.postgres.database.azure.com` resolve to the server's private IP |
 
 Terraform turns on one zone setting: **Authenticated Origin Pulls** (`tls_client_auth`, the "global" variant), so
@@ -169,9 +177,11 @@ Cloudflare presents its client certificate to the origin. It is zone-wide, but h
 that doesn't ask for a client certificate never sees it. `require_cloudflare_client_certificate = false` turns the
 requirement off in both Cloudflare and the app.
 
-Terraform also owns the zone's **Origin Rules** ruleset (`cloudflare_ruleset.origin_port`), with one rule: requests for
-`app.biffkittz.com` go to the origin on `app_exposed_port` (8443) instead of 443. A zone has a single ruleset for
-this phase, so Origin Rules for other hostnames belong in that resource too.
+Terraform also owns the zone's **Origin Rules** ruleset (`cloudflare_ruleset.origin_port`), with a rule per instance:
+requests for `app.biffkittz.com` go to the origin on `app_exposed_port` (8443), and requests for
+`grocery.biffkittz.com` on 8444, instead of 443. Both names point at the same IP; the port is what reaches the right
+Container App. A zone has a single ruleset for this phase, so Origin Rules for other hostnames belong in that
+resource too.
 
 The other zone-wide settings aren't managed here, because they would affect every other record in `biffkittz.com`.
 Set them once in the dashboard:
@@ -186,7 +196,7 @@ With *Flexible*, Cloudflare would call the origin over plain HTTP. Nothing liste
 
 ```mermaid
 flowchart TD
-  root["root module<br/>names, tags, resource group, Log Analytics,<br/>identities, generated secrets,<br/>Cloudflare record and origin-pull setting"]
+  root["root module<br/>names, tags, resource group, Log Analytics,<br/>identities, generated secrets, app instances,<br/>Cloudflare records, Origin Rules, origin-pull setting"]
   net[networking]
   reg[registry]
   db[database]
@@ -206,13 +216,14 @@ flowchart TD
 | `networking` | VNet, subnets (delegations and service endpoints), one NSG per subnet with its rules |
 | `registry` | Container registry, AcrPull role assignments, propagation wait |
 | `key-vault` | Vault, secrets, certificate import, per-secret role assignments, propagation waits, audit diagnostics |
-| `database` | PostgreSQL flexible server (private access), private DNS zone and link, database, TLS enforcement |
-| `container-app` | External environment, the Container App with TCP ingress, the bootstrap job and its script |
+| `database` | PostgreSQL flexible server (private access), private DNS zone and link, a database per instance, TLS enforcement |
+| `container-app` | External environment, a Container App with TCP ingress per instance, the bootstrap job and its script |
 
 Module outputs that something must wait for are gated on that event with `depends_on`. Subnet IDs appear once their
 NSG is attached, and secret URIs once read access has propagated. Consumers therefore don't start too early, and no
-ordering hints are needed at the call sites. The one explicit `depends_on` in the root module makes the DNS record
-wait for Authenticated Origin Pulls, so traffic never reaches an app that would refuse it.
+ordering hints are needed at the call sites. The one explicit `depends_on` in the root module makes the DNS records
+wait for Authenticated Origin Pulls and the Origin Rules, so traffic never reaches an app that would refuse it, or the
+wrong port.
 
 ## Design decisions
 
@@ -348,10 +359,11 @@ VNet. That is the only place the private server can be reached from.
 
 **The resulting role.** `loginapp_app` gets:
 - `LOGIN`, with no `CREATEDB`, `CREATEROLE` or superuser-like membership;
-- `CONNECT` and `TEMPORARY` on `loginapp`;
-- `USAGE` and `CREATE` on schema `public`.
+- `CONNECT` and `TEMPORARY` on each instance's database (`loginapp` and `grocery`);
+- `USAGE` and `CREATE` on schema `public` in each of them.
 
-`PUBLIC` loses `CONNECT`. The app applies its EF Core migrations at startup as this role, so it owns its own tables.
+`PUBLIC` loses `CONNECT`. Each instance applies its EF Core migrations at startup as this role, so it owns its own
+tables. The job takes the databases from `APP_DATABASES`, so adding an instance means running it once more.
 
 **Script safeguards.**
 - It's idempotent, so re-running it after rotating the password is the rotation procedure.
@@ -370,14 +382,46 @@ Docker Hub rate limits. It runs under its own identity.
 ### Two-phase app deployment
 
 A Container App's first revision fails to provision if its image doesn't exist. The app would also crash-loop
-before its database role exists. So the Container App is created only once `app_image_tag` is set:
+before its database role exists. So the Container Apps are created only once `app_image_tag` is set:
 
 1. The first apply builds the platform.
 2. You push an image and run the bootstrap job.
-3. Setting the tag and applying again creates the app.
+3. Setting the tag and applying again creates the apps (one per instance).
 
-From then on, deploying a new version means changing the tag. Removing the tag would delete the Container App, which
-the plan shows clearly.
+From then on, deploying a new version means changing the tag, which updates every instance. Removing the tag would
+delete the Container Apps, which the plan shows clearly.
+
+### Several instances in one environment
+
+`additional_app_instances` (in `environments/demo.tfvars`: `grocery`) adds independent copies of the app. Each
+instance is one more Container App in the same environment, running the same image, and has its own host name, data
+and list; nobody signed in to one sees the other.
+
+| Shared by every instance | Per instance |
+| --- | --- |
+| Container Apps environment and its public IP | Container App (`ca-loginapp-demo-<key>`), with its own exposed port |
+| Image and tag (`app_image_tag`), CPU, memory, replica limits | Cloudflare DNS record and Origin Rule |
+| The app identity, and through it the registry and Key Vault | Database on the PostgreSQL server |
+| Key Vault secrets: JWT signing key, Gemini key, the app's database password | Key Vault secret with the connection string to that database |
+| TLS certificate (`*.biffkittz.com` covers every host name) | `Jwt__Audience` (the host name; the main instance keeps the default) |
+| Database role `loginapp_app`, bootstrap job | |
+
+- **Why one environment.** A second environment would bring a second public IP and load balancer (about $22 a month)
+  and a second subnet for nothing: TCP ingress gives each app its own port on the shared IP, and Cloudflare's Origin
+  Rules route each host name to its port.
+- **Why a per-instance audience.** The instances share the JWT signing key, so a token one of them issued would pass
+  the other's signature check. Each additional instance names itself as its tokens' audience, which the other doesn't
+  accept. Accounts are separate anyway (each instance has its own users table), but this keeps a session to its own
+  site. The main instance keeps the default audience, so adding an instance doesn't sign its users out.
+- **The trade-off of sharing the role.** Both instances connect as `loginapp_app` with the same password, so the role
+  can open either database: a compromised instance could read the other's data. Sharing the secrets was the
+  requirement; separate roles (a password and bootstrap step each) would isolate the instances from each other.
+- **Adding one** creates the database, connection string and app in one apply. The new app can't connect until the
+  bootstrap job has let the role into its database, so it restarts until then; see
+  [DEPLOYMENT.md](DEPLOYMENT.md#adding-an-instance).
+- **The main instance's addresses.** Before instances existed, its Container App and DNS record had no key. `moved`
+  blocks in `main.tf` map them to the `"main"` key, so the first plan with this version reports them as moved, and
+  nothing is replaced.
 
 ### Smaller choices
 
@@ -431,12 +475,17 @@ Approximate monthly cost of the demo, from the
 | Resource | Rate | Per month |
 | --- | --- | --- |
 | PostgreSQL B1ms | $0.017/hour + $0.115/GB-month storage (32 GB) | ≈ $12.41 + $3.68 |
-| Container App (1 replica, 0.5 vCPU, 1 GiB, always on) | Idle: $0.000003/vCPU-s and /GiB-s; active: $0.000024/vCPU-s; monthly free grant | ≈ $10 (mostly idle) to $34 (always busy) |
+| Container Apps, one per instance (1 replica, 0.5 vCPU, 1 GiB, always on, ×2) | Idle: $0.000003/vCPU-s and /GiB-s; active: $0.000024/vCPU-s; monthly free grant (shared) | ≈ $10 (mostly idle) to $34 (always busy) each |
 | Environment's managed load balancer and public IP | Standard Load Balancer and public IP, billed in the managed resource group | ≈ $18 + $3.65 (published rates; not returned by the Retail Prices API) |
 | Container Registry Basic | $0.1666/day | ≈ $5.07 |
 | Private DNS zone (PostgreSQL) | $0.50/zone | $0.50 |
 | Key Vault, Log Analytics, Cloudflare | Per operation; first 5 GB of logs free; free plan | ≈ $0 |
-| **Total** | | **≈ $55–80** |
+| **Total** | | **≈ $65–115** with two instances (each further instance adds ≈ $10–34) |
+
+AI pictures are billed by Google, not Azure: about $0.034 per picture with the default model
+(`gemini-3.1-flash-lite-image`, list price on 2026-11-09). A family adding a few dozen new item names a month spends
+around a dollar, since items with a name seen before reuse its picture. The app's daily limit (100 pictures) caps the
+worst case at about $3.40 a day.
 
 Removing Application Gateway saved about $150 a month (its fixed charge, its public IP and one private DNS zone).
 
@@ -451,10 +500,13 @@ When the demo isn't needed, `terraform destroy` removes everything; see [DEPLOYM
 - **Global Authenticated Origin Pulls proves "from Cloudflare", not "from this zone".** Zone-level Authenticated
   Origin Pulls with your own certificate closes that (see above).
 - **IP restrictions on TCP ingress are undocumented.** The client certificate is the control that is relied on.
-- **No egress filtering.** Outbound traffic uses the platform defaults. For production, route egress through Azure
-  Firewall with user-defined routes. Workload profile environments support this.
+- **No egress filtering.** Outbound traffic uses the platform defaults; the app's only outbound calls go to the
+  Gemini API (`generativelanguage.googleapis.com`) for item pictures. For production, route egress through Azure
+  Firewall with user-defined routes and allow just that host. Workload profile environments support this.
 - **Key Vault and the registry have public endpoints.** Private endpoints need Premium for the registry, and a CI
   agent inside the VNet.
+- **The instances share one database role.** See [Several instances in one environment](#several-instances-in-one-environment)
+  for why, and what separate roles would take.
 - **One replica and Burstable PostgreSQL.** There is no high availability. More replicas first need a SignalR
   backplane (Redis, for example); then raise the replica counts, and move PostgreSQL to General Purpose with
   zone-redundant high availability for production.

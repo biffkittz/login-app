@@ -16,6 +16,9 @@ namespace LoginApp.Api.Features.GroceryList.Contracts;
 /// <param name="LastModifiedById">Who added the item or last changed its details, or <see langword="null"/> if that
 /// account no longer exists.</param>
 /// <param name="LastModifiedByName">That user's display name, or <see langword="null"/>.</param>
+/// <param name="ImageUrl">Where the item's AI-drawn picture is (<c>/api/grocery-list/images/{id}</c>), or
+/// <see langword="null"/> when it has none.</param>
+/// <param name="ImagePending">Whether a picture is being drawn for the item; it arrives as a later change.</param>
 public sealed record GroceryItemResponse(
     Guid Id,
     string Name,
@@ -28,4 +31,6 @@ public sealed record GroceryItemResponse(
     DateTimeOffset CreatedAt,
     DateTimeOffset LastModifiedAt,
     string? LastModifiedById,
-    string? LastModifiedByName);
+    string? LastModifiedByName,
+    string? ImageUrl,
+    bool ImagePending);

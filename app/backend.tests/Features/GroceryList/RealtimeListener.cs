@@ -9,14 +9,17 @@ using Microsoft.AspNetCore.TestHost;
 namespace LoginApp.Api.Tests.Features.GroceryList;
 
 /// <summary>
-/// A realtime connection to <see cref="GroceryListHub"/> over the in-memory test server, recording every change it
-/// receives. Connects the way the SPA does: WebSockets only, skipping negotiation.
+/// A realtime connection to <see cref="GroceryListHub"/> over the in-memory test server, recording every change and
+/// settings update it receives. Connects the way the SPA does: WebSockets only, skipping negotiation.
 /// </summary>
 internal sealed class RealtimeListener : IAsyncDisposable
 {
     private static readonly TimeSpan s_receiveTimeout = TimeSpan.FromSeconds(10);
 
     private readonly Channel<GroceryListChange> _changes = Channel.CreateUnbounded<GroceryListChange>();
+    private readonly Channel<GroceryListSettingsResponse> _settings = Channel.CreateUnbounded<GroceryListSettingsResponse>();
+    private readonly List<GroceryListChange> _history = [];
+    private readonly Lock _historyLock = new();
     private readonly TaskCompletionSource _closed = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     /// <summary>
@@ -52,7 +55,18 @@ internal sealed class RealtimeListener : IAsyncDisposable
             })
             .Build();
 
-        Connection.On<GroceryListChange>(nameof(IGroceryListClient.ListChanged), change => _changes.Writer.TryWrite(change));
+        Connection.On<GroceryListChange>(nameof(IGroceryListClient.ListChanged), change =>
+        {
+            lock (_historyLock)
+            {
+                _history.Add(change);
+            }
+
+            _changes.Writer.TryWrite(change);
+        });
+        Connection.On<GroceryListSettingsResponse>(
+            nameof(IGroceryListClient.SettingsChanged),
+            settings => _settings.Writer.TryWrite(settings));
         Connection.Closed += _ =>
         {
             _closed.TrySetResult();
@@ -71,6 +85,40 @@ internal sealed class RealtimeListener : IAsyncDisposable
     /// <returns>The change.</returns>
     public async Task<GroceryListChange> NextChangeAsync() =>
         await _changes.Reader.ReadAsync(TestContext.Current.CancellationToken).AsTask().WaitAsync(s_receiveTimeout);
+
+    /// <summary>
+    /// Waits until some change, received earlier or later, has saved <paramref name="itemId"/> in a state
+    /// <paramref name="matches"/> accepts; fails the test after a timeout. Unlike <see cref="NextChangeAsync"/>, it
+    /// doesn't consume changes, so waits for several items can be made in any order.
+    /// </summary>
+    /// <param name="itemId">The item.</param>
+    /// <param name="matches">Recognizes the awaited state of the item.</param>
+    /// <returns>The item as the latest such change saved it.</returns>
+    public async Task<GroceryItemResponse> WaitForSavedAsync(Guid itemId, Func<GroceryItemResponse, bool> matches)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        timeout.CancelAfter(s_receiveTimeout);
+        while (true)
+        {
+            GroceryItemResponse? found;
+            lock (_historyLock)
+            {
+                found = _history.SelectMany(change => change.SavedItems).LastOrDefault(item => item.Id == itemId && matches(item));
+            }
+
+            if (found is not null)
+            {
+                return found;
+            }
+
+            await Task.Delay(TimeSpan.FromMilliseconds(20), timeout.Token);
+        }
+    }
+
+    /// <summary>Waits for the next settings update, failing the test after a timeout.</summary>
+    /// <returns>The settings.</returns>
+    public async Task<GroceryListSettingsResponse> NextSettingsAsync() =>
+        await _settings.Reader.ReadAsync(TestContext.Current.CancellationToken).AsTask().WaitAsync(s_receiveTimeout);
 
     /// <summary>Waits for the server to close the connection, failing the test after a timeout.</summary>
     /// <returns>A task that completes once the connection has closed.</returns>

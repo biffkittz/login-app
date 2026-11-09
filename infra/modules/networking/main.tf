@@ -81,15 +81,15 @@ locals {
     container_apps = {
       # In an external workload-profiles environment, internet traffic arrives through the public IP in the managed
       # resource group and, per Microsoft, isn't subject to this NSG. The rule documents the intent and takes effect
-      # should the platform ever route that traffic through the subnet: the exposed port plus the node-port range
-      # that TCP ingress is mapped to.
+      # should the platform ever route that traffic through the subnet: the apps' exposed ports plus the node-port
+      # range that TCP ingress is mapped to.
       AllowAppIngressInbound = {
         priority    = 100
         access      = "Allow"
         protocol    = "Tcp"
         sources     = local.restrict_app_ingress ? var.app_ingress_allowed_cidrs : ["Internet"]
         destination = local.prefixes.container_apps
-        ports       = [tostring(var.app_ingress_port), "30000-32767"]
+        ports       = concat([for port in var.app_ingress_ports : tostring(port)], ["30000-32767"])
         description = local.restrict_app_ingress ? "TLS to the app from the allowed ranges (Cloudflare's edge)." : "TLS to the app from the internet."
       }
       AllowAzureLoadBalancerInbound = {

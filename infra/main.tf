@@ -63,16 +63,75 @@ locals {
 
   deploy_app = var.app_image_tag != null
 
-  # Npgsql connection string, stored in Key Vault. VerifyFull encrypts the connection and checks the server's
-  # certificate and host name against the CA bundle in the runtime image.
-  app_connection_string = join(";", [
-    "Host=${module.database.fqdn}",
-    "Port=5432",
-    "Database=${module.database.database_name}",
-    "Username=${var.postgresql_app_role}",
-    "Password=${random_password.postgresql_app.result}",
-    "SSL Mode=VerifyFull",
-  ])
+  # Every instance of the app: the main one at app_hostname plus additional_app_instances. They all run the same image
+  # with the same identity, Key Vault secrets and settings. Each has its own Container App, host name (DNS record and
+  # Origin Rule), exposed port and database, and the Key Vault secret with the connection string to that database.
+  app_instances = merge(
+    {
+      main = {
+        hostname                 = var.app_hostname
+        exposed_port             = var.app_exposed_port
+        database_name            = var.database_name
+        app_name                 = local.names.container_app
+        connection_string_secret = "db_connection_string"
+      }
+    },
+    {
+      for key, instance in var.additional_app_instances : key => merge(instance, {
+        app_name                 = "${local.names.container_app}-${key}"
+        connection_string_secret = "${key}_db_connection_string"
+      })
+    },
+  )
+
+  # Whether the app gets a Gemini API key, which travels like the other secrets: Key Vault, a Container App secret,
+  # then the environment variable ImageGeneration__ApiKey. Only the presence of a key is unwrapped from "sensitive"
+  # here, never the key: it decides which of those exist, and for_each refuses sensitive values.
+  image_generation_configured = nonsensitive(var.gemini_api_key != null)
+
+  # Each instance's secrets: Container App secrets that reference Key Vault, the same ones for every instance except the
+  # connection string, which names the instance's own database. The environment variables below take their values
+  # from them. The certificate's secret holds the PFX (Base64, no password), which the app loads as its HTTPS
+  # certificate; it is a *.biffkittz.com certificate, so it serves every instance's host name.
+  app_secrets = {
+    for key, instance in local.app_instances : key => merge(
+      {
+        db-connection-string = module.key_vault.secret_ids[instance.connection_string_secret]
+        jwt-signing-key      = module.key_vault.secret_ids["jwt_signing_key"]
+        origin-certificate   = module.key_vault.certificate_secret_id
+      },
+      local.image_generation_configured ? { gemini-api-key = module.key_vault.secret_ids["gemini_api_key"] } : {},
+    )
+  }
+  app_secret_environment_variables = merge(
+    {
+      ConnectionStrings__DefaultConnection = "db-connection-string"
+      Jwt__SigningKey                      = "jwt-signing-key"
+      OriginTls__CertificatePfxBase64      = "origin-certificate"
+    },
+    local.image_generation_configured ? { ImageGeneration__ApiKey = "gemini-api-key" } : {},
+  )
+
+  # Settings of each instance's own. The instances share the JWT signing key, so each additional one names itself as
+  # its tokens' audience: a session from one instance is then refused by another (their accounts are separate anyway).
+  # The main instance keeps the app's default audience, so its existing sessions stay valid.
+  app_instance_environment_variables = {
+    for key, instance in local.app_instances : key => key == "main" ? {} : { Jwt__Audience = instance.hostname }
+  }
+
+  # Npgsql connection strings, stored in Key Vault, one per instance: the same server, role and password, each naming
+  # the instance's own database. VerifyFull encrypts the connection and checks the server's certificate and host name
+  # against the CA bundle in the runtime image.
+  app_connection_strings = {
+    for key, database in merge({ main = module.database.database_name }, module.database.additional_database_names) : key => join(";", [
+      "Host=${module.database.fqdn}",
+      "Port=5432",
+      "Database=${database}",
+      "Username=${var.postgresql_app_role}",
+      "Password=${random_password.postgresql_app.result}",
+      "SSL Mode=VerifyFull",
+    ])
+  }
 
   # Network:InternalNetworks in the app lists the proxies whose X-Forwarded-For entries it trusts (it also guards the
   # TCP peer, which in Container Apps is the platform's own ingress proxy). Requests arrive through Cloudflare's
@@ -161,6 +220,7 @@ module "networking" {
   resource_group_name       = azurerm_resource_group.this.name
   address_space             = var.vnet_address_space
   subnet_address_prefixes   = var.subnet_address_prefixes
+  app_ingress_ports         = [for instance in values(local.app_instances) : instance.exposed_port]
   app_ingress_allowed_cidrs = var.restrict_ingress_to_cloudflare ? concat(local.cloudflare_ipv4_cidrs, var.ingress_additional_allowed_cidrs) : []
   tags                      = local.tags
 }
@@ -190,9 +250,11 @@ module "database" {
   administrator_login    = var.postgresql_admin_login
   administrator_password = random_password.postgresql_admin.result
   database_name          = var.database_name
-  delegated_subnet_id    = module.networking.subnet_ids.postgresql
-  virtual_network_id     = module.networking.virtual_network_id
-  tags                   = local.tags
+  # One more database per additional instance of the app.
+  additional_database_names = { for key, instance in var.additional_app_instances : key => instance.database_name }
+  delegated_subnet_id       = module.networking.subnet_ids.postgresql
+  virtual_network_id        = module.networking.virtual_network_id
+  tags                      = local.tags
 }
 
 module "key_vault" {
@@ -209,26 +271,43 @@ module "key_vault" {
   allowed_ip_ranges  = var.key_vault_allowed_ip_ranges
   allowed_subnet_ids = [module.networking.subnet_ids.container_apps]
 
-  # The app reads the first two. Their "--" names map to the configuration keys ConnectionStrings:DefaultConnection
-  # and Jwt:SigningKey, which is also what the app's optional built-in Key Vault provider expects.
-  secret_names = {
-    db_connection_string      = "ConnectionStrings--DefaultConnection"
-    jwt_signing_key           = "Jwt--SigningKey"
-    postgresql_admin_password = "postgresql-admin-password"
-    postgresql_app_password   = "postgresql-app-password"
-  }
-  secret_values = {
-    db_connection_string      = local.app_connection_string
-    jwt_signing_key           = random_bytes.jwt_signing_key.base64
-    postgresql_admin_password = random_password.postgresql_admin.result
-    postgresql_app_password   = random_password.postgresql_app.result
-  }
-  secret_readers = {
-    app_connection_string = { secret = "db_connection_string", principal_id = azurerm_user_assigned_identity.app.principal_id }
-    app_jwt_signing_key   = { secret = "jwt_signing_key", principal_id = azurerm_user_assigned_identity.app.principal_id }
-    dbinit_admin_password = { secret = "postgresql_admin_password", principal_id = azurerm_user_assigned_identity.db_bootstrap.principal_id }
-    dbinit_app_password   = { secret = "postgresql_app_password", principal_id = azurerm_user_assigned_identity.db_bootstrap.principal_id }
-  }
+  # The app reads the first two, and the Gemini API key when there is one. Their "--" names map to the configuration
+  # keys ConnectionStrings:DefaultConnection, Jwt:SigningKey and ImageGeneration:ApiKey, which is also what the app's
+  # optional built-in Key Vault provider expects. Each additional instance of the app gets a connection string of its
+  # own, "<instance>-db-connection-string", for its database; every other secret is shared.
+  secret_names = merge(
+    {
+      db_connection_string      = "ConnectionStrings--DefaultConnection"
+      jwt_signing_key           = "Jwt--SigningKey"
+      postgresql_admin_password = "postgresql-admin-password"
+      postgresql_app_password   = "postgresql-app-password"
+    },
+    { for key in keys(var.additional_app_instances) : "${key}_db_connection_string" => "${key}-db-connection-string" },
+    local.image_generation_configured ? { gemini_api_key = "ImageGeneration--ApiKey" } : {},
+  )
+  secret_values = merge(
+    {
+      db_connection_string      = local.app_connection_strings["main"]
+      jwt_signing_key           = random_bytes.jwt_signing_key.base64
+      postgresql_admin_password = random_password.postgresql_admin.result
+      postgresql_app_password   = random_password.postgresql_app.result
+    },
+    { for key in keys(var.additional_app_instances) : "${key}_db_connection_string" => local.app_connection_strings[key] },
+    local.image_generation_configured ? { gemini_api_key = var.gemini_api_key } : {},
+  )
+  secret_readers = merge(
+    {
+      app_connection_string = { secret = "db_connection_string", principal_id = azurerm_user_assigned_identity.app.principal_id }
+      app_jwt_signing_key   = { secret = "jwt_signing_key", principal_id = azurerm_user_assigned_identity.app.principal_id }
+      dbinit_admin_password = { secret = "postgresql_admin_password", principal_id = azurerm_user_assigned_identity.db_bootstrap.principal_id }
+      dbinit_app_password   = { secret = "postgresql_app_password", principal_id = azurerm_user_assigned_identity.db_bootstrap.principal_id }
+    },
+    {
+      for key in keys(var.additional_app_instances) :
+      "app_${key}_connection_string" => { secret = "${key}_db_connection_string", principal_id = azurerm_user_assigned_identity.app.principal_id }
+    },
+    local.image_generation_configured ? { app_gemini_api_key = { secret = "gemini_api_key", principal_id = azurerm_user_assigned_identity.app.principal_id } } : {},
+  )
 
   certificate_name                 = "${replace(var.app_hostname, ".", "-")}-origin"
   certificate_pfx_base64           = filebase64(pathexpand(var.tls_certificate_pfx_path))
@@ -253,28 +332,25 @@ module "container_apps" {
   log_analytics_workspace_id         = azurerm_log_analytics_workspace.this.id
 
   deploy_app       = local.deploy_app
-  app_name         = local.names.container_app
   app_image        = local.deploy_app ? "${module.registry.login_server}/${var.app_image_repository}:${var.app_image_tag}" : null
   app_identity_id  = azurerm_user_assigned_identity.app.id
   registry_server  = module.registry.login_server
   app_target_port  = var.app_target_port
-  app_exposed_port = var.app_exposed_port
   app_cpu          = var.app_cpu
   app_memory       = var.app_memory
   app_min_replicas = var.app_min_replicas
   app_max_replicas = var.app_max_replicas
 
-  # The certificate's secret holds the PFX (Base64, no password), which the app loads as its HTTPS certificate.
-  app_secrets = {
-    db-connection-string = module.key_vault.secret_ids["db_connection_string"]
-    jwt-signing-key      = module.key_vault.secret_ids["jwt_signing_key"]
-    origin-certificate   = module.key_vault.certificate_secret_id
+  # One Container App per instance; the settings around this map are shared by all of them.
+  apps = {
+    for key, instance in local.app_instances : key => {
+      name                  = instance.app_name
+      exposed_port          = instance.exposed_port
+      secrets               = local.app_secrets[key]
+      environment_variables = local.app_instance_environment_variables[key]
+    }
   }
-  app_secret_environment_variables = {
-    ConnectionStrings__DefaultConnection = "db-connection-string"
-    Jwt__SigningKey                      = "jwt-signing-key"
-    OriginTls__CertificatePfxBase64      = "origin-certificate"
-  }
+  app_secret_environment_variables = local.app_secret_environment_variables
   app_environment_variables = merge(local.app_trusted_proxy_settings, {
     ASPNETCORE_ENVIRONMENT                        = "Production"
     OriginTls__RequireCloudflareClientCertificate = tostring(var.require_cloudflare_client_certificate)
@@ -288,6 +364,7 @@ module "container_apps" {
     identity_id               = azurerm_user_assigned_identity.db_bootstrap.id
     postgresql_host           = module.database.fqdn
     database_name             = module.database.database_name
+    app_databases             = concat([module.database.database_name], values(module.database.additional_database_names))
     administrator_login       = module.database.administrator_login
     administrator_password_id = module.key_vault.secret_ids["postgresql_admin_password"]
     app_role                  = var.postgresql_app_role
@@ -296,13 +373,16 @@ module "container_apps" {
 }
 
 # ---------------------------------------------------------------------------------------------------------------------
-# Public DNS: app.biffkittz.com -> the Container Apps environment's public IP, proxied through Cloudflare (orange
-# cloud), so visitors only ever see Cloudflare's edge certificate and IPs.
+# Public DNS: app.biffkittz.com (and each additional instance's host name, e.g. grocery.biffkittz.com) -> the Container
+# Apps environment's public IP, proxied through Cloudflare (orange cloud), so visitors only ever see Cloudflare's edge
+# certificate and IPs. All instances share the one IP; the Origin Rules below send each host name to its app's port.
 # ---------------------------------------------------------------------------------------------------------------------
 
 resource "cloudflare_dns_record" "app" {
+  for_each = local.app_instances
+
   zone_id = data.cloudflare_zone.this.id
-  name    = var.app_hostname
+  name    = each.value.hostname
   type    = "A"
   content = module.container_apps.static_ip_address
   proxied = true
@@ -315,9 +395,11 @@ resource "cloudflare_dns_record" "app" {
   depends_on = [cloudflare_zone_setting.authenticated_origin_pulls, cloudflare_ruleset.origin_port]
 }
 
-# Origin Rule: Cloudflare connects to the origin on app_exposed_port instead of the visitor's port (443). The
-# environment's HTTP ingress owns 80 and 443 on its public IP, so the app's TCP ingress can't take 443 (Azure:
-# "exposedPort already in use"). Visitors keep using https://app.biffkittz.com on 443.
+# Origin Rules: Cloudflare connects to each instance's exposed port (app_exposed_port for app.biffkittz.com) instead of
+# the visitor's port (443). The environment's HTTP ingress owns 80 and 443 on its public IP, so the apps' TCP ingress
+# can't take 443 (Azure: "exposedPort already in use"), and two TCP apps can't share a port. Visitors keep using
+# https://<host name> on 443. The main instance's rule comes first and keeps its ref, so adding instances leaves it as
+# it was.
 #
 # A zone has one ruleset per phase. Origin Rules created by hand in the dashboard live in that same ruleset; import it
 # (terraform import cloudflare_ruleset.origin_port zones/<zone id>/<ruleset id>) and add them here, or the apply fails.
@@ -328,17 +410,31 @@ resource "cloudflare_ruleset" "origin_port" {
   kind        = "zone"
   phase       = "http_request_origin"
 
-  rules = [{
-    ref         = "${var.project}_${var.environment}_app_origin_port"
-    description = "${var.app_hostname}: connect to the Container Apps TCP ingress on ${var.app_exposed_port}"
-    expression  = "http.host eq \"${var.app_hostname}\""
-    action      = "route"
-    action_parameters = {
-      origin = {
-        port = var.app_exposed_port
+  rules = [
+    for key in concat(["main"], keys(var.additional_app_instances)) : {
+      ref         = key == "main" ? "${var.project}_${var.environment}_app_origin_port" : "${var.project}_${var.environment}_${key}_origin_port"
+      description = "${local.app_instances[key].hostname}: connect to the Container Apps TCP ingress on ${local.app_instances[key].exposed_port}"
+      expression  = "http.host eq \"${local.app_instances[key].hostname}\""
+      action      = "route"
+      action_parameters = {
+        origin = {
+          port = local.app_instances[key].exposed_port
+        }
       }
     }
-  }]
+  ]
+}
+
+# The main instance's Container App and DNS record became the "main" entries of maps when instances were added. These
+# blocks keep the existing objects (and app.biffkittz.com) in place, instead of replacing them.
+moved {
+  from = module.container_apps.azurerm_container_app.this[0]
+  to   = module.container_apps.azurerm_container_app.this["main"]
+}
+
+moved {
+  from = cloudflare_dns_record.app
+  to   = cloudflare_dns_record.app["main"]
 }
 
 # Authenticated Origin Pulls ("global" AOP): Cloudflare presents its origin-pull client certificate on every

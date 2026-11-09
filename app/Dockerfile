@@ -34,9 +34,12 @@ FROM mcr.microsoft.com/dotnet/sdk:${DOTNET_VERSION} AS backend-build
 WORKDIR /src
 
 # Restore in its own layer, keyed only on the files that decide which packages are needed.
+# Restore and publish target the platform the image is built for (--use-current-runtime: linux-x64, or linux-arm64 for
+# an Arm image), so native libraries for other platforms stay out of the image. SkiaSharp, which shrinks item
+# pictures, ships one for every OS and CPU it supports: over 450 MB in all, against 12 MB for this one.
 COPY Directory.Build.props Directory.Packages.props ./
 COPY backend/LoginApp.Api.csproj backend/
-RUN dotnet restore backend/LoginApp.Api.csproj
+RUN dotnet restore backend/LoginApp.Api.csproj --use-current-runtime
 
 COPY backend/ backend/
 
@@ -49,6 +52,8 @@ COPY --from=frontend-build /src/frontend/dist/ backend/wwwroot/
 RUN dotnet publish backend/LoginApp.Api.csproj \
         --configuration Release \
         --no-restore \
+        --use-current-runtime \
+        --no-self-contained \
         --output /app/publish \
         -p:UseAppHost=false
 

@@ -1,6 +1,7 @@
 using System.ComponentModel.DataAnnotations;
 using LoginApp.Api.Features.Auth;
 using LoginApp.Api.Features.GroceryList;
+using LoginApp.Api.Features.GroceryList.Images;
 using LoginApp.Api.Infrastructure.Networking;
 
 namespace LoginApp.Api.Tests.Infrastructure;
@@ -114,6 +115,56 @@ public sealed class OptionsValidationTests
     }
 
     // Mirrors what ValidateDataAnnotations() does at startup, including IValidatableObject rules.
+    [Theory]
+    [InlineData("https://generativelanguage.googleapis.com/v1/")]
+    [InlineData("http://localhost:5099/v1/")]
+    [InlineData("http://127.0.0.1:5099/v1/")]
+    public void ImageGenerationOptions_WithHttpsOrLocalEndpoint_PassValidation(string endpoint)
+    {
+        // Arrange
+        ImageGenerationOptions options = new() { Endpoint = new Uri(endpoint) };
+
+        // Act + Assert
+        Assert.Empty(Validate(options));
+    }
+
+    [Theory]
+    [InlineData("http://generativelanguage.googleapis.com/v1/")] // the key would cross the network unencrypted
+    [InlineData("ftp://localhost/v1/")]
+    public void ImageGenerationOptions_WithUnsafeEndpoint_FailValidation(string endpoint)
+    {
+        // Arrange
+        ImageGenerationOptions options = new() { Endpoint = new Uri(endpoint) };
+
+        // Act + Assert
+        Assert.NotEmpty(Validate(options));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("../tunedModels/x")] // would change the request path
+    [InlineData("gemini image")]
+    public void ImageGenerationOptions_WithInvalidModel_FailValidation(string model)
+    {
+        // Arrange
+        ImageGenerationOptions options = new() { Model = model };
+
+        // Act + Assert
+        Assert.NotEmpty(Validate(options));
+    }
+
+    [Fact]
+    public void ImageGenerationOptions_Defaults_PassValidationButDrawNothingWithoutAKey()
+    {
+        // Arrange
+        ImageGenerationOptions options = new();
+
+        // Act + Assert
+        Assert.Empty(Validate(options));
+        Assert.False(options.IsConfigured);
+        Assert.Equal("gemini-3.1-flash-lite-image", options.Model);
+    }
+
     private static List<ValidationResult> Validate(object options)
     {
         List<ValidationResult> results = [];

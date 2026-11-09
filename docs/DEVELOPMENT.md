@@ -149,6 +149,11 @@ dotnet restore app/LoginApp.slnx
 # which signs you out whenever the API restarts.
 dotnet user-secrets --project app/backend set "Jwt:SigningKey" "$(openssl rand -base64 48)"
 
+# Optional: a Gemini API key, for AI pictures of items (each new item name costs a picture, about 3 cents; the key's
+# Google Cloud project needs billing). Without one the app works, and its picture switch says pictures aren't set up.
+read -rsp 'Gemini API key: ' GEMINI_API_KEY && echo
+dotnet user-secrets --project app/backend set "ImageGeneration:ApiKey" "$GEMINI_API_KEY" && unset GEMINI_API_KEY
+
 code login-app.code-workspace
 ```
 
@@ -271,17 +276,21 @@ npm audit --omit=dev  # vulnerabilities in what ships to browsers
   - The grocery list: every endpoint (validation, partial updates, ordering and renumbering, the item cap, deleted
     accounts), the per-user rate limit, and the realtime hub over real WebSockets (changes reach other users; anonymous
     and cross-site connections are refused; a connection closes when its session expires).
-  - Unit tests cover token issuing, options validation, the internal-network middleware and item positions.
+  - AI pictures, with a stand-in for Gemini (`PictureApiFactory`; no test calls the real API): items wait for a
+    picture and every phone receives it, pictures are shared by name and cached by browsers, renaming, the settings
+    switch, failures and retries, and items left waiting by a restart.
+  - Unit tests cover token issuing, options validation, the internal-network middleware, item positions, the Gemini
+    client (what it sends, and how it reads pictures, refusals and errors) and the picture shrinking.
   - The SQLite database is a temporary file, so the hub and HTTP requests can use the database at the same time.
 - **Frontend (`src/**/__tests__`):**
   - Validation rules and error normalization.
   - The composables (form validation, async actions, redirect safety).
   - The router guard and the auth store, including session expiry.
   - The grocery list store: ordering, versions and deletions applied in any order, optimistic writes and their
-    rollback, reloads that don't lose changes, and the offline fallback.
+    rollback, reloads that don't lose changes, the offline fallback, and the shared settings and picture placeholders.
   - The SignalR wrapper's retry, restart and stop behavior (with SignalR mocked).
   - The field components' `v-model` and accessibility wiring; the add form, item list (including dragging with
-    pointer events and the arrow keys) and item editor.
+    pointer events and the arrow keys, and the pictures), item editor and list settings.
   - The login view and the grocery list view end to end, with the API mocked.
 
 The real EF Core migrations target PostgreSQL. They are exercised whenever the API starts against a real database,
@@ -327,6 +336,10 @@ for example `Jwt--SigningKey`.
 | `RateLimiting:GroceryList:PermitLimit` / `:Window` | `120` / `00:01:00` | Changes to the list and realtime connection attempts per user per window |
 | `GroceryList:MaxItems` | `500` | How many items the shared list may hold |
 | `GroceryList:Stores` | `Whole Foods`, `Indian Grocery`, `Teeter/Lion`, `Costco` | The store choices, in the order the list is grouped by. Set in appsettings.json (an array; in environment variables `GroceryList__Stores__0` and so on). At least one, no duplicates |
+| `ImageGeneration:ApiKey` | none (pictures off) | Gemini API key for AI pictures of items. A secret: user secrets locally, Key Vault secret `ImageGeneration--ApiKey` in Azure |
+| `ImageGeneration:Model` | `gemini-3.1-flash-lite-image` | The Gemini image model (Google's cheapest and fastest; about 3 cents a picture) |
+| `ImageGeneration:Endpoint` | `https://generativelanguage.googleapis.com/v1/` | Gemini API base URL; `https://`, or `http://` to localhost only (a stand-in for testing) |
+| `ImageGeneration:MaxImagesPerDay` | `100` | Pictures drawn in any 24 hours, at most (counted in memory); `0` stops drawing. Anyone can register, so this caps the spend |
 | `Network:RestrictToInternalNetworks` | `true` | Refuse (403) peers outside `Network:InternalNetworks` |
 | `Network:InternalNetworks` | RFC 1918, 100.64/10, link-local, loopback, IPv6 ULA | CIDR list; also the proxies trusted for `X-Forwarded-*` |
 | `KeyVault:Uri` | empty (off) | e.g. `https://kv-login-app.vault.azure.net/`; loads all vault secrets at startup |
@@ -405,6 +418,7 @@ such as treating EF migrations as generated code, live in an `.editorconfig` und
 | Hot reload doesn't notice changes; npm is very slow | The repository is under `/mnt/c`; clone it into the Linux file system instead |
 | `npm WARN EBADENGINE` | Your Node.js is older than the toolchain needs: `nvm install 24` |
 | The list's status pill stays on "Offline" or "Connecting…" in development | The API isn't running, or the Vite dev server was started before `vite.config.ts` gained `ws: true` for `/api`: restart `npm run dev` |
+| Items never get pictures; the list settings say "AI pictures aren't set up" | No Gemini API key: set `ImageGeneration:ApiKey` with `dotnet user-secrets` (section 5). With a key, the API log names the reason for each missing picture (event IDs 5020–5027): a refused key (`403 PERMISSION_DENIED`), no billing on the key's project, the daily limit, or Gemini declining to draw a name |
 | `Address already in use` on port 5082, 5173 or 8080 | Find the process with `ss -ltnp \| grep :5082` and stop it, or pass `--port` to `buildAndRunSite.sh` |
 | Sign-in works in Chrome/Edge but not Safari on `http://localhost:8080` in Production mode | Production cookies are `Secure`; Safari refuses them over plain HTTP even on localhost. Use the Development environment locally |
 | Workspace settings show "Value is not accepted" for formatters | The recommended extensions aren't installed yet (section 5) |

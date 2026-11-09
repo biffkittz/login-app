@@ -1,5 +1,9 @@
 <script setup lang="ts">
+import { computed } from 'vue'
+
 import type { GroceryItem } from '@/types/grocery'
+
+import ItemPicture from './item-picture.vue'
 
 interface Props {
   item: GroceryItem
@@ -9,9 +13,22 @@ interface Props {
   checked?: boolean
   /** The id of the element that explains how to use the move handle. */
   moveHintId: string
+  /**
+   * Other items have pictures: show a plain tile when this one has none, so every name starts in the same place. A
+   * list without any pictures (they were never on) shows no tiles at all.
+   */
+  pictureColumn?: boolean
 }
 
-const { item, dragging = false, checked = false, moveHintId } = defineProps<Props>()
+const {
+  item,
+  dragging = false,
+  checked = false,
+  moveHintId,
+  pictureColumn = false,
+} = defineProps<Props>()
+
+const showsTile = computed(() => pictureColumn || item.imageUrl !== null || item.imagePending)
 
 const emit = defineEmits<{
   /** Check the item off (remove it from the list). */
@@ -62,42 +79,47 @@ const emit = defineEmits<{
       </span>
     </button>
 
+    <!-- The picture is part of the button, so tapping it opens the item too. -->
     <button
       type="button"
-      class="min-w-0 flex-1 rounded-xl py-2 pr-1 pl-1.5 text-left focus-visible:outline-3 focus-visible:outline-offset-1 focus-visible:outline-ember-600"
+      class="flex min-w-0 flex-1 items-center gap-3 rounded-xl pr-1 pl-1.5 text-left focus-visible:outline-3 focus-visible:outline-offset-1 focus-visible:outline-ember-600"
+      :class="showsTile ? 'py-1' : 'py-2'"
       @click="emit('edit')"
     >
-      <span class="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-        <span
-          class="text-[1.0625rem] leading-snug font-semibold [overflow-wrap:anywhere]"
-          :class="checked ? 'text-walnut-500 line-through' : 'text-walnut-900'"
-        >
-          {{ item.name }}
+      <ItemPicture v-if="showsTile" :url="item.imageUrl" :pending="item.imagePending" />
+      <span class="block min-w-0 flex-1">
+        <span class="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+          <span
+            class="text-[1.0625rem] leading-snug font-semibold [overflow-wrap:anywhere]"
+            :class="checked ? 'text-walnut-500 line-through' : 'text-walnut-900'"
+          >
+            {{ item.name }}
+          </span>
+          <span
+            v-if="item.quantity"
+            class="rounded-full bg-mustard-400/40 px-2 py-0.5 text-xs font-bold text-walnut-900"
+          >
+            <span class="sr-only">, quantity </span>{{ item.quantity }}
+          </span>
         </span>
-        <span
-          v-if="item.quantity"
-          class="rounded-full bg-mustard-400/40 px-2 py-0.5 text-xs font-bold text-walnut-900"
-        >
-          <span class="sr-only">, quantity </span>{{ item.quantity }}
+        <!-- No store here: the list is grouped by store, and the group's heading already names it. -->
+        <span v-if="item.brand" class="mt-0.5 flex flex-wrap gap-x-3 text-sm text-walnut-700">
+          <span class="inline-flex min-w-0 items-center gap-1">
+            <svg class="size-3.5 shrink-0" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path
+                d="M3 12V4h8l10 10-8 8L3 12z"
+                stroke="currentColor"
+                stroke-width="2.25"
+                stroke-linejoin="round"
+              />
+              <circle cx="7.5" cy="8.5" r="1.5" fill="currentColor" />
+            </svg>
+            <span class="sr-only">, brand </span><span class="truncate">{{ item.brand }}</span>
+          </span>
         </span>
-      </span>
-      <!-- No store here: the list is grouped by store, and the group's heading already names it. -->
-      <span v-if="item.brand" class="mt-0.5 flex flex-wrap gap-x-3 text-sm text-walnut-700">
-        <span class="inline-flex min-w-0 items-center gap-1">
-          <svg class="size-3.5 shrink-0" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path
-              d="M3 12V4h8l10 10-8 8L3 12z"
-              stroke="currentColor"
-              stroke-width="2.25"
-              stroke-linejoin="round"
-            />
-            <circle cx="7.5" cy="8.5" r="1.5" fill="currentColor" />
-          </svg>
-          <span class="sr-only">, brand </span><span class="truncate">{{ item.brand }}</span>
+        <span v-if="item.notes" class="mt-0.5 line-clamp-1 text-sm text-walnut-700 italic">
+          <span class="sr-only">, notes: </span>{{ item.notes }}
         </span>
-      </span>
-      <span v-if="item.notes" class="mt-0.5 line-clamp-1 text-sm text-walnut-700 italic">
-        <span class="sr-only">, notes: </span>{{ item.notes }}
       </span>
     </button>
 

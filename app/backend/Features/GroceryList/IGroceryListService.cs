@@ -1,4 +1,5 @@
 using LoginApp.Api.Features.GroceryList.Contracts;
+using LoginApp.Api.Features.GroceryList.Images;
 
 namespace LoginApp.Api.Features.GroceryList;
 
@@ -9,11 +10,19 @@ namespace LoginApp.Api.Features.GroceryList;
 internal interface IGroceryListService
 {
     /// <summary>
-    /// Returns the whole list in order.
+    /// Returns the whole list in order, with the stores and the list's settings.
     /// </summary>
     /// <param name="cancellationToken">Cancels the operation.</param>
     /// <returns>Every item, sorted by position.</returns>
     public Task<GroceryListResponse> GetListAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Returns an item picture.
+    /// </summary>
+    /// <param name="imageId">The picture's ID.</param>
+    /// <param name="cancellationToken">Cancels the operation.</param>
+    /// <returns>The picture, or <see langword="null"/> if there is none with that ID.</returns>
+    public Task<GroceryItemImage?> GetImageAsync(Guid imageId, CancellationToken cancellationToken);
 
     /// <summary>
     /// Adds an item, at the top of the list or after <see cref="CreateGroceryItemRequest.AfterItemId"/>.
@@ -63,4 +72,28 @@ internal interface IGroceryListService
     /// <param name="cancellationToken">Cancels the operation.</param>
     /// <returns>The change, or why the item wasn't removed.</returns>
     public Task<GroceryListWriteResult> DeleteItemAsync(string userId, Guid itemId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Changes the list's settings present in <paramref name="request"/>, and tells every connected client.
+    /// </summary>
+    /// <param name="userId">The signed-in user making the change.</param>
+    /// <param name="request">The settings to change.</param>
+    /// <param name="cancellationToken">Cancels the operation.</param>
+    /// <returns>The settings as they are now, or why they weren't changed.</returns>
+    public Task<GroceryListSettingsResult> UpdateSettingsAsync(
+        string userId,
+        UpdateGroceryListSettingsRequest request,
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Ends an item's wait for its picture (<see cref="GroceryItem.ImagePending"/>): attaches the picture drawn for
+    /// <paramref name="nameKey"/>, or none, and broadcasts the item. Called by <see cref="GroceryImageWorker"/>.
+    /// </summary>
+    /// <param name="itemId">The item.</param>
+    /// <param name="nameKey">The name the picture was drawn for. If the item has been renamed since, it keeps waiting
+    /// for its new name's picture.</param>
+    /// <param name="imageId">The picture, or <see langword="null"/> when none could be drawn.</param>
+    /// <param name="cancellationToken">Cancels the operation.</param>
+    /// <returns>A task that completes when the item has been saved and broadcast, or left as it was.</returns>
+    public Task FinishImageAsync(Guid itemId, string nameKey, Guid? imageId, CancellationToken cancellationToken);
 }

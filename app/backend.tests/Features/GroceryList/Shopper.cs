@@ -94,6 +94,23 @@ internal sealed class Shopper : IDisposable
     public Task<HttpResponseMessage> MoveItemAsync(Guid itemId, Guid? afterItemId) =>
         Http.PostAsJsonAsync($"{ItemsPath}/{itemId}/move", new { afterItemId }, CancellationToken);
 
+    /// <summary>Sends <c>PATCH /api/grocery-list/settings</c>.</summary>
+    /// <param name="body">The request body.</param>
+    /// <returns>The response.</returns>
+    public Task<HttpResponseMessage> PatchSettingsAsync(object body) =>
+        Http.PatchAsJsonAsync("/api/grocery-list/settings", body, CancellationToken);
+
+    /// <summary>Turns AI pictures on or off, failing the test if that doesn't work.</summary>
+    /// <param name="enabled">Whether pictures should be on.</param>
+    /// <returns>The settings as saved.</returns>
+    public async Task<GroceryListSettingsResponse> SetImageGenerationAsync(bool enabled)
+    {
+        using HttpResponseMessage response = await PatchSettingsAsync(new { imageGenerationEnabled = enabled });
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<GroceryListSettingsResponse>(CancellationToken)
+            ?? throw new InvalidOperationException("The response had no body.");
+    }
+
     /// <summary>Sends <c>DELETE /api/grocery-list/items/{itemId}</c>.</summary>
     /// <param name="itemId">The item.</param>
     /// <returns>The response.</returns>

@@ -20,6 +20,14 @@
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="$(EntityFrameworkCoreVersion)" />
     <PackageVersion Include="Microsoft.Extensions.Diagnostics.HealthChecks.EntityFrameworkCore" Version="$(AspNetCoreVersion)" />
     <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
+    <!--
+      Shrinks the pictures Gemini draws for grocery items (decode, crop, resize, encode WebP). MIT-licensed; ImageSharp
+      was passed over because its current releases fail Release builds without a Six Labors license key.
+      SkiaSharp brings its own native library: the Linux one comes from the NoDependencies package, which needs no
+      fontconfig in the container, and Windows and macOS ones come with SkiaSharp itself for development machines.
+    -->
+    <PackageVersion Include="SkiaSharp" Version="4.154.1" />
+    <PackageVersion Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="4.154.1" />
   </ItemGroup>
 
   <ItemGroup Label="Tests">

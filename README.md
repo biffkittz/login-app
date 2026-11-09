@@ -2,7 +2,8 @@
 
 A realtime grocery list for a family, built for phones. Everyone who signs in shares one list: they can add, edit,
 check off, delete and drag items into order, and every change appears on everybody else's screen as it happens.
-Items carry a quantity, brand, store and notes, and remember who changed them last and when.
+Items carry a quantity, brand, store and notes, remember who changed them last and when, and get a small picture
+drawn by Google's Gemini.
 
 Nibbles grew out of a sign-up / sign-in app built to production standards, which is still its foundation (the code
 keeps its original `LoginApp` names):
@@ -14,10 +15,12 @@ keeps its original `LoginApp` names):
 - **Hosting:** one Linux container in which Kestrel serves the API, the realtime hub and the compiled SPA. In Azure
   Container Apps it terminates TLS itself on port 443 with the Cloudflare origin certificate, accepts only requests
   that carry Cloudflare's client certificate, and reads its secrets from Azure Key Vault. Locally it serves plain HTTP.
+  Two independent instances of the image run in Azure, at app.biffkittz.com and grocery.biffkittz.com, each with its
+  own database (and so its own accounts and list).
 
 ```mermaid
 flowchart LR
-  user([Phones and browsers]) -->|"HTTPS and WebSockets"| cf[Cloudflare<br/>app.biffkittz.com]
+  user([Phones and browsers]) -->|"HTTPS and WebSockets"| cf[Cloudflare<br/>app.biffkittz.com<br/>grocery.biffkittz.com]
   cf -->|"TLS :8443 + Cloudflare<br/>client certificate"| ingress[Container Apps ingress<br/>TCP pass-through]
   subgraph vnet[Azure virtual network]
     ingress -->|"TLS :443"| app[login-app container<br/>Kestrel: TLS, API, SignalR hub, Vue SPA]
@@ -25,6 +28,7 @@ flowchart LR
   end
   kv[Azure Key Vault] -.->|secrets and certificate via managed identity| app
   acr[Azure Container Registry] -.->|image pull| app
+  app -->|"HTTPS: item names"| gemini[Gemini API<br/>item pictures]
 ```
 
 The Azure side is built with Terraform in [`infra/`](infra/README.md).
@@ -100,6 +104,9 @@ login-app/
     SignalR. A list reconnects and catches up by itself after a dropped connection, a server restart, or a phone
     coming out of a pocket.
   - Each item records when it was added and last changed, and by whom.
+  - Each new item gets a picture, left of its name: Gemini draws it from the name in the background, and the server
+    shrinks it to a WebP of a few kilobytes that phones cache for good. Items with the same name share one picture.
+    A switch in the list's settings turns AI pictures off for everyone.
 - **Accounts:** registration with name, email and password. Passwords need at least 12 characters (a length-based
   policy per NIST SP 800-63B) and are hashed with PBKDF2 by ASP.NET Core Identity. Any registered user can use the
   list.
@@ -107,7 +114,8 @@ login-app/
   cookie. JavaScript never sees the token; the UI signs out automatically when it expires, and the realtime
   connection closes with it.
 - **Abuse protection:** accounts lock for 15 minutes after five failed sign-ins; each client IP is rate-limited on the
-  login and registration endpoints, and each user on changes to the list. The list holds at most 500 items.
+  login and registration endpoints, and each user on changes to the list. The list holds at most 500 items, and at
+  most 100 pictures are drawn a day.
 - **Hardening:**
   - A strict Content-Security-Policy and security headers on every response.
   - A 64 KB request body limit, and a cap on concurrent WebSocket connections.

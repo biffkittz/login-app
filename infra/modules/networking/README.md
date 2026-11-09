@@ -49,7 +49,7 @@ attached, so nothing is ever deployed into an unprotected subnet.
 | <a name="input_subnet_address_prefixes"></a> [subnet\_address\_prefixes](#input\_subnet\_address\_prefixes) | Address prefix of each dedicated subnet. Each must lie inside address\_space and must not overlap the others. | <pre>object({<br/>    container_apps = string<br/>    postgresql     = string<br/>  })</pre> | n/a | yes |
 | <a name="input_tags"></a> [tags](#input\_tags) | Tags applied to every taggable resource in this module. | `map(string)` | n/a | yes |
 | <a name="input_app_ingress_allowed_cidrs"></a> [app\_ingress\_allowed\_cidrs](#input\_app\_ingress\_allowed\_cidrs) | Source ranges allowed to reach the app's public TCP ingress, in the Container Apps subnet's NSG. An empty list allows the whole internet. | `list(string)` | `[]` | no |
-| <a name="input_app_ingress_port"></a> [app\_ingress\_port](#input\_app\_ingress\_port) | Public TCP port of the app's ingress (the Container App's exposed port). | `number` | `8443` | no |
+| <a name="input_app_ingress_ports"></a> [app\_ingress\_ports](#input\_app\_ingress\_ports) | Public TCP ports of the apps' ingress (each Container App's exposed port). | `list(number)` | <pre>[<br/>  8443<br/>]</pre> | no |
 
 ### Outputs
 

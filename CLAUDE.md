@@ -3,7 +3,8 @@
 A realtime family grocery list for phones, at https://app.biffkittz.com: every signed-in user shares one list, and
 changes reach every open list over SignalR (WebSockets) hosted in the app. It is built on a production-grade
 sign-up / sign-in app whose names it keeps (`LoginApp.Api`, `loginapp` in Terraform; renaming Azure resources would
-replace them). Hosted on Azure Container Apps behind Cloudflare; the container terminates TLS itself.
+replace them). Hosted on Azure Container Apps behind Cloudflare; the container terminates TLS itself. A second,
+independent instance of the same image runs at https://grocery.biffkittz.com, with its own database, accounts and list.
 
 - `app/`: ASP.NET Core 10 API + Vue 3 SPA in one container. See `app/CLAUDE.md`.
 - `infra/`: Terraform for Azure and Cloudflare. See `infra/CLAUDE.md`.
@@ -30,6 +31,8 @@ replace them). Hosted on Azure Container Apps behind Cloudflare; the container t
   Cloudflare's Authenticated Origin Pulls client certificate (health endpoints excepted). Locally it serves HTTP.
 - SignalR runs in-process, never Azure SignalR Service (a requirement), so the app is exactly one instance. Writes go
   through the REST API; the hub only pushes.
+- AI pictures of items come from the Gemini API (`ImageGeneration:ApiKey`; a secret like the others). Only item names
+  are sent, and pictures are stored as small WebPs (a few KB). Tests never call Gemini; don't add ones that do.
 
 ## Documentation
 

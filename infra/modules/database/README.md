@@ -33,6 +33,7 @@ availability zone is ignored, so later plans don't try to move the server.
 | ---- | ---- |
 | [azurerm_postgresql_flexible_server.this](https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/postgresql_flexible_server) | resource |
 | [azurerm_postgresql_flexible_server_configuration.require_secure_transport](https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/postgresql_flexible_server_configuration) | resource |
+| [azurerm_postgresql_flexible_server_database.additional](https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/postgresql_flexible_server_database) | resource |
 | [azurerm_postgresql_flexible_server_database.this](https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/postgresql_flexible_server_database) | resource |
 | [azurerm_private_dns_zone.this](https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/private_dns_zone) | resource |
 | [azurerm_private_dns_zone_virtual_network_link.this](https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/private_dns_zone_virtual_network_link) | resource |
@@ -54,11 +55,13 @@ availability zone is ignored, so later plans don't try to move the server.
 | <a name="input_storage_mb"></a> [storage\_mb](#input\_storage\_mb) | Allocated storage in MB. | `number` | n/a | yes |
 | <a name="input_tags"></a> [tags](#input\_tags) | Tags applied to every taggable resource in this module. | `map(string)` | n/a | yes |
 | <a name="input_virtual_network_id"></a> [virtual\_network\_id](#input\_virtual\_network\_id) | Virtual network to link the private DNS zone to, so clients in it resolve the server's private IP. | `string` | n/a | yes |
+| <a name="input_additional_database_names"></a> [additional\_database\_names](#input\_additional\_database\_names) | More databases on the same server, one per additional instance of the app: map of a static key (the instance) to the database name. | `map(string)` | `{}` | no |
 
 ### Outputs
 
 | Name | Description |
 | ---- | ----------- |
+| <a name="output_additional_database_names"></a> [additional\_database\_names](#output\_additional\_database\_names) | Names of the additional databases, keyed like additional\_database\_names. Referencing them makes consumers wait until the databases exist. |
 | <a name="output_administrator_login"></a> [administrator\_login](#output\_administrator\_login) | Login name of the server administrator. |
 | <a name="output_database_name"></a> [database\_name](#output\_database\_name) | Name of the application database. |
 | <a name="output_fqdn"></a> [fqdn](#output\_fqdn) | Host name for connection strings. It resolves to the private IP inside the linked virtual network. |

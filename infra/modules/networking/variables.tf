@@ -32,10 +32,10 @@ variable "app_ingress_allowed_cidrs" {
   default     = []
 }
 
-variable "app_ingress_port" {
-  description = "Public TCP port of the app's ingress (the Container App's exposed port)."
-  type        = number
-  default     = 8443
+variable "app_ingress_ports" {
+  description = "Public TCP ports of the apps' ingress (each Container App's exposed port)."
+  type        = list(number)
+  default     = [8443]
 }
 
 variable "tags" {

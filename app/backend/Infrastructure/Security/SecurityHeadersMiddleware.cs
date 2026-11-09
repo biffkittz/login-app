@@ -44,8 +44,10 @@ internal sealed class SecurityHeadersMiddleware(RequestDelegate next)
         headers["Cross-Origin-Opener-Policy"] = "same-origin";
         headers["Cross-Origin-Resource-Policy"] = "same-origin";
 
-        // API responses describe the signed-in user: never let a browser or proxy cache them.
-        if (context.Request.Path.StartsWithSegments("/api", StringComparison.OrdinalIgnoreCase))
+        // API responses describe the signed-in user: never let a browser or proxy cache them, unless the endpoint has
+        // deliberately said how (item pictures, which never change, are cached privately).
+        if (context.Request.Path.StartsWithSegments("/api", StringComparison.OrdinalIgnoreCase)
+            && string.IsNullOrEmpty(headers.CacheControl))
         {
             headers.CacheControl = "no-store";
         }

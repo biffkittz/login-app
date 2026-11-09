@@ -20,6 +20,7 @@ async function mountView(...items: GroceryItem[]) {
   vi.mocked(groceryApi.getList).mockResolvedValue({
     items,
     stores: ['Whole Foods', 'Indian Grocery', 'Teeter/Lion', 'Costco'],
+    settings: { version: 1, imageGenerationEnabled: true, imageGenerationAvailable: true },
   })
   const router = createRouter({
     history: createMemoryHistory(),
@@ -170,6 +171,60 @@ describe('GroceryListView', () => {
     expect(groceryApi.updateItem).toHaveBeenCalledWith('a', { quantity: '6' })
     expect(wrapper.get('dialog').attributes('open')).toBeUndefined()
     expect(wrapper.get('li').text()).toContain('6')
+  })
+
+  it('lines names up once any item has a picture', async () => {
+    const wrapper = await mountView(
+      makeItem({ id: 'a', name: 'Apples', imageUrl: '/api/grocery-list/images/1' }),
+      makeItem({ id: 'b', name: 'Bread', store: 'Costco' }),
+    )
+
+    // Bread, in another section and without a picture, still gets a tile.
+    expect(wrapper.findAll('li [data-item-picture]')).toHaveLength(2)
+    expect(wrapper.find('li [data-picture-none]').exists()).toBe(true)
+  })
+
+  it('shows no picture tiles while no item has a picture', async () => {
+    const wrapper = await mountView(makeItem({ id: 'a', name: 'Apples' }))
+
+    expect(wrapper.find('li [data-item-picture]').exists()).toBe(false)
+  })
+
+  it('turns AI pictures off for everyone from the list settings', async () => {
+    const wrapper = await mountView(makeItem({ id: 'a', name: 'Apples' }))
+    vi.mocked(groceryApi.updateSettings).mockResolvedValue({
+      version: 2,
+      imageGenerationEnabled: false,
+      imageGenerationAvailable: true,
+    })
+
+    await wrapper.get('button[aria-label="List settings"]').trigger('click')
+    const sheet = wrapper
+      .findAll('dialog')
+      .find((dialog) => dialog.text().includes('List settings'))
+    expect(sheet?.attributes('open')).toBeDefined()
+    await sheet!.get('input[role="switch"]').setValue(false)
+    await flushPromises()
+
+    expect(groceryApi.updateSettings).toHaveBeenCalledWith({ imageGenerationEnabled: false })
+    expect(sheet!.get<HTMLInputElement>('input[role="switch"]').element.checked).toBe(false)
+  })
+
+  it('explains in the settings sheet when the setting could not be changed', async () => {
+    const wrapper = await mountView()
+    vi.mocked(groceryApi.updateSettings).mockRejectedValue(
+      Object.assign(new Error('offline'), { isAxiosError: true, code: 'ERR_NETWORK' }),
+    )
+
+    await wrapper.get('button[aria-label="List settings"]').trigger('click')
+    const sheet = wrapper
+      .findAll('dialog')
+      .find((dialog) => dialog.text().includes('List settings'))
+    await sheet!.get('input[role="switch"]').setValue(false)
+    await flushPromises()
+
+    expect(sheet!.get('[role="alert"]').text()).toContain("Couldn't change the setting.")
+    expect(sheet!.get<HTMLInputElement>('input[role="switch"]').element.checked).toBe(true)
   })
 
   it('tells the user when a change could not be saved', async () => {

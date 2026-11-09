@@ -28,8 +28,12 @@ namespace LoginApp.Api.Tests.Infrastructure;
 /// SQLite keeps the suite fast and hermetic, but it is not PostgreSQL. The real migrations are exercised by
 /// buildAndRunSite.sh and in deployment, which apply them to an actual PostgreSQL server.
 /// </para>
+/// <para>
+/// No Gemini API key is configured, so items never wait for a picture and nothing calls a paid API.
+/// <c>PictureApiFactory</c> adds a key and a stand-in for Gemini.
+/// </para>
 /// </remarks>
-public sealed class LoginApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
+public class LoginApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
 {
     /// <summary>A throwaway 384-bit signing key used only by the tests.</summary>
     public const string TestSigningKey = "tzFgVZ1NKHOPM9fFJYqTZlZ/sWmc/SgrU/2l9oXT4YoU65GAA3pYPKUhIUrjxF3k";
@@ -59,10 +63,13 @@ public sealed class LoginApiFactory : WebApplicationFactory<Program>, IAsyncLife
     /// <inheritdoc />
     public async ValueTask InitializeAsync()
     {
-        // Accessing Services builds the host; the schema is created from the model because the EF migrations
-        // target PostgreSQL.
-        await using AsyncServiceScope scope = Services.CreateAsyncScope();
-        ApplicationDbContext dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        // The schema is created from the model because the EF migrations target PostgreSQL. It must exist before the
+        // host starts (on first use of Services or a client), as the app's database migration would in production:
+        // the picture worker reads the database as soon as it runs.
+        DbContextOptions<ApplicationDbContext> options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseSqlite(ConnectionString)
+            .Options;
+        await using ApplicationDbContext dbContext = new(options);
         await dbContext.Database.EnsureCreatedAsync(TestContext.Current.CancellationToken);
 
         // Write-ahead logging lets readers carry on while another connection writes, instead of failing with
@@ -78,6 +85,8 @@ public sealed class LoginApiFactory : WebApplicationFactory<Program>, IAsyncLife
         {
             File.Delete(file);
         }
+
+        GC.SuppressFinalize(this);
     }
 
     /// <inheritdoc />

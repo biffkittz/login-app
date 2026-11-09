@@ -18,6 +18,8 @@
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" />
     <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks.EntityFrameworkCore" />
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
+    <PackageReference Include="SkiaSharp" />
+    <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" />
     <!--
       Needed only by the `dotnet ef` tooling at design time. Publish="false" keeps it (and the Roslyn
       compiler it depends on) out of the published app and therefore out of the container image.

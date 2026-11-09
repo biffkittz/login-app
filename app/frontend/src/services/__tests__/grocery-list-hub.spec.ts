@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import type { ConnectionState, GroceryListChange } from '@/types/grocery'
+import type { ConnectionState, GroceryListChange, GroceryListSettings } from '@/types/grocery'
 
 import { createGroceryListHub, retryDelay, type GroceryListHubHandlers } from '../grocery-list-hub'
 
@@ -68,6 +68,7 @@ function recordingHandlers(): GroceryListHubHandlers & { states: ConnectionState
   return {
     states,
     onChange: vi.fn(),
+    onSettingsChange: vi.fn(),
     onStateChange: (state) => states.push(state),
     onConnected: vi.fn(),
   }
@@ -117,6 +118,20 @@ describe('createGroceryListHub', () => {
     fake.messageHandlers.get('ListChanged')?.(change)
 
     expect(handlers.onChange).toHaveBeenCalledWith(change)
+  })
+
+  it('passes pushed settings on', async () => {
+    const handlers = recordingHandlers()
+    await createGroceryListHub(handlers).start()
+    const settings: GroceryListSettings = {
+      version: 2,
+      imageGenerationEnabled: false,
+      imageGenerationAvailable: true,
+    }
+
+    fake.messageHandlers.get('SettingsChanged')?.(settings)
+
+    expect(handlers.onSettingsChange).toHaveBeenCalledWith(settings)
   })
 
   it('keeps trying until the server can be reached', async () => {

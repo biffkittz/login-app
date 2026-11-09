@@ -64,7 +64,7 @@ sequenceDiagram
 | `POST /api/auth/login` | anonymous, rate-limited | `200` + user + cookie | `401` wrong credentials, `429` locked out or rate-limited |
 | `POST /api/auth/logout` | cookie required | `204`, cookie deleted | `401` |
 | `GET /api/auth/me` | cookie required | `200` + user | `401` |
-| `GET /api/grocery-list` and the item endpoints | cookie required | see [The grocery list](#the-grocery-list) | `401` |
+| `GET /api/grocery-list`, the item, picture and settings endpoints | cookie required | see [The grocery list](#the-grocery-list) | `401` |
 | `GET /health/live`, `/health/ready` | anonymous | `200 Healthy` | `503` (ready: database unreachable) |
 
 All errors are [RFC 9457 problem details](https://www.rfc-editor.org/rfc/rfc9457) (`application/problem+json`).
@@ -83,14 +83,17 @@ There is one list, shared by every registered user (the requirement is that any 
 | `lastModifiedById`, `lastModifiedByName` | Who added the item or last changed its details; cleared if that account is deleted (the item stays) |
 | `position` | The sort key (see [Order](#order)) |
 | `version` | Increases with every change, moves included; the optimistic-concurrency token and the key to realtime consistency |
+| `imageUrl`, `imagePending` | The item's AI-drawn picture, or `null`; `imagePending` while one is being drawn (see [AI pictures](#ai-pictures)) |
 
 | Endpoint | Body | Success |
 | --- | --- | --- |
-| `GET /api/grocery-list` | | `200 { items, stores }`: items in order, and the store choices in display order |
+| `GET /api/grocery-list` | | `200 { items, stores, settings }`: items in order, the store choices in display order, and the list's settings |
 | `POST /api/grocery-list/items` | `id?`, `name`, optional details, `afterItemId?` | `201` + change |
 | `PATCH /api/grocery-list/items/{id}` | only the fields to change; `""` clears one | `200` + change |
 | `POST /api/grocery-list/items/{id}/move` | `afterItemId` (`null` = top) | `200` + change |
 | `DELETE /api/grocery-list/items/{id}` | | `200` + change |
+| `GET /api/grocery-list/images/{id}` | | `200` WebP picture, cacheable for a year; `404` |
+| `PATCH /api/grocery-list/settings` | `imageGenerationEnabled?` | `200` + settings, also broadcast as `SettingsChanged` |
 
 Every write answers with a **change**, `{ savedItems, deletedItemIds }`, and the hub sends the very same change to
 every connected browser, the author's included. The SPA therefore has one code path for its own changes and
@@ -154,6 +157,55 @@ Reordering happens within a section. Each section is a slice of the one list, so
 matter, because each is shown on its own. Changing an item's store moves it to that store's section, keeping its
 place relative to the items already there.
 
+### AI pictures
+
+Every new item gets a small picture, drawn by Google's Gemini from the item's name and shown left of the name.
+
+```mermaid
+sequenceDiagram
+  participant A as Ada's phone
+  participant API as API
+  participant W as Picture worker
+  participant Gm as Gemini API
+  participant G as Grace's phone
+  A->>API: POST /api/grocery-list/items { name: "Oat milk" }
+  API-->>A: 201 { item v1, imagePending: true }
+  API--)G: ListChanged { item v1, imagePending: true }
+  API->>W: wake up
+  W->>Gm: generateContent (the name, nothing else)
+  Gm-->>W: 1024-pixel PNG, about a megabyte
+  W->>W: crop, shrink to a 128-pixel WebP of a few KB, save
+  W--)A: ListChanged { item v2, imageUrl }
+  W--)G: ListChanged { item v2, imageUrl }
+```
+
+- **In the background.** Adding an item never waits for Gemini, which takes 5 to 15 seconds. The item arrives with
+  `imagePending: true`, the SPA shows a pulsing placeholder, and the picture follows as an ordinary change to the item
+  (`version` goes up; `lastModifiedAt` and the author don't, because nobody edited it).
+- **Small and cached.** The picture is center-cropped, shrunk to 128 pixels (sharp at the 40 CSS pixels the list
+  uses, even on a 3x screen) and stored as lossy WebP of a few kilobytes (`GroceryImageThumbnails`, using SkiaSharp).
+  The list carries only each picture's URL; the browser loads pictures lazily and keeps each one for a year
+  (`Cache-Control: private, max-age=31536000, immutable`), because a picture's URL names one picture whose bytes never
+  change. It is the only API response that may be cached (everything else is `no-store`), and `private` keeps it out
+  of Cloudflare's cache.
+- **One picture per name.** Pictures are filed by name, ignoring case and spacing, and kept when their items go. An
+  item named like one that has (or had) a picture gets it immediately, at no cost, which suits a list where the same
+  things come back every week. Renaming an item gets it a picture of the new name (or, while pictures are off, no
+  picture, since the old one shows the old name); fixing its capitalization or spacing keeps the picture.
+- **A queue that survives restarts.** Waiting items are flagged in the database (`ImagePending`). The worker
+  (`GroceryImageWorker`, a hosted service) looks for them when the app starts and whenever an item starts waiting.
+  It draws two names at a time, asks again twice when Gemini is overloaded or rate-limiting, and otherwise gives up:
+  the item just has no picture. Failed pictures aren't retried later, so a name Gemini refuses to draw can't cost
+  money over and over.
+- **A daily limit.** Anyone can register, and each new name costs a picture (about 3 cents with the default model,
+  `gemini-3.1-flash-lite-image`), so at most `ImageGeneration:MaxImagesPerDay` (100) are drawn in any 24 hours; items
+  over the limit get none. The count is kept in memory and starts again when the app restarts.
+- **The switch.** "AI pictures" in the list's settings (the sliders button next to the connection status) turns
+  drawing off or on for everyone, like everything else about the list. Turning it off stops pictures still waiting;
+  pictures already drawn stay. Without an API key the switch is disabled and says why. Once any item has a picture,
+  items without one show a plain tile, so the names stay in line. The setting is one database
+  row (`GroceryListSettings`), versioned like items and broadcast to every phone as `SettingsChanged`.
+
 ### Order
 
 Items are ordered by a floating-point `position` (fractional indexing). Moving an item gives it the midpoint between
@@ -194,6 +246,7 @@ removed items meanwhile. New items go to the top, next to the "Add an item" fiel
 | **TLS in the container** | `OriginTls:CertificatePfxBase64` (the origin certificate from Key Vault) becomes Kestrel's HTTPS certificate, TLS 1.2 and 1.3 only. The app refuses to start if the certificate is unreadable, has no private key or is outside its validity period. |
 | **Internal-network allow-list** | The app refuses TCP peers outside `Network:InternalNetworks`, in case the image is ever exposed somewhere without the other controls. It checks the *immediate* peer (in Azure, the Container Apps ingress proxy), not the forwarded client, because users legitimately arrive from the internet through Cloudflare. |
 | **Trusted forwarded headers** | `X-Forwarded-For` and `X-Forwarded-Proto` are honored only from internal networks (and Cloudflare's ranges), walking back through trusted hops to the real client. That is what makes per-client rate limits and logs correct behind Cloudflare. The client-certificate check is what makes the header trustworthy: only Cloudflare can send it. |
+| **AI pictures: little out, nothing raw back in** | Only an item's name goes to Gemini, with the API key in a header (never in a URL). What the app serves is its own re-encoding, never Gemini's bytes: the decoder checks the size in the header before decoding (at most 4096 pixels a side), the HTTP client stops reading at 16 MB, and the result is a fresh WebP served as `image/webp` with `nosniff`. Pictures need the auth cookie like the rest of the list, and the daily limit bounds what a hostile account can spend. |
 | **Request body limit 64 KB, no `Server` header** | The largest legitimate request is an item with long notes, a few kilobytes, and the server software is nobody's business. |
 | **Data Protection keys in memory** | `AddAuthentication` registers Data Protection, but nothing uses it. Keeping its keys in memory avoids writing unused secret material into the container. |
 | **No secrets in source or image** | Secrets come from Key Vault (or user secrets locally). `.dockerignore` keeps `appsettings.Development.json` out of the image, and Development generates a temporary JWT key rather than committing one. |

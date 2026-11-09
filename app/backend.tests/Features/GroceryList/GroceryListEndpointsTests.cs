@@ -29,6 +29,8 @@ public sealed class GroceryListEndpointsTests(LoginApiFactory factory) : IClassF
     [InlineData("PATCH", "/api/grocery-list/items/7a0b5f43-6f7e-4a59-9f64-0c35d4b2f5d1")]
     [InlineData("POST", "/api/grocery-list/items/7a0b5f43-6f7e-4a59-9f64-0c35d4b2f5d1/move")]
     [InlineData("DELETE", "/api/grocery-list/items/7a0b5f43-6f7e-4a59-9f64-0c35d4b2f5d1")]
+    [InlineData("GET", "/api/grocery-list/images/7a0b5f43-6f7e-4a59-9f64-0c35d4b2f5d1")]
+    [InlineData("PATCH", "/api/grocery-list/settings")]
     public async Task Endpoints_WithoutSignIn_ReturnUnauthorized(string method, string path)
     {
         // Arrange
@@ -139,6 +141,23 @@ public sealed class GroceryListEndpointsTests(LoginApiFactory factory) : IClassF
 
         // Assert
         Assert.Equal(["Whole Foods", "Indian Grocery", "Teeter/Lion", "Costco"], list.Stores);
+    }
+
+    [Fact]
+    public async Task WithoutAnApiKey_PicturesAreUnavailable_AndItemsNeverWaitForOne()
+    {
+        // Arrange: this host has no Gemini API key (LoginApiFactory).
+        using Shopper shopper = await Shopper.SignUpAsync(factory);
+
+        // Act
+        GroceryListSettingsResponse settings = (await shopper.GetListAsync()).Settings;
+        GroceryItemResponse item = await shopper.AddItemAsync("Cabbage");
+
+        // Assert: the switch is on, as for a new list, but has nothing to switch.
+        Assert.True(settings.ImageGenerationEnabled);
+        Assert.False(settings.ImageGenerationAvailable);
+        Assert.False(item.ImagePending);
+        Assert.Null(item.ImageUrl);
     }
 
     [Fact]

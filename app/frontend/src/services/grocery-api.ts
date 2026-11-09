@@ -2,6 +2,8 @@ import type {
   GroceryItemChanges,
   GroceryList,
   GroceryListChange,
+  GroceryListSettings,
+  GroceryListSettingsChanges,
   NewGroceryItem,
 } from '@/types/grocery'
 
@@ -80,6 +82,23 @@ export async function deleteItem(
 ): Promise<GroceryListChange> {
   const { data } = await httpClient.delete<GroceryListChange>(
     `${ITEMS}/${encodeURIComponent(itemId)}`,
+    options,
+  )
+  return data
+}
+
+/**
+ * Changes the list's settings, for everyone. Settings left out keep their value.
+ *
+ * @throws {@link ApiError} 409 when someone changed them at the same moment.
+ */
+export async function updateSettings(
+  changes: GroceryListSettingsChanges,
+  options: RequestOptions = {},
+): Promise<GroceryListSettings> {
+  const { data } = await httpClient.patch<GroceryListSettings>(
+    '/grocery-list/settings',
+    changes,
     options,
   )
   return data

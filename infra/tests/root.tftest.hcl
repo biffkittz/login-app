@@ -110,7 +110,7 @@ run "first_apply_creates_everything_but_the_app" {
   command = plan
 
   assert {
-    condition     = output.app_image == null && module.container_apps.app_id == null
+    condition     = output.app_image == null && length(module.container_apps.app_ids) == 0
     error_message = "Without app_image_tag there is no image yet, so the Container App must not be created."
   }
 
@@ -135,17 +135,17 @@ run "dns_record_is_proxied_through_cloudflare" {
 
   assert {
     condition = (
-      cloudflare_dns_record.app.name == "app.biffkittz.com" &&
-      cloudflare_dns_record.app.type == "A" &&
-      cloudflare_dns_record.app.proxied == true &&
-      cloudflare_dns_record.app.ttl == 1 &&
-      cloudflare_dns_record.app.zone_id == "0123456789abcdef0123456789abcdef"
+      cloudflare_dns_record.app["main"].name == "app.biffkittz.com" &&
+      cloudflare_dns_record.app["main"].type == "A" &&
+      cloudflare_dns_record.app["main"].proxied == true &&
+      cloudflare_dns_record.app["main"].ttl == 1 &&
+      cloudflare_dns_record.app["main"].zone_id == "0123456789abcdef0123456789abcdef"
     )
     error_message = "app.biffkittz.com must be a proxied A record in the biffkittz.com zone."
   }
 
   assert {
-    condition     = strcontains(cloudflare_dns_record.app.comment, "project:loginapp") && length(cloudflare_dns_record.app.comment) <= 100
+    condition     = strcontains(cloudflare_dns_record.app["main"].comment, "project:loginapp") && length(cloudflare_dns_record.app["main"].comment) <= 100
     error_message = "The record comment must carry the project tag and fit Cloudflare's 100-character limit."
   }
 }
@@ -214,7 +214,7 @@ run "setting_an_image_tag_deploys_the_app" {
   }
 
   assert {
-    condition     = module.container_apps.app_id != null
+    condition     = module.container_apps.app_ids["main"] != null
     error_message = "With app_image_tag set, the Container App must be created."
   }
 
@@ -229,14 +229,191 @@ run "setting_an_image_tag_deploys_the_app" {
   }
 
   assert {
-    condition     = cloudflare_dns_record.app.content == output.origin_public_ip && output.origin_public_ip == "203.0.113.20"
+    condition     = cloudflare_dns_record.app["main"].content == output.origin_public_ip && output.origin_public_ip == "203.0.113.20"
     error_message = "The DNS record must point at the Container Apps environment's public IP."
+  }
+}
+
+run "pictures_are_unavailable_without_a_gemini_key" {
+  command = apply
+
+  variables {
+    app_image_tag = "1a2b3c4"
+  }
+
+  assert {
+    condition     = !contains(keys(module.key_vault.secret_ids), "gemini_api_key")
+    error_message = "Without a Gemini API key there must be no Key Vault secret for one (the app then offers no pictures)."
+  }
+
+  assert {
+    condition     = !contains(keys(local.app_secret_environment_variables), "ImageGeneration__ApiKey")
+    error_message = "Without a Gemini API key the app must get no ImageGeneration__ApiKey variable."
+  }
+}
+
+run "a_gemini_key_reaches_the_app_through_key_vault" {
+  command = apply
+
+  variables {
+    app_image_tag  = "1a2b3c4"
+    gemini_api_key = "test-gemini-key"
+  }
+
+  assert {
+    condition     = contains(keys(module.key_vault.secret_ids), "gemini_api_key")
+    error_message = "A Gemini API key must be stored in Key Vault, like the app's other secrets."
+  }
+
+  assert {
+    condition     = local.app_secrets["main"]["gemini-api-key"] == module.key_vault.secret_ids["gemini_api_key"]
+    error_message = "The Container App must reference the key's Key Vault secret."
+  }
+
+  assert {
+    condition     = local.app_secret_environment_variables["ImageGeneration__ApiKey"] == "gemini-api-key"
+    error_message = "The app reads the key from ImageGeneration__ApiKey (configuration key ImageGeneration:ApiKey)."
   }
 }
 
 # ---------------------------------------------------------------------------------------------------------------------
 # Input validation
 # ---------------------------------------------------------------------------------------------------------------------
+
+# A second instance of the app, as in environments/demo.tfvars: its own Container App, host name and database, the same
+# image, identity and secrets.
+run "a_second_instance_gets_its_own_app_host_name_and_database" {
+  command = apply
+
+  variables {
+    app_image_tag = "1a2b3c4"
+    additional_app_instances = {
+      grocery = {
+        hostname      = "grocery.biffkittz.com"
+        exposed_port  = 8444
+        database_name = "grocery"
+      }
+    }
+  }
+
+  assert {
+    condition = (
+      module.container_apps.app_names == { main = "ca-loginapp-demo", grocery = "ca-loginapp-demo-grocery" } &&
+      length(module.container_apps.app_ids) == 2
+    )
+    error_message = "Each instance must get a Container App; the main one keeps its name."
+  }
+
+  assert {
+    condition = (
+      cloudflare_dns_record.app["grocery"].name == "grocery.biffkittz.com" &&
+      cloudflare_dns_record.app["grocery"].proxied == true &&
+      cloudflare_dns_record.app["grocery"].content == cloudflare_dns_record.app["main"].content &&
+      cloudflare_dns_record.app["main"].name == "app.biffkittz.com"
+    )
+    error_message = "Each instance's host name must be a proxied record for the environment's one public IP."
+  }
+
+  assert {
+    condition = (
+      length(cloudflare_ruleset.origin_port.rules) == 2 &&
+      cloudflare_ruleset.origin_port.rules[0].ref == "loginapp_demo_app_origin_port" &&
+      cloudflare_ruleset.origin_port.rules[0].action_parameters.origin.port == 8443 &&
+      cloudflare_ruleset.origin_port.rules[1].expression == "http.host eq \"grocery.biffkittz.com\"" &&
+      cloudflare_ruleset.origin_port.rules[1].action_parameters.origin.port == 8444
+    )
+    error_message = "Cloudflare must send each host name to its instance's port, with the main instance's rule first and unchanged."
+  }
+
+  assert {
+    condition     = module.database.additional_database_names == { grocery = "grocery" }
+    error_message = "The second instance must get its own database on the existing server."
+  }
+
+  assert {
+    condition = (
+      local.app_secrets["grocery"]["db-connection-string"] == module.key_vault.secret_ids["grocery_db_connection_string"] &&
+      local.app_secrets["main"]["db-connection-string"] == module.key_vault.secret_ids["db_connection_string"] &&
+      local.app_secrets["grocery"]["jwt-signing-key"] == local.app_secrets["main"]["jwt-signing-key"] &&
+      local.app_secrets["grocery"]["origin-certificate"] == local.app_secrets["main"]["origin-certificate"]
+    )
+    error_message = "The instances must share the Key Vault secrets, except for a connection string each."
+  }
+
+  assert {
+    condition = (
+      strcontains(local.app_connection_strings["grocery"], "Database=grocery;") &&
+      strcontains(local.app_connection_strings["main"], "Database=loginapp;")
+    )
+    error_message = "Each connection string must name its instance's own database."
+  }
+
+  assert {
+    condition = (
+      local.app_instance_environment_variables["grocery"]["Jwt__Audience"] == "grocery.biffkittz.com" &&
+      length(local.app_instance_environment_variables["grocery"]) == 1 &&
+      length(local.app_instance_environment_variables["main"]) == 0
+    )
+    error_message = "Sessions must not carry over between instances (own token audience), while the main instance's stay valid."
+  }
+
+  assert {
+    condition = (
+      output.app_instances["grocery"].url == "https://grocery.biffkittz.com" &&
+      output.app_instances["grocery"].database_name == "grocery" &&
+      output.app_instances["main"].container_app_name == "ca-loginapp-demo"
+    )
+    error_message = "The outputs must list every instance."
+  }
+}
+
+run "rejects_an_instance_on_the_main_instances_port" {
+  command = plan
+
+  variables {
+    additional_app_instances = {
+      grocery = { hostname = "grocery.biffkittz.com", exposed_port = 8443, database_name = "grocery" }
+    }
+  }
+
+  expect_failures = [var.additional_app_instances]
+}
+
+run "rejects_an_instance_outside_the_dns_zone" {
+  command = plan
+
+  variables {
+    additional_app_instances = {
+      grocery = { hostname = "grocery.example.com", exposed_port = 8444, database_name = "grocery" }
+    }
+  }
+
+  expect_failures = [var.additional_app_instances]
+}
+
+run "rejects_an_instance_sharing_the_main_database" {
+  command = plan
+
+  variables {
+    additional_app_instances = {
+      grocery = { hostname = "grocery.biffkittz.com", exposed_port = 8444, database_name = "loginapp" }
+    }
+  }
+
+  expect_failures = [var.additional_app_instances]
+}
+
+run "rejects_an_instance_called_main" {
+  command = plan
+
+  variables {
+    additional_app_instances = {
+      main = { hostname = "grocery.biffkittz.com", exposed_port = 8444, database_name = "grocery" }
+    }
+  }
+
+  expect_failures = [var.additional_app_instances]
+}
 
 run "rejects_a_host_name_outside_the_dns_zone" {
   command = plan
@@ -331,6 +508,16 @@ run "rejects_the_port_reserved_for_container_apps_health_checks" {
   }
 
   expect_failures = [var.app_exposed_port]
+}
+
+run "rejects_an_empty_gemini_key" {
+  command = plan
+
+  variables {
+    gemini_api_key = " "
+  }
+
+  expect_failures = [var.gemini_api_key]
 }
 
 run "rejects_a_reserved_postgresql_admin_login" {

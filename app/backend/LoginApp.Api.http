@@ -68,6 +68,17 @@ Content-Type: application/json
 ### Remove it
 DELETE {{baseUrl}}/api/grocery-list/items/{{addItem.response.body.$.savedItems[0].id}}
 
+### An item's AI picture, once drawn: the imageUrl of an item in GET /api/grocery-list (WebP, cacheable for a year)
+GET {{baseUrl}}/api/grocery-list/images/00000000-0000-0000-0000-000000000000
+
+### Turn AI pictures off (or on) for everyone
+PATCH {{baseUrl}}/api/grocery-list/settings
+Content-Type: application/json
+
+{
+  "imageGenerationEnabled": false
+}
+
 ### Liveness probe (no dependencies)
 GET {{baseUrl}}/health/live
 

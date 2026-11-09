@@ -1,5 +1,5 @@
 output "app_url" {
-  description = "Public URL of the app."
+  description = "Public URL of the app's main instance (app_instances lists them all)."
   value       = "https://${var.app_hostname}"
 }
 
@@ -24,18 +24,30 @@ output "container_registry_login_server" {
 }
 
 output "app_image" {
-  description = "Image the Container App runs, or null until app_image_tag is set."
+  description = "Image every instance's Container App runs, or null until app_image_tag is set."
   value       = local.deploy_app ? "${module.registry.login_server}/${var.app_image_repository}:${var.app_image_tag}" : null
 }
 
 output "container_app_name" {
-  description = "Name of the Container App (it exists once app_image_tag is set)."
-  value       = module.container_apps.app_name
+  description = "Name of the main instance's Container App (it exists once app_image_tag is set)."
+  value       = module.container_apps.app_names["main"]
 }
 
 output "container_app_fqdn" {
-  description = "The app's platform FQDN. It answers TLS on the exposed port but serves only the health endpoints to anyone without Cloudflare's client certificate."
-  value       = module.container_apps.app_fqdn
+  description = "The main instance's platform FQDN. It answers TLS on the exposed port but serves only the health endpoints to anyone without Cloudflare's client certificate."
+  value       = module.container_apps.app_fqdns["main"]
+}
+
+output "app_instances" {
+  description = "Every instance of the app (\"main\" is app_hostname): its public URL, Container App, exposed port and database."
+  value = {
+    for key, instance in local.app_instances : key => {
+      url                = "https://${instance.hostname}"
+      container_app_name = module.container_apps.app_names[key]
+      exposed_port       = instance.exposed_port
+      database_name      = instance.database_name
+    }
+  }
 }
 
 output "container_apps_environment_name" {
@@ -44,7 +56,7 @@ output "container_apps_environment_name" {
 }
 
 output "db_bootstrap_job_name" {
-  description = "Job that creates the app's database role. Run it after the first apply and after rotating the app's database password."
+  description = "Job that creates the app's database role and lets it into every instance's database. Run it after the first apply, after adding an instance, and after rotating the app's database password."
   value       = module.container_apps.db_bootstrap_job_name
 }
 
@@ -69,7 +81,7 @@ output "postgresql_server_fqdn" {
 }
 
 output "database_name" {
-  description = "Name of the application database."
+  description = "Name of the main instance's database (app_instances lists every instance's)."
   value       = module.database.database_name
 }
 

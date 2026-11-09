@@ -145,5 +145,13 @@ Item `name` is a required field on each grocery item. Grocery items have `creati
 property that tracks who last made a change to the item. To view and interact with the grocery list, a user must register and login.
 Any logged-in, registered user may use the app.
 
-You need to implement a grouping-by-store functionality. Store choices should be displayed in a dropdown on the item edit view. The app should present these store choices:
+You need to implement a group-by-store view in the UI. Item store choices should be displayed in a dropdown on the item edit view. The app should present these store choices:
 `Whole Foods`, `Indian Grocery`, `Teeter/Lion`, and `Costco`. The app should automatically group items by store in the UI. Items without a store defined are in the no-store group.
+
+You need to implement a new feature where, after a user adds a grocery item, the app connects to the Gemini API (I have an API key) and asks it to generate an image of the grocery item
+based on its provided name. The grocery app should save the image and the list should display the image of the grocery item to the left of the grocery item name in the list. It's
+important that images remain small to maximize the responsiveness of the site. There should be an in-app setting to disable AI image generation.
+
+You need to add a second container instance of this app, which will use the existing container image, and will be available at `grocery.biffkittz.com`. Please update the
+infrastructure to support the second container instance, DNS records, and so on. The new instance of the app should share the existing key vault and secrets and create a new database in
+the existing PostgreSQL database server.

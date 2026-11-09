@@ -1,9 +1,10 @@
+using LoginApp.Api.Features.GroceryList.Images;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace LoginApp.Api.Features.GroceryList;
 
 /// <summary>
-/// Registers the grocery list feature: its options, service, realtime hub and rate limit.
+/// Registers the grocery list feature: its options, service, realtime hub, rate limit and item pictures.
 /// </summary>
 internal static class GroceryListServiceCollectionExtensions
 {
@@ -32,6 +33,7 @@ internal static class GroceryListServiceCollectionExtensions
         services.AddSingleton<IGroceryListNotifier, GroceryListHubNotifier>();
         services.AddScoped<IGroceryListService, GroceryListService>();
         services.AddGroceryListRateLimiting();
+        services.AddGroceryImages();
 
         return services;
     }

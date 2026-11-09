@@ -23,10 +23,10 @@ release is just phase 2 plus phase 4.
 
 | Phase | You run | Creates | Time |
 | --- | --- | --- | --- |
-| 1. Platform | `terraform apply` (no `app_image_tag`) | Everything except the Container App: network, NSGs, Log Analytics, identities, registry, Key Vault + secrets + certificate, PostgreSQL + database, Container Apps environment (public IP), bootstrap job, Cloudflare record and Authenticated Origin Pulls | 15–25 min |
+| 1. Platform | `terraform apply` (no `app_image_tag`) | Everything except the Container Apps: network, NSGs, Log Analytics, identities, registry, Key Vault + secrets + certificate, PostgreSQL + a database per instance, Container Apps environment (public IP), bootstrap job, Cloudflare records, Origin Rules and Authenticated Origin Pulls | 15–25 min |
 | 2. Image | `az acr build` | `login-app:<tag>` in the registry | 5–10 min |
-| 3. Database role | `az containerapp job start` | Role `loginapp_app` with its password from Key Vault | 1–2 min |
-| 4. App | `terraform apply` with `app_image_tag` | The Container App; the app migrates its schema on first start | 3–5 min |
+| 3. Database role | `az containerapp job start` | Role `loginapp_app` with its password from Key Vault, allowed into every instance's database | 1–2 min |
+| 4. App | `terraform apply` with `app_image_tag` | A Container App per instance (`app` and `grocery`); each migrates its own schema on first start | 3–5 min |
 
 ## Prerequisites
 
@@ -50,7 +50,12 @@ az login && az account set --subscription 3c3f379f-8161-4631-a30c-a3af82622a6a
 read -rsp 'Cloudflare API token: ' CLOUDFLARE_API_TOKEN && export CLOUDFLARE_API_TOKEN && echo
 export TF_VAR_tls_certificate_pfx_path=/home/biffkittz/login-app/infra/.secrets/biffkittz-origin.pfx
 read -rsp 'PFX password: ' TF_VAR_tls_certificate_pfx_password && export TF_VAR_tls_certificate_pfx_password && echo
+# Optional: AI pictures of items. Without it the app runs, and its picture switch says pictures aren't set up.
+read -rsp 'Gemini API key: ' TF_VAR_gemini_api_key && export TF_VAR_gemini_api_key && echo
 ```
+
+Set `TF_VAR_gemini_api_key` in every terminal you apply from once you use it: an apply without it removes the key from
+Key Vault and the app, and pictures stop (the ones already drawn stay).
 
 ## Phase 1: the platform
 
@@ -121,8 +126,12 @@ az monitor log-analytics query --workspace "$WORKSPACE" --output table --analyti
   "ContainerAppConsoleLogs_CL | where ContainerName_s == 'psql' | order by TimeGenerated desc | take 20 | project TimeGenerated, Log_s"
 ```
 
-Expected output: `Done. 'loginapp_app' can connect to 'loginapp' and create its schema objects.` (Console logs reach
-Log Analytics a few minutes late.)
+Expected output, one line per instance's database, then `Done.` (Console logs reach Log Analytics a few minutes late.)
+
+```text
+'loginapp_app' can connect to 'loginapp' and create its schema objects.
+'loginapp_app' can connect to 'grocery' and create its schema objects.
+```
 
 ## Phase 4: deploy the app
 
@@ -134,11 +143,12 @@ app_image_tag = "1a2b3c4"   # the TAG from phase 2
 
 ```bash
 cd ~/login-app/infra
-terraform plan -var-file=environments/demo.tfvars -out=demo.tfplan   # expect: 1 to add (the Container App)
+terraform plan -var-file=environments/demo.tfvars -out=demo.tfplan   # expect: 2 to add (a Container App per instance)
 terraform apply demo.tfplan
 ```
 
-Keep `app_image_tag` set from now on. Removing it again plans to **destroy** the Container App.
+Keep `app_image_tag` set from now on. Removing it again plans to **destroy** the Container Apps. Every instance runs
+this tag, so a release updates them all.
 
 ## Migrating from the Application Gateway version
 
@@ -179,6 +189,8 @@ is still deleting the old one. Wait a few minutes and apply again.
 ```bash
 curl -sS -o /dev/null -w '%{http_code}\n' https://app.biffkittz.com/            # 200 (the SPA)
 curl -sS https://app.biffkittz.com/health/ready; echo                         # Healthy
+curl -sS https://grocery.biffkittz.com/health/ready; echo                     # Healthy (the second instance)
+terraform output app_instances                                               # every instance: URL, app, port, database
 
 # The app's own logs (JSON, one event per line). On start look for "Serving HTTPS with certificate ...
 # Cloudflare client certificates required: True" (event 4002) and, the first time, the migration messages.
@@ -192,7 +204,9 @@ curl -sS -m 10 -k -o /dev/null -w '%{http_code}\n' --resolve app.biffkittz.com:8
 curl -sS -m 10 -k --resolve app.biffkittz.com:8443:"$ORIGIN" https://app.biffkittz.com:8443/health/live; echo
 ```
 
-Then, in a browser, open <https://app.biffkittz.com>, register, sign out and sign in again.
+Then, in a browser, open <https://app.biffkittz.com>, register, sign out and sign in again. Do the same on
+<https://grocery.biffkittz.com>: it has its own accounts and list, so the account from app.biffkittz.com doesn't
+exist there.
 
 **Check idempotency.** A plan right after an apply must report **No changes**:
 
@@ -212,9 +226,51 @@ terraform plan -var-file=environments/demo.tfvars -detailed-exitcode   # exit co
 | **Renew the TLS certificate** | Put the new PFX at `TF_VAR_tls_certificate_pfx_path` and apply. A new certificate version is imported; Container Apps picks it up within 30 minutes and restarts the revision, and the app loads it on start. To switch at once, use the `secret set` and `revision restart` commands from [Rotating the app's database password](#rotating-the-apps-database-password) with the secret `origin-certificate` |
 | **Cloudflare publishes new IP ranges** | The next plan shows the ingress IP restrictions and NSG rule changing; apply it. Plan regularly, e.g. weekly, so new edge locations aren't blocked |
 | **Cloudflare replaces its origin-pull CA** | The current one expires on 2029-11-01. Replace `app/backend/Infrastructure/Tls/cloudflare-origin-pull-ca.pem` and release a new image before Cloudflare switches |
+| **Add another instance of the app** | See [Adding an instance](#adding-an-instance) |
 | **Scale** | Up only: `app_cpu` / `app_memory`. `app_max_replicas` must stay 1 (validated): the realtime hub broadcasts in-process, without a backplane, so a second replica's users would miss each other's changes |
 | **Detect drift** | `terraform plan -detailed-exitcode` (exit code 2 = changes). Fix by re-applying, or by moving the change into code |
 | **Upgrade Terraform or providers** | See [DEVELOPMENT.md](DEVELOPMENT.md#8-upgrading-terraform-and-providers) |
+
+### Adding an instance
+
+Every instance is an entry in `additional_app_instances` (`environments/demo.tfvars`). `grocery` is one; another
+would look like this:
+
+```hcl
+additional_app_instances = {
+  grocery = { hostname = "grocery.biffkittz.com", exposed_port = 8444, database_name = "grocery" }
+  pantry  = { hostname = "pantry.biffkittz.com", exposed_port = 8445, database_name = "pantry" }
+}
+```
+
+The host name must be in the zone, and the port and database must be new (validated). Then:
+
+```bash
+cd ~/login-app/infra
+terraform plan -var-file=environments/demo.tfvars -out=demo.tfplan
+terraform apply demo.tfplan
+az containerapp job start --name "$JOB" --resource-group "$RG"   # phase 3: lets the role into the new database
+```
+
+**The plan.** For one new instance, expect it to add the database, its connection-string secret and the identity's
+read access to it, the Container App and the DNS record, and to replace `time_sleep.reader_rbac` (it waits again for
+the new role assignment). It changes in place the Origin Rules ruleset (one more rule), the NSG rule (one more port)
+and the bootstrap job (its list of databases). Nothing of the existing instance is changed.
+
+The **first** plan with this version of the configuration also reports two moves, `azurerm_container_app.this[0]`
+to `this["main"]` and `cloudflare_dns_record.app` to `app["main"]`. Those only rename the existing objects in the state.
+
+**Until the job has run,** the new app can't reach its database (`permission denied for database "pantry"` in its
+logs), fails its startup probe and is restarted. It comes up by itself at its next restart after the job succeeds,
+within a few minutes; to make it immediate, restart its revision:
+
+```bash
+az containerapp revision restart --name ca-loginapp-demo-pantry --resource-group "$RG" \
+  --revision "$(az containerapp show --name ca-loginapp-demo-pantry --resource-group "$RG" --query properties.latestRevisionName -o tsv)"
+```
+
+**Removing an instance** deletes its Container App, DNS record, Origin Rule, connection string and **database, with
+its data**. Back up the database first if the data matters.
 
 ### Rotating the app's database password
 
@@ -225,11 +281,18 @@ sets the new password until the app runs with the new connection string. Keep th
 cd ~/login-app/infra
 terraform apply -var-file=environments/demo.tfvars -replace=random_password.postgresql_app   # updates both secrets
 az containerapp job start --name "$JOB" --resource-group "$RG"                               # phase 3; wait for Succeeded
-# Re-read the secret from Key Vault now instead of waiting for the 30-minute sync, then restart the revision.
-az containerapp secret set --name ca-loginapp-demo --resource-group "$RG" --secrets \
-  "db-connection-string=keyvaultref:$(terraform output -raw key_vault_uri)secrets/ConnectionStrings--DefaultConnection,identityref:$(az identity show -n id-loginapp-demo-app -g "$RG" --query id -o tsv)"
-az containerapp revision restart --name ca-loginapp-demo --resource-group "$RG" \
-  --revision "$(az containerapp show --name ca-loginapp-demo --resource-group "$RG" --query properties.latestRevisionName -o tsv)"
+# Re-read the secret from Key Vault now instead of waiting for the 30-minute sync, then restart the revision. Every
+# instance's connection string holds the password, so do this for each: the main instance's secret, then each other
+# instance's <instance>-db-connection-string.
+IDENTITY="$(az identity show -n id-loginapp-demo-app -g "$RG" --query id -o tsv)"
+VAULT="$(terraform output -raw key_vault_uri)"
+for pair in ca-loginapp-demo:ConnectionStrings--DefaultConnection ca-loginapp-demo-grocery:grocery-db-connection-string; do
+  APP="${pair%%:*}"; SECRET="${pair#*:}"
+  az containerapp secret set --name "$APP" --resource-group "$RG" --secrets \
+    "db-connection-string=keyvaultref:${VAULT}secrets/${SECRET},identityref:${IDENTITY}"
+  az containerapp revision restart --name "$APP" --resource-group "$RG" \
+    --revision "$(az containerapp show --name "$APP" --resource-group "$RG" --query properties.latestRevisionName -o tsv)"
+done
 ```
 
 `secret set` writes exactly the reference Terraform declares, so it causes no drift. Without these two commands,
@@ -294,12 +357,16 @@ Destroying takes about 15 to 20 minutes.
 | **403 Forbidden** on every page, app log event 4000 | Requests arrive without Cloudflare's client certificate: Authenticated Origin Pulls is off in Cloudflare (SSL/TLS → Origin Server), or the record isn't proxied |
 | App exits at start: `OriginTls:CertificatePfxBase64 ...` | The certificate from Key Vault can't be used: it is expired, has no private key or isn't readable. Re-import the PFX and apply |
 | App logs: `password authentication failed for user "loginapp_app"` | The bootstrap job hasn't run since the password was created or rotated. Run phase 3 |
+| A new instance's logs: `permission denied for database "<name>"`, or it keeps restarting | The bootstrap job hasn't run since the instance was added. Run phase 3 ([Adding an instance](#adding-an-instance)) |
+| Cloudflare **521 / 522** for one instance only | Its Origin Rule is missing or names another port than its `exposed_port`, or its Container App isn't running (`az containerapp logs show --name ca-loginapp-demo-<key>`) |
+| Signed in on one instance, but the other asks to sign in | Expected: each instance has its own accounts, and a session only counts on the instance that started it |
 | Readiness probe failing; liveness fine | The app can't reach PostgreSQL: check the job ran, then the NSG on `snet-psql` and the private DNS link |
 | Bootstrap job fails: `unable to fetch secret ... using Managed identity` | Role propagation (start it again in a minute), or the platform issue in [microsoft/azure-container-apps#1804](https://github.com/microsoft/azure-container-apps/issues/1804) |
 | Bootstrap job fails: `password authentication failed for user "loginapp_admin"` | The administrator password in Key Vault and on the server differ, e.g. after a manual change. Run `terraform apply -replace=random_password.postgresql_admin` |
 | Bootstrap job fails: `certificate verify failed` | The CA bundle path changed in a new image tag; check `PGSSLROOTCERT` against the image |
 | Cloudflare can't connect and the ingress logs show refused connections | The ingress IP restrictions blocked Cloudflare, e.g. after `container_apps_transitional_ingress_cidrs` was emptied too early (issue #1666) |
 | Container exits with `SocketException (13): Permission denied` | See [If the app can't bind port 443](#if-the-app-cant-bind-port-443) |
-| Plan wants to destroy the Container App | `app_image_tag` was removed from `environments/demo.tfvars` |
+| Plan wants to destroy the Container Apps | `app_image_tag` was removed from `environments/demo.tfvars` |
+| Plan wants to destroy and re-create `ca-loginapp-demo` or the `app` DNS record | The `moved` blocks were removed from `main.tf` before this state was applied with them. Put them back |
 | `Error acquiring the state lock` | Someone else is running Terraform, or a crashed run left the lock. Wait, or `terraform force-unlock <LOCK_ID>` once you're sure |
 | A plan right after an apply isn't empty | Something drifts. Note the attribute and fix it in code (for example a value Azure sets that the configuration should state explicitly). Please don't silence it with `ignore_changes` without a comment explaining why |

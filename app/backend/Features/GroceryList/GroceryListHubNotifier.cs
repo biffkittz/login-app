@@ -17,4 +17,7 @@ internal sealed class GroceryListHubNotifier(IHubContext<GroceryListHub, IGrocer
     /// one broken phone can't make the write fail.
     /// </remarks>
     public Task ListChangedAsync(GroceryListChange change) => hub.Clients.All.ListChanged(change);
+
+    /// <inheritdoc />
+    public Task SettingsChangedAsync(GroceryListSettingsResponse settings) => hub.Clients.All.SettingsChanged(settings);
 }

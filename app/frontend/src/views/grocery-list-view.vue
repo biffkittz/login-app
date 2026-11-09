@@ -7,6 +7,7 @@ import AddItemForm from '@/components/grocery/add-item-form.vue'
 import ConnectionStatus from '@/components/grocery/connection-status.vue'
 import GroceryItemList from '@/components/grocery/grocery-item-list.vue'
 import ItemEditor from '@/components/grocery/item-editor.vue'
+import ListSettings from '@/components/grocery/list-settings.vue'
 import BaseButton from '@/components/ui/base-button.vue'
 import FormAlert from '@/components/ui/form-alert.vue'
 import ToastNotice from '@/components/ui/toast-notice.vue'
@@ -29,7 +30,8 @@ const CARD_CLASS =
 
 const auth = useAuthStore()
 const groceryList = useGroceryListStore()
-const { items, stores, groups, loadState, loadError, connectionState } = storeToRefs(groceryList)
+const { items, stores, groups, settings, loadState, loadError, connectionState } =
+  storeToRefs(groceryList)
 const toast = useToast()
 useGroceryListLiveUpdates()
 
@@ -50,6 +52,14 @@ const editingIndex = computed(
   () => editingGroup.value?.items.findIndex((item) => item.id === editingId.value) ?? -1,
 )
 const editingItem = computed(() => editingGroup.value?.items[editingIndex.value] ?? null)
+
+// Once any item has a picture, items without one get a plain tile, so names line up in every section.
+const pictureColumn = computed(() =>
+  items.value.some((item) => item.imageUrl !== null || item.imagePending),
+)
+
+const settingsOpen = ref(false)
+const settingsError = ref<string | null>(null)
 
 function announce(message: string): void {
   announcement.value = message
@@ -178,6 +188,24 @@ function moveFromEditor(delta: -1 | 1): void {
   }
 }
 
+function openSettings(): void {
+  settingsError.value = null
+  settingsOpen.value = true
+}
+
+// The error shows in the sheet: a toast would be hidden behind it.
+async function setImageGeneration(enabled: boolean): Promise<void> {
+  settingsError.value = null
+  try {
+    await groceryList.setImageGeneration(enabled)
+  } catch (error: unknown) {
+    const apiError = toApiError(error)
+    if (!apiError.isUnauthorized) {
+      settingsError.value = `Couldn't change the setting. ${apiError.message}`
+    }
+  }
+}
+
 // Ctrl+Z (Cmd+Z on a Mac) undoes the last removal while its toast is up, except while typing in a field, where it
 // keeps undoing typing as usual.
 useEventListener(document, 'keydown', (event) => {
@@ -210,7 +238,27 @@ useEventListener(document, 'keydown', (event) => {
       >
         Grocery list
       </h1>
-      <ConnectionStatus :state="connectionState" />
+      <div class="flex shrink-0 items-center gap-1">
+        <ConnectionStatus :state="connectionState" />
+        <button
+          type="button"
+          class="grid size-11 place-items-center rounded-full text-walnut-700 transition hover:bg-cream-200 hover:text-walnut-900 focus-visible:outline-3 focus-visible:outline-offset-1 focus-visible:outline-ember-600 motion-reduce:transition-none"
+          aria-label="List settings"
+          aria-haspopup="dialog"
+          @click="openSettings"
+        >
+          <svg class="size-6" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path
+              d="M4 7h9M17 7h3M4 17h3M11 17h9"
+              stroke="currentColor"
+              stroke-width="2.25"
+              stroke-linecap="round"
+            />
+            <circle cx="15" cy="7" r="2.25" stroke="currentColor" stroke-width="2.25" />
+            <circle cx="9" cy="17" r="2.25" stroke="currentColor" stroke-width="2.25" />
+          </svg>
+        </button>
+      </div>
     </div>
 
     <!-- Sticky, so adding is always one tap away however far down the list the user has scrolled. -->
@@ -301,6 +349,7 @@ useEventListener(document, 'keydown', (event) => {
             :items="group.items"
             :checked-ids="checkedIds"
             :label="`${group.label} items`"
+            :picture-column="pictureColumn"
             @check="checkOff"
             @edit="openEditor"
             @move="(item, toIndex) => moveWithinGroup(group, item, toIndex)"
@@ -326,6 +375,13 @@ useEventListener(document, 'keydown', (event) => {
       @save="saveChanges"
       @remove="removeFromEditor"
       @move-by="moveFromEditor"
+    />
+
+    <ListSettings
+      v-model:open="settingsOpen"
+      :settings="settings"
+      :error="settingsError"
+      @set-image-generation="setImageGeneration"
     />
 
     <ToastNotice

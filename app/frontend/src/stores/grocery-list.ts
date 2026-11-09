@@ -11,7 +11,9 @@ import type {
   GroceryItemChanges,
   GroceryItemDetails,
   GroceryListChange,
+  GroceryListSettings,
 } from '@/types/grocery'
+import { pictureNameKey } from '@/utils/grocery-format'
 import { positionBetween, sortByPosition } from '@/utils/list-order'
 import { groupByStore } from '@/utils/store-groups'
 
@@ -39,6 +41,10 @@ export type NewItemDetails = Pick<GroceryItemDetails, 'name'> & Partial<GroceryI
  * **Missed changes.** While the realtime connection is down, nothing arrives, so the list is reloaded every time the
  * connection is (re-)established. Changes that arrive during a reload are held back and applied after it, as they
  * are while the user drags an item, so rows never jump under a finger.
+ *
+ * **Pictures and settings.** An item's AI picture arrives as one more change to the item, after the server has drawn
+ * it. The list's settings (pictures on or off) are shared by everyone and follow the same rule as items: the copy
+ * with the highest version wins.
  */
 export const useGroceryListStore = defineStore('grocery-list', () => {
   const auth = useAuthStore()
@@ -58,6 +64,9 @@ export const useGroceryListStore = defineStore('grocery-list', () => {
 
   /** The list grouped by store: no store first, then the offered stores in order, then any others. */
   const groups = computed(() => groupByStore(items.value, stores.value))
+
+  /** The list's settings, shared by everyone (`null` until the first load). */
+  const settings = shallowRef<GroceryListSettings | null>(null)
 
   const removedIds = new Set<string>()
   const heldChanges: GroceryListChange[] = []
@@ -107,6 +116,21 @@ export const useGroceryListStore = defineStore('grocery-list', () => {
     if (changed) {
       setItems(next)
     }
+  }
+
+  /** Applies settings from the server, unless newer ones have arrived already. Safe to call in any order. */
+  function applySettings(next: GroceryListSettings): void {
+    if (settings.value === null || next.version > settings.value.version) {
+      settings.value = next
+    }
+  }
+
+  // Whether a new or renamed item will wait for a picture. The server decides; guessing the same way here means the
+  // picture's placeholder is there from the start instead of popping in a moment later.
+  function picturesWillBeDrawn(): boolean {
+    return (
+      settings.value?.imageGenerationEnabled === true && settings.value.imageGenerationAvailable
+    )
   }
 
   /**
@@ -183,6 +207,7 @@ export const useGroceryListStore = defineStore('grocery-list', () => {
       }
       setItems(next)
       stores.value = list.stores
+      applySettings(list.settings)
       loadState.value = 'ready'
       loadError.value = null
     } catch (error: unknown) {
@@ -246,6 +271,8 @@ export const useGroceryListStore = defineStore('grocery-list', () => {
       createdAt: now,
       lastModifiedAt: now,
       ...currentEditor(),
+      imageUrl: null,
+      imagePending: picturesWillBeDrawn(),
     })
 
     try {
@@ -273,6 +300,12 @@ export const useGroceryListStore = defineStore('grocery-list', () => {
     const trimmed = Object.fromEntries(
       Object.entries(changes).map(([field, value]) => [field, value.trim()]),
     ) as GroceryItemChanges
+    // A picture shows what the name says, so the server replaces it when the name really changes (not just its
+    // capitalization or spacing).
+    const renamed =
+      trimmed.name !== undefined &&
+      trimmed.name !== '' &&
+      pictureNameKey(trimmed.name) !== pictureNameKey(original.name)
     putItem({
       ...original,
       ...(trimmed.name ? { name: trimmed.name } : {}),
@@ -280,6 +313,7 @@ export const useGroceryListStore = defineStore('grocery-list', () => {
       ...optional(trimmed, 'brand'),
       ...optional(trimmed, 'store'),
       ...optional(trimmed, 'notes'),
+      ...(renamed ? { imageUrl: null, imagePending: picturesWillBeDrawn() } : {}),
       lastModifiedAt: new Date().toISOString(),
       ...currentEditor(),
     })
@@ -349,6 +383,29 @@ export const useGroceryListStore = defineStore('grocery-list', () => {
     }
   }
 
+  /**
+   * Turns AI pictures on or off, for everyone. The switch moves at once; it moves back if the server refuses.
+   *
+   * @throws {@link ApiError} when the server refuses.
+   */
+  async function setImageGeneration(enabled: boolean): Promise<void> {
+    const original = settings.value
+    if (original === null || original.imageGenerationEnabled === enabled) {
+      return
+    }
+
+    settings.value = { ...original, imageGenerationEnabled: enabled }
+    try {
+      applySettings(await groceryApi.updateSettings({ imageGenerationEnabled: enabled }))
+    } catch (error: unknown) {
+      // Unless someone else's change has arrived meanwhile, which is newer than both.
+      if (settings.value.version === original.version) {
+        settings.value = original
+      }
+      throw recoverFromFailedWrite(error)
+    }
+  }
+
   // While the realtime connection keeps failing, check in over HTTP now and then. Browsers don't reveal why a
   // WebSocket was refused, so this is how the app finds out that the real problem is a session the server no longer
   // accepts (a 401 signs the user out). It also keeps the list fresh on networks that block WebSockets.
@@ -366,6 +423,7 @@ export const useGroceryListStore = defineStore('grocery-list', () => {
     live = true
     hub ??= createGroceryListHub({
       onChange: applyChange,
+      onSettingsChange: applySettings,
       onStateChange: (state) => {
         connectionState.value = state
         pollWhileOffline(state)
@@ -405,6 +463,7 @@ export const useGroceryListStore = defineStore('grocery-list', () => {
       if (!isAuthenticated) {
         loadGeneration++
         setItems(new Map())
+        settings.value = null
         removedIds.clear()
         heldChanges.length = 0
         loadState.value = 'idle'
@@ -417,17 +476,20 @@ export const useGroceryListStore = defineStore('grocery-list', () => {
     items,
     stores,
     groups,
+    settings,
     loadState,
     loadError,
     connectionState,
     load,
     applyChange,
+    applySettings,
     holdChanges,
     releaseChanges,
     addItem,
     updateItem,
     moveItem,
     removeItem,
+    setImageGeneration,
     connect,
     disconnect,
     reconnect,

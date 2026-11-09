@@ -61,6 +61,17 @@ resource "azurerm_postgresql_flexible_server_database" "this" {
   collation = "en_US.utf8"
 }
 
+# One database per additional instance of the app, on the same server. A resource of their own (rather than turning
+# the one above into a for_each) leaves the first database's address, and so its data, alone.
+resource "azurerm_postgresql_flexible_server_database" "additional" {
+  for_each = var.additional_database_names
+
+  name      = each.value
+  server_id = azurerm_postgresql_flexible_server.this.id
+  charset   = "UTF8"
+  collation = "en_US.utf8"
+}
+
 # Already the default; managing it here records the requirement and reverts manual changes. Clients that don't use
 # TLS are refused.
 resource "azurerm_postgresql_flexible_server_configuration" "require_secure_transport" {

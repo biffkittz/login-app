@@ -34,6 +34,12 @@ namespace LoginApp.Api.Infrastructure.Data.Migrations
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<Guid?>("ImageId")
+                        .HasColumnType("uuid");
+
+                    b.Property<bool>("ImagePending")
+                        .HasColumnType("boolean");
+
                     b.Property<DateTimeOffset>("LastModifiedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -66,11 +72,68 @@ namespace LoginApp.Api.Infrastructure.Data.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("ImageId");
+
                     b.HasIndex("LastModifiedById");
 
                     b.HasIndex("Position", "Id");
 
                     b.ToTable("GroceryItems");
+                });
+
+            modelBuilder.Entity("LoginApp.Api.Features.GroceryList.GroceryListSettings", b =>
+                {
+                    b.Property<int>("Id")
+                        .HasColumnType("integer");
+
+                    b.Property<bool>("ImageGenerationEnabled")
+                        .HasColumnType("boolean");
+
+                    b.Property<int>("Version")
+                        .IsConcurrencyToken()
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("GroceryListSettings");
+
+                    b.HasData(
+                        new
+                        {
+                            Id = 1,
+                            ImageGenerationEnabled = true,
+                            Version = 1
+                        });
+                });
+
+            modelBuilder.Entity("LoginApp.Api.Features.GroceryList.Images.GroceryItemImage", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<byte[]>("Content")
+                        .IsRequired()
+                        .HasColumnType("bytea");
+
+                    b.Property<string>("ContentType")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("NameKey")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("NameKey")
+                        .IsUnique();
+
+                    b.ToTable("GroceryItemImages");
                 });
 
             modelBuilder.Entity("LoginApp.Api.Infrastructure.Data.ApplicationUser", b =>
@@ -210,10 +273,17 @@ namespace LoginApp.Api.Infrastructure.Data.Migrations
 
             modelBuilder.Entity("LoginApp.Api.Features.GroceryList.GroceryItem", b =>
                 {
+                    b.HasOne("LoginApp.Api.Features.GroceryList.Images.GroceryItemImage", "Image")
+                        .WithMany()
+                        .HasForeignKey("ImageId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
                     b.HasOne("LoginApp.Api.Infrastructure.Data.ApplicationUser", "LastModifiedBy")
                         .WithMany()
                         .HasForeignKey("LastModifiedById")
                         .OnDelete(DeleteBehavior.SetNull);
+
+                    b.Navigation("Image");
 
                     b.Navigation("LastModifiedBy");
                 });

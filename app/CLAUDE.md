@@ -69,8 +69,23 @@ agreement:
 - The SPA connects WebSockets-only with `skipNegotiation`, waits about a second before any reconnect (an immediate
   one lands on a server that is shutting down), reloads on resume after 15 s in the background, and reloads over
   HTTP every 30 s while offline (that is also how it notices a 401).
+- AI pictures (`Features/GroceryList/Images/`): creating or renaming an item (a new name, not just new casing) sets
+  `ImagePending`, or reuses the picture already drawn for that name (`GroceryItemImage`, one per `NameKey`).
+  `GroceryImageWorker` (hosted service) drains pending items from the database at startup and when
+  `GroceryImageSignal` wakes it, calls Gemini (`GeminiImageGenerator`, REST `generateContent`, key in the
+  `x-goog-api-key` header), shrinks to a 128 px WebP (`GroceryImageThumbnails`, SkiaSharp) and finishes through
+  `IGroceryListService.FinishImageAsync`, which bumps `Version` but not `LastModifiedAt`. Never send Gemini anything
+  but the name, and never log names. `ImageGeneration:MaxImagesPerDay` caps spend (in memory).
+- Picture URLs (`/api/grocery-list/images/{id}`) are immutable and the one API response that may be cached:
+  `SecurityHeadersMiddleware` sets `no-store` only when an endpoint hasn't set `Cache-Control` itself.
+- The list's settings (`GroceryListSettings`, one row, versioned) are shared by everyone: `PATCH
+  /api/grocery-list/settings`, broadcast as `SettingsChanged`. Turning pictures off clears pending items.
 - Integration tests use `Shopper` and `RealtimeListener` (`backend.tests/Features/GroceryList/`); `LoginApiFactory`
-  uses a temporary SQLite file, because the hub and HTTP requests hit the database concurrently.
+  uses a temporary SQLite file, because the hub and HTTP requests hit the database concurrently, and creates the
+  schema before the host starts (the picture worker queries at once). It has no Gemini key; `PictureApiFactory` adds
+  one plus `FakeImageGenerator`, so no test calls the paid API. Tests sharing that factory use unique item names.
+- Publishing is per platform (`--use-current-runtime`, in the Dockerfile and `buildAndRunSite.sh`): portable output
+  would carry SkiaSharp's native library for every OS (over 450 MB).
 
 ## Origin TLS (`Infrastructure/Tls/`)
 
@@ -86,8 +101,13 @@ agreement:
 Set as Container App environment variables by Terraform (`infra/main.tf`), so config keys and Terraform must
 agree:
 
-- Key Vault secret names map to config keys: `ConnectionStrings--DefaultConnection`, `Jwt--SigningKey`; the
+- Key Vault secret names map to config keys: `ConnectionStrings--DefaultConnection`, `Jwt--SigningKey`,
+  `ImageGeneration--ApiKey` (only when Terraform gets `TF_VAR_gemini_api_key`); the
   certificate's secret becomes `OriginTls__CertificatePfxBase64`.
+- The same image runs as two instances (app.biffkittz.com and grocery.biffkittz.com). The grocery instance gets its
+  connection string from `grocery-db-connection-string` (its own database) and `Jwt__Audience=grocery.biffkittz.com`,
+  so a session from one instance isn't accepted by the other. The app itself needs no instance awareness: keep
+  per-instance differences in configuration.
 - `ASPNETCORE_URLS=https://+:443` overrides the image's `ASPNETCORE_HTTP_PORTS=80`.
 - `Network__InternalNetworks__100+` holds Cloudflare's IP ranges, so `X-Forwarded-For` is trusted and rate
   limiting sees the real client IP. Indices 0-8 come from `appsettings.json`; keep them below 100.

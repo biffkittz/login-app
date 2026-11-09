@@ -6,7 +6,7 @@ import {
   type HubConnection,
 } from '@microsoft/signalr'
 
-import type { ConnectionState, GroceryListChange } from '@/types/grocery'
+import type { ConnectionState, GroceryListChange, GroceryListSettings } from '@/types/grocery'
 
 /** The hub's path on this origin (`GroceryListHub.Path` in the backend). */
 export const GROCERY_LIST_HUB_PATH = '/api/grocery-list/hub'
@@ -26,6 +26,8 @@ const ATTEMPTS_BEFORE_OFFLINE = 3
 export interface GroceryListHubHandlers {
   /** The list changed: someone saved, moved or removed an item. */
   onChange: (change: GroceryListChange) => void
+  /** Someone changed the list's settings, such as turning AI pictures off. */
+  onSettingsChange: (settings: GroceryListSettings) => void
   /** The connection's state changed, e.g. to show "Reconnecting…". */
   onStateChange: (state: ConnectionState) => void
   /**
@@ -93,6 +95,9 @@ export function createGroceryListHub(handlers: GroceryListHubHandlers): GroceryL
   let wakeFromRetryWait: (() => void) | null = null
 
   connection.on('ListChanged', (change: GroceryListChange) => handlers.onChange(change))
+  connection.on('SettingsChanged', (settings: GroceryListSettings) =>
+    handlers.onSettingsChange(settings),
+  )
   connection.onreconnecting(() => handlers.onStateChange('reconnecting'))
   connection.onreconnected(() => {
     handlers.onStateChange('connected')

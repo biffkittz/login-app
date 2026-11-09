@@ -1,9 +1,11 @@
 using System.Security.Claims;
 using LoginApp.Api.Features.Auth;
 using LoginApp.Api.Features.GroceryList.Contracts;
+using LoginApp.Api.Features.GroceryList.Images;
 using Microsoft.AspNetCore.Http.Connections;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.IdentityModel.JsonWebTokens;
+using Microsoft.Net.Http.Headers;
 
 namespace LoginApp.Api.Features.GroceryList;
 
@@ -26,6 +28,11 @@ internal static class GroceryListEndpoints
 {
     private const string RoutePrefix = "/api/grocery-list";
 
+    // A picture's URL names one picture whose bytes never change, so the browser may keep it for a year without asking
+    // again: a phone downloads each picture once. "private" because the list is for signed-in users only: shared
+    // caches, such as Cloudflare's, must not keep it.
+    private const string ImageCacheControl = "private, max-age=31536000, immutable";
+
     /// <summary>
     /// Maps the list, item and hub endpoints. All of them require a signed-in user.
     /// </summary>
@@ -39,7 +46,17 @@ internal static class GroceryListEndpoints
 
         list.MapGet(string.Empty, GetListAsync)
             .WithName("GetGroceryList")
-            .WithSummary("Returns every item on the shared grocery list, in order.");
+            .WithSummary("Returns every item on the shared grocery list, in order, with the stores and the list's settings.");
+
+        // Not rate-limited, like the list itself: a phone opening a long list for the first time fetches every picture.
+        list.MapGet("/images/{imageId:guid}", GetImageAsync)
+            .WithName("GetGroceryItemImage")
+            .WithSummary("Returns an item's AI-drawn picture (WebP). Pictures never change, so they may be cached for good.");
+
+        list.MapPatch("/settings", UpdateSettingsAsync)
+            .RequireRateLimiting(GroceryListRateLimiting.PolicyName)
+            .WithName("UpdateGroceryListSettings")
+            .WithSummary("Changes the list settings present in the body, for everyone.");
 
         RouteGroupBuilder items = list.MapGroup("/items").RequireRateLimiting(GroceryListRateLimiting.PolicyName);
 
@@ -82,6 +99,47 @@ internal static class GroceryListEndpoints
         IGroceryListService groceryList,
         CancellationToken cancellationToken) =>
         TypedResults.Ok(await groceryList.GetListAsync(cancellationToken));
+
+    private static async Task<Results<FileContentHttpResult, NotFound>> GetImageAsync(
+        Guid imageId,
+        IGroceryListService groceryList,
+        HttpResponse response,
+        CancellationToken cancellationToken)
+    {
+        GroceryItemImage? image = await groceryList.GetImageAsync(imageId, cancellationToken);
+        if (image is null)
+        {
+            return TypedResults.NotFound();
+        }
+
+        // The ID doubles as the ETag, should a browser ever ask whether its copy is current.
+        response.Headers.CacheControl = ImageCacheControl;
+        return TypedResults.Bytes(image.Content, image.ContentType, entityTag: new EntityTagHeaderValue($"\"{image.Id:N}\""));
+    }
+
+    private static async Task<Results<Ok<GroceryListSettingsResponse>, ProblemHttpResult>> UpdateSettingsAsync(
+        UpdateGroceryListSettingsRequest request,
+        ClaimsPrincipal principal,
+        IGroceryListService groceryList,
+        AuthCookieManager authCookie,
+        HttpResponse response,
+        CancellationToken cancellationToken)
+    {
+        if (UserIdOf(principal) is not string userId)
+        {
+            return SessionEnded(authCookie, response);
+        }
+
+        GroceryListSettingsResult result = await groceryList.UpdateSettingsAsync(userId, request, cancellationToken);
+        return result switch
+        {
+            { Succeeded: true } => TypedResults.Ok(result.Settings),
+            { Status: GroceryListWriteStatus.ConcurrentChange } => Problem(
+                StatusCodes.Status409Conflict,
+                "Someone changed the settings at the same moment. Please try again."),
+            _ => ToProblem(result.Status, authCookie, response),
+        };
+    }
 
     private static async Task<Results<Created<GroceryListChange>, ValidationProblem, ProblemHttpResult>> CreateItemAsync(
         CreateGroceryItemRequest request,

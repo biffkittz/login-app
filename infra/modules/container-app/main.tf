@@ -1,4 +1,5 @@
-# The Container Apps environment, the Login App itself and a one-off job that prepares its database role.
+# The Container Apps environment, the app's instances (one Container App each, all from the same image) and a one-off
+# job that prepares their database role.
 #
 # The environment is "external": it has a public IP, which Cloudflare connects to. The app uses TCP ingress, so the
 # platform's proxy passes the TLS connection through without decrypting it and Kestrel terminates TLS in the
@@ -42,12 +43,14 @@ locals {
   )
 }
 
-# The Login App. It is created only once its image exists in the registry (deploy_app): a Container App's first
-# revision fails to provision when its image can't be pulled.
+# The app's instances, e.g. app.biffkittz.com and grocery.biffkittz.com: the same image and settings, each with its
+# own exposed port, secrets (its connection string names its own database) and extra environment variables. They are
+# created only once the image exists in the registry (deploy_app): a Container App's first revision fails to
+# provision when its image can't be pulled.
 resource "azurerm_container_app" "this" {
-  count = var.deploy_app ? 1 : 0
+  for_each = var.deploy_app ? var.apps : {}
 
-  name                         = var.app_name
+  name                         = each.value.name
   container_app_environment_id = azurerm_container_app_environment.this.id
   resource_group_name          = var.resource_group_name
   revision_mode                = "Single"
@@ -70,7 +73,7 @@ resource "azurerm_container_app" "this" {
   # secret. The URIs carry no version, so a new secret version reaches the app within 30 minutes; Container Apps
   # then restarts the revision so the app re-reads its configuration.
   dynamic "secret" {
-    for_each = var.app_secrets
+    for_each = each.value.secrets
 
     content {
       name                = secret.key
@@ -84,7 +87,7 @@ resource "azurerm_container_app" "this" {
     # connection through and TLS (with Cloudflare's client certificate) is handled by Kestrel.
     external_enabled = true
     transport        = "tcp"
-    exposed_port     = var.app_exposed_port
+    exposed_port     = each.value.exposed_port
     target_port      = var.app_target_port
 
     traffic_weight {
@@ -115,7 +118,7 @@ resource "azurerm_container_app" "this" {
       memory = var.app_memory
 
       dynamic "env" {
-        for_each = local.app_environment_variables
+        for_each = merge(local.app_environment_variables, each.value.environment_variables)
 
         content {
           name  = env.key
@@ -168,8 +171,9 @@ resource "azurerm_container_app" "this" {
   }
 }
 
-# Creates the app's own PostgreSQL login (see scripts/db-bootstrap.sh) from inside the VNet, where the private server
-# is reachable. Run it once after the first apply, and again after rotating the app's database password:
+# Creates the app's own PostgreSQL login (see scripts/db-bootstrap.sh) and lets it into every instance's database, from
+# inside the VNet, where the private server is reachable. Run it once after the first apply, again after adding an
+# instance (and with it a database), and after rotating the app's database password:
 #   az containerapp job start --name <job> --resource-group <group>
 # It runs under its own identity, the only one that can read the administrator password, so the app never holds
 # server-level credentials.
@@ -257,6 +261,11 @@ resource "azurerm_container_app_job" "db_bootstrap" {
       env {
         name  = "APP_DB_ROLE"
         value = var.db_bootstrap.app_role
+      }
+      # Space-separated; the names are plain identifiers (validated in the root module).
+      env {
+        name  = "APP_DATABASES"
+        value = join(" ", var.db_bootstrap.app_databases)
       }
       env {
         name        = "APP_DB_PASSWORD"

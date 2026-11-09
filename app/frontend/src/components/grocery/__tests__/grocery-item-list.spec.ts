@@ -42,6 +42,78 @@ describe('GroceryItemList', () => {
     document.body.innerHTML = ''
   })
 
+  it('shows an item’s picture left of its name, as decoration that loads when needed', () => {
+    const wrapper = mount(GroceryItemList, {
+      props: {
+        items: [makeItem({ id: 'a', name: 'Apples', imageUrl: '/api/grocery-list/images/1' })],
+        checkedIds: new Set<string>(),
+        label: 'Costco items',
+      },
+    })
+
+    const button = wrapper.get('li button:nth-of-type(2)')
+    const picture = button.get('[data-item-picture]')
+    const image = picture.get('img')
+    expect(button.element.firstElementChild).toBe(picture.element)
+    expect(picture.attributes('aria-hidden')).toBe('true')
+    expect(image.attributes()).toMatchObject({
+      src: '/api/grocery-list/images/1',
+      alt: '',
+      width: '40',
+      height: '40',
+      loading: 'lazy',
+    })
+    expect(button.text()).toBe('Apples')
+  })
+
+  it('shows a placeholder while the picture is being drawn, and leaves no gap for items without one', () => {
+    const wrapper = mount(GroceryItemList, {
+      props: {
+        items: [
+          makeItem({ id: 'a', name: 'Apples', imagePending: true }),
+          makeItem({ id: 'b', name: 'Bread' }),
+        ],
+        checkedIds: new Set<string>(),
+        label: 'Costco items',
+      },
+    })
+
+    const [waiting, without] = wrapper.findAll('li')
+    expect(waiting?.find('[data-picture-pending]').exists()).toBe(true)
+    expect(waiting?.find('img').exists()).toBe(false)
+    expect(without?.find('[data-item-picture]').exists()).toBe(false)
+  })
+
+  it('gives items without a picture a plain tile when others have one, so the names line up', () => {
+    const wrapper = mount(GroceryItemList, {
+      props: {
+        items: [makeItem({ id: 'b', name: 'Bread' })],
+        checkedIds: new Set<string>(),
+        label: 'Costco items',
+        pictureColumn: true,
+      },
+    })
+
+    const tile = wrapper.get('li button:nth-of-type(2) [data-item-picture]')
+    expect(tile.find('[data-picture-none]').exists()).toBe(true)
+    expect(tile.find('img').exists()).toBe(false)
+  })
+
+  it('shows the plain tile instead of a broken image when a picture fails to load', async () => {
+    const wrapper = mount(GroceryItemList, {
+      props: {
+        items: [makeItem({ id: 'a', name: 'Apples', imageUrl: '/api/grocery-list/images/1' })],
+        checkedIds: new Set<string>(),
+        label: 'Costco items',
+      },
+    })
+
+    await wrapper.get('img').trigger('error')
+
+    expect(wrapper.find('[data-picture-none]').exists()).toBe(true)
+    expect(wrapper.find('img').exists()).toBe(false)
+  })
+
   it('shows each item with its details and labeled controls', () => {
     const wrapper = mountList()
     const rows = wrapper.findAll('li')

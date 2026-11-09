@@ -18,6 +18,11 @@ output "database_name" {
   value       = azurerm_postgresql_flexible_server_database.this.name
 }
 
+output "additional_database_names" {
+  description = "Names of the additional databases, keyed like additional_database_names. Referencing them makes consumers wait until the databases exist."
+  value       = { for key, database in azurerm_postgresql_flexible_server_database.additional : key => database.name }
+}
+
 output "administrator_login" {
   description = "Login name of the server administrator."
   value       = azurerm_postgresql_flexible_server.this.administrator_login
