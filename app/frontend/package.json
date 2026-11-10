@@ -44,7 +44,7 @@
     "postcss": "^8.5.32",
     "prettier": "3.9.6",
     "tailwindcss": "^4.3.3",
-    "typescript": "~6.0.0",
+    "typescript": "~7.0.2",
     "vite": "^8.2.2",
     "vite-plugin-vue-devtools": "^8.2.1",
     "vitest": "^5.1.0",
