@@ -10,7 +10,7 @@ Azure Database for PostgreSQL flexible server with **private access (VNet integr
 Flexible server doesn't support virtual network service endpoints. Its only network models are this one and public
 access with a private endpoint. Both keep traffic on Microsoft's network; this one also removes the public endpoint.
 
-The module also creates the application database and pins `require_secure_transport = on`. Azure's choice of
+The module also creates the application database (plus any in `additional_database_names`, one per app instance) and pins `require_secure_transport = on`. Azure's choice of
 availability zone is ignored, so later plans don't try to move the server.
 
 <!-- BEGIN_TF_DOCS -->

@@ -33,10 +33,12 @@ flowchart LR
 - **One container.** Kestrel serves both static files and the API. In Azure it terminates TLS itself on port 443
   with the Cloudflare origin certificate: Container Apps passes the TCP connection through. Locally it serves plain
   HTTP on port 80 (or 5082/8080 in development).
-- **One instance.** Sessions are signed tokens kept in the browser's cookie and all data lives in PostgreSQL, but the
+- **One replica.** Sessions are signed tokens kept in the browser's cookie and all data lives in PostgreSQL, but the
   realtime hub is SignalR running inside the app with no backplane (deliberately not Azure SignalR Service). A change
-  is broadcast only to the phones connected to the instance that saved it, so the app runs as exactly one instance;
-  Terraform refuses `app_max_replicas` other than 1. Scaling out would need a backplane such as Redis.
+  is broadcast only to the phones connected to the replica that saved it, so each deployment of the app runs as
+  exactly one replica; Terraform refuses `app_max_replicas` other than 1. (The two sites, app. and grocery.biffkittz.com,
+  are separate deployments with separate databases, not replicas of each other.) Scaling out would need a backplane
+  such as Redis.
 
 ## Authentication flow
 
@@ -332,7 +334,7 @@ removed items meanwhile. New items go to the top, next to the "Add an item" fiel
 | **Strict Content-Security-Policy** | `script-src 'self'` with no `unsafe-inline` is possible because Vite emits only external, fingerprinted files and the app loads nothing from other origins. Also `frame-ancestors 'none'`, `nosniff`, `no-referrer`, COOP/CORP and a permissions policy. |
 | **Cloudflare client certificate required** | The container is publicly reachable, and a public Container Apps environment can't be fenced with an NSG. With `OriginTls:RequireCloudflareClientCertificate`, Kestrel asks every client for a certificate and accepts only one that chains to Cloudflare's origin-pull CA, embedded in the image (not the system roots). Requests without one get 403, except the health endpoints, which the platform's probes call directly. See `Infrastructure/Tls/`. |
 | **TLS in the container** | `OriginTls:CertificatePfxBase64` (the origin certificate from Key Vault) becomes Kestrel's HTTPS certificate, TLS 1.2 and 1.3 only. The app refuses to start if the certificate is unreadable, has no private key or is outside its validity period. |
-| **Internal-network allow-list** | The app refuses TCP peers outside `Network:InternalNetworks`, in case the image is ever exposed somewhere without the other controls. It checks the *immediate* peer (in Azure, the Container Apps ingress proxy), not the forwarded client, because users legitimately arrive from the internet through Cloudflare. |
+| **Optional internal-network allow-list** | With `Network:RestrictToInternalNetworks` on, the app refuses TCP peers outside `Network:InternalNetworks`, in case the image is ever exposed somewhere without the other controls. It is off in the shipped settings (so also in Azure and in the compose file), where the client-certificate requirement does that job. It checks the *immediate* peer, not the forwarded client, because users legitimately arrive from the internet through Cloudflare. `Network:InternalNetworks` also decides which proxies' `X-Forwarded-*` headers are trusted, and that part is always on. |
 | **Trusted forwarded headers** | `X-Forwarded-For` and `X-Forwarded-Proto` are honored only from internal networks (and Cloudflare's ranges), walking back through trusted hops to the real client. That is what makes per-client rate limits and logs correct behind Cloudflare. The client-certificate check is what makes the header trustworthy: only Cloudflare can send it. |
 | **AI pictures: little out, nothing raw back in** | Only an item's name goes to Gemini, with the API key in a header (never in a URL). What the app serves is its own re-encoding, never Gemini's bytes: the decoder checks the size in the header before decoding (at most 4096 pixels a side), the HTTP client stops reading at 16 MB, and the result is a fresh WebP served as `image/webp` with `nosniff`. Pictures need the auth cookie like the rest of the list, and the daily limit bounds what a hostile account can spend. |
 | **Cost estimates: little out, the answer checked** | Only each item's name, quantity and brand go to Gemini, as JSON inside a prompt that calls them data, with the key in a header. The answer must fit a JSON Schema the decoder enforces, and the app checks it again field by field, adds up the total itself, and strips control and bidi characters from the model's text before the SPA shows it as plain text. A daily limit of 500 estimates (all users together) caps the spend. |
@@ -382,7 +384,7 @@ The **request pipeline** order is deliberate (`Program.cs`):
 1. Exception handler: always returns problem details, never a stack trace.
 2. Client-certificate requirement (when `OriginTls:RequireCloudflareClientCertificate` is on): refuses requests
    without Cloudflare's certificate before any other work, except the health endpoints.
-3. Internal-network check: must see the original peer, so it runs before forwarded headers.
+3. Internal-network check (only when `Network:RestrictToInternalNetworks` is on): must see the original peer, so it runs before forwarded headers.
 4. Forwarded headers: restores the client IP and scheme.
 5. HSTS (outside Development).
 6. Security headers.
@@ -472,7 +474,7 @@ app/frontend/src/
 - **Hour-long sessions.** Sessions last 60 minutes with no refresh, so a shopper is signed out every hour. A sliding
   session (re-issuing the cookie while the user is active, with an absolute maximum) would fix that; it changes the
   security trade-offs above, so it hasn't been done without a decision.
-- **One instance.** The realtime hub runs in-process. More than one replica would need a SignalR backplane.
+- **One replica.** The realtime hub runs in-process. More than one replica would need a SignalR backplane.
 - **No offline editing.** Changes made without a connection fail (and are rolled back) rather than queue. The list
   shown is the last one loaded, and the status pill says it may be out of date.
 - **Undo re-creates.** "Undo" adds the item back, in its old place, as a new item: its creation date is the time of
@@ -481,7 +483,6 @@ app/frontend/src/
   in training (Flash-Lite's knowledge ends in January 2025), so they lag inflation and can be plain wrong for unusual
   items. The sheet says they are estimates. Grounding with Google Search would make them more current, at a cost per
   request. The daily allowance is in memory, so a restart resets it, and each instance has its own.
-
 - **No server-side session revocation.** A stolen cookie stays valid until it expires (at most 60 minutes). If
   needed, add the Identity security stamp as a claim and validate it on each request, or keep a revocation list.
 - **No email confirmation or password reset.** The app can send email now (`IEmailSender`, Cloudflare Email Service),

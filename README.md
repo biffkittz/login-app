@@ -5,6 +5,10 @@ check off, delete and drag items into order, and every change appears on everybo
 Items carry a quantity, brand, store and notes, remember who changed them last and when, and get a small picture
 drawn by Google's Gemini, which can also estimate what the whole list costs.
 
+**Live demo: <https://grocery.biffkittz.com>.** Register an account (any email address and a password of 12 or more
+characters) and add a few items. It is a demonstration site with its own accounts and list, so don't put anything
+private on it: everyone who registers shares the one list.
+
 Nibbles grew out of a sign-up / sign-in app built to production standards, which is still its foundation (the code
 keeps its original `LoginApp` names):
 
@@ -15,8 +19,6 @@ keeps its original `LoginApp` names):
 - **Hosting:** one Linux container in which Kestrel serves the API, the realtime hub and the compiled SPA. In Azure
   Container Apps it terminates TLS itself on port 443 with the Cloudflare origin certificate, accepts only requests
   that carry Cloudflare's client certificate, and reads its secrets from Azure Key Vault. Locally it serves plain HTTP.
-  Two independent instances of the image run in Azure, at app.biffkittz.com and grocery.biffkittz.com, each with its
-  own database (and so its own accounts and list).
 
 ```mermaid
 flowchart LR
@@ -122,12 +124,12 @@ login-app/
   connection closes with it.
 - **Abuse protection:** accounts lock for 15 minutes after five failed sign-ins; each client IP is rate-limited on the
   login and registration endpoints, and each user on changes to the list. The list holds at most 500 items, and at
-  most 100 pictures are drawn a day.
+  most 100 pictures are drawn and 500 cost estimates made a day.
 - **Hardening:**
   - A strict Content-Security-Policy and security headers on every response.
   - A 64 KB request body limit, and a cap on concurrent WebSocket connections.
   - No `Server` header.
-  - An internal-network allow-list.
+  - An optional internal-network allow-list (`Network:RestrictToInternalNetworks`, off in the shipped settings).
   - TLS 1.2+ terminated in the container, and HSTS.
   - Only Cloudflare gets in: its Authenticated Origin Pulls client certificate is required.
   - The realtime hub refuses connections opened by pages on other sites, and accounts that no longer exist.

@@ -1,13 +1,13 @@
 # container-app
 
-The external Container Apps environment, the Login App and the database bootstrap job.
+The external Container Apps environment, the Login App (one Container App per entry of `apps`) and the database bootstrap job.
 
 **Environment.**
 - Workload profiles type with the Consumption profile, in the VNet (required for external TCP ingress).
 - External: a public IP (`static_ip_address`), which Cloudflare's DNS record points to.
 - Logs go to Log Analytics.
 
-**App** (created only when `deploy_app` is true).
+**Apps** (created only when `deploy_app` is true).
 - Single revision mode, with a user-assigned identity for the image pull and the Key Vault references.
 - Secrets come from Key Vault; the versionless URIs follow new secret versions automatically.
 - **TCP ingress** on `app_exposed_port`, passed through to `app_target_port` without decryption, so Kestrel

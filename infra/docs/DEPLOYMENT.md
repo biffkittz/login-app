@@ -1,7 +1,7 @@
 # Deployment
 
-How to deploy the infrastructure of Nibbles (the Login App's code base) from nothing, verify it, operate it, and tear it down. Commands run in
-WSL from `infra/` unless they say otherwise.
+How to deploy the infrastructure of Nibbles (the Login App's code base) from nothing, verify it, operate it, and tear
+it down. Commands run in WSL from `infra/` unless they say otherwise.
 
 - [How a first deployment works](#how-a-first-deployment-works)
 - [Prerequisites](#prerequisites)
@@ -9,7 +9,6 @@ WSL from `infra/` unless they say otherwise.
 - [Phase 2: build and push the image](#phase-2-build-and-push-the-image)
 - [Phase 3: create the app's database role](#phase-3-create-the-apps-database-role)
 - [Phase 4: deploy the app](#phase-4-deploy-the-app)
-- [Migrating from the Application Gateway version](#migrating-from-the-application-gateway-version)
 - [Verify](#verify)
 - [Registration emails](#registration-emails)
 - [Day-2 operations](#day-2-operations)
@@ -66,14 +65,14 @@ terraform init                                                     # once per cl
 terraform plan -var-file=environments/demo.tfvars -out=demo.tfplan
 ```
 
-Review the plan before applying. On the first run it should show about **50 to add, 0 to change, 0 to destroy**.
+Review the plan before applying. On the first run it should show a few dozen resources to add, and **0 to change, 0 to destroy**.
 Look for:
 
 - `module.container_apps.azurerm_container_app.this` is **absent**, because `app_image_tag` isn't set yet;
 - `module.container_apps.azurerm_container_app_environment.this` has `internal_load_balancer_enabled = false`;
 - `cloudflare_zone_setting.authenticated_origin_pulls` sets `tls_client_auth` to `on`;
-- `cloudflare_ruleset.origin_port` routes `app.biffkittz.com` to port 8443;
-- `cloudflare_dns_record.app` is proxied and points at the environment's IP (known after apply).
+- `cloudflare_ruleset.origin_port` routes `app.biffkittz.com` to port 8443 and `grocery.biffkittz.com` to 8444;
+- `cloudflare_dns_record.app["main"]` and `["grocery"]` are proxied and point at the environment's IP (known after apply).
 
 ```bash
 terraform apply demo.tfplan
@@ -151,40 +150,6 @@ terraform apply demo.tfplan
 
 Keep `app_image_tag` set from now on. Removing it again plans to **destroy** the Container Apps. Every instance runs
 this tag, so a release updates them all.
-
-## Migrating from the Application Gateway version
-
-An earlier version of this configuration put Application Gateway in front of an internal environment. Moving an
-existing deployment to the current one is a single apply, with a few minutes of downtime.
-
-1. **Build an image with the TLS support** (the app code that reads `OriginTls`), as in phase 2, with a new tag.
-2. **Set that tag** in `environments/demo.tfvars` (`app_image_tag`).
-3. **Make sure the Cloudflare token can edit zone settings and Origin Rules**
-   ([AUTHENTICATION.md](AUTHENTICATION.md#cloudflare)).
-4. **Plan and read it carefully:**
-
-   ```bash
-   terraform plan -var-file=environments/demo.tfvars -out=demo.tfplan
-   ```
-
-   | Expect | Why |
-   | --- | --- |
-   | **Destroy:** Application Gateway, its public IP and diagnostic setting, `id-loginapp-demo-agw`, `snet-appgw` with its NSG and rules, the environment's private DNS zone with its link and records | No longer needed |
-   | **Replace (`-/+`):** the Container Apps environment, the Container App and the bootstrap job | `internal_load_balancer_enabled` can't change in place |
-   | **Replace:** the certificate's role assignment | It now goes to the app's identity instead of the gateway's |
-   | **Update:** `cloudflare_dns_record.app`, the Container Apps NSG rules | New IP; new ingress rule |
-   | **Create:** `cloudflare_zone_setting.authenticated_origin_pulls` | Cloudflare's client certificate |
-   | **No change:** PostgreSQL, Key Vault and its secrets, the registry | Your data and secrets stay |
-
-   If the plan wants to replace PostgreSQL, the Key Vault or the registry, **stop**: their names changed, usually
-   because `name_suffix` was removed from `demo.tfvars`.
-
-5. **Apply.** `terraform apply demo.tfplan`. The site is down from when the old environment is deleted until the new
-   app is ready, typically 10 to 20 minutes. The database role from phase 3 still exists, so the job doesn't need to
-   run again.
-
-If the apply fails with an error that the managed resource group `rg-loginapp-demo-cae-managed` already exists, Azure
-is still deleting the old one. Wait a few minutes and apply again.
 
 ## Verify
 
@@ -381,7 +346,7 @@ terraform apply destroy.tfplan
 
 | Resource | What happens |
 | --- | --- |
-| Cloudflare `app` record | Deleted; `app.biffkittz.com` stops resolving |
+| Cloudflare DNS records, Origin Rules, and (with recipients) the Email Sending setup | Deleted; both sites stop resolving, and Cloudflare removes the email DNS records it added. The domain's own MXroute records aren't ours and stay |
 | PostgreSQL | Deleted. Azure keeps a dropped server's backups for 5 days, restorable only through its "restore a dropped server" procedure. Export data first if you need it (`pg_dump` from a job inside the VNet) |
 | Key Vault | Soft-deleted for 7 days, not purged; purge protection forbids purging. Applying again within 7 days recovers it and its secrets, and the name stays reserved meanwhile |
 | Log Analytics | Soft-deleted for 14 days; re-creating it with the same name recovers it |
@@ -406,12 +371,11 @@ Destroying takes about 15 to 20 minutes.
 | Certificate import fails: password or format error | Wrong `TF_VAR_tls_certificate_pfx_password`, or an OpenSSL 3 PFX that Key Vault doesn't accept. Re-create it with `openssl pkcs12 -export -legacy ...` |
 | Cloudflare **526 Invalid SSL certificate** | The app's certificate doesn't cover `app.biffkittz.com`, or isn't a Cloudflare Origin CA / publicly trusted certificate |
 | Cloudflare **525 SSL handshake failed** | Kestrel rejected Cloudflare's client certificate (app log event 4001), e.g. after Cloudflare changed its origin-pull CA. Update the embedded CA (see Day-2 operations) |
-| Cloudflare **521 / 522** | Cloudflare can't connect: the app isn't deployed or isn't running (phase 4, app logs), Cloudflare's IP ranges changed (plan and apply), or the Origin Rule is missing or names another port than `app_exposed_port` |
+| Cloudflare **521 / 522** | Cloudflare can't connect: the app isn't deployed or isn't running (phase 4, app logs; `az containerapp logs show --name ca-loginapp-demo-<key>` for an additional instance), Cloudflare's IP ranges changed (plan and apply), or the Origin Rule is missing or names another port than the instance's exposed port |
 | **403 Forbidden** on every page, app log event 4000 | Requests arrive without Cloudflare's client certificate: Authenticated Origin Pulls is off in Cloudflare (SSL/TLS → Origin Server), or the record isn't proxied |
 | App exits at start: `OriginTls:CertificatePfxBase64 ...` | The certificate from Key Vault can't be used: it is expired, has no private key or isn't readable. Re-import the PFX and apply |
 | App logs: `password authentication failed for user "loginapp_app"` | The bootstrap job hasn't run since the password was created or rotated. Run phase 3 |
 | A new instance's logs: `permission denied for database "<name>"`, or it keeps restarting | The bootstrap job hasn't run since the instance was added. Run phase 3 ([Adding an instance](#adding-an-instance)) |
-| Cloudflare **521 / 522** for one instance only | Its Origin Rule is missing or names another port than its `exposed_port`, or its Container App isn't running (`az containerapp logs show --name ca-loginapp-demo-<key>`) |
 | Signed in on one instance, but the other asks to sign in | Expected: each instance has its own accounts, and a session only counts on the instance that started it |
 | Readiness probe failing; liveness fine | The app can't reach PostgreSQL: check the job ran, then the NSG on `snet-psql` and the private DNS link |
 | Bootstrap job fails: `unable to fetch secret ... using Managed identity` | Role propagation (start it again in a minute), or the platform issue in [microsoft/azure-container-apps#1804](https://github.com/microsoft/azure-container-apps/issues/1804) |

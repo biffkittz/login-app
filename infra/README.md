@@ -6,9 +6,9 @@ list and accounts. That includes the network, the Container Apps environment and
 PostgreSQL with a database per instance, Key Vault, the container registry, logging, and the Cloudflare DNS records,
 Origin Rules and Authenticated Origin Pulls. It also sets up Cloudflare Email Service, so that every registration
 emails the people in `registration_notification_recipients` from notifications@biffkittz.com. The instances share the
-image, the Key Vault and its secrets. The app
-terminates TLS itself with the Cloudflare origin certificate, so there is no Application Gateway. Defaults target
-`eastus`, and every Azure resource is tagged `project:loginapp`.
+image, the Key Vault and its secrets. The app terminates TLS itself with the Cloudflare origin certificate, so there
+is no Application Gateway. The variable default is `eastus`; the demo deploys to `centralus` (`environments/demo.tfvars`).
+Every Azure resource is tagged `project:loginapp`.
 
 ```mermaid
 flowchart LR
@@ -38,10 +38,10 @@ only be created once their image exists and their database role has been set up.
 
 ```bash
 az login && az account set --subscription 3c3f379f-8161-4631-a30c-a3af82622a6a
-export CLOUDFLARE_API_TOKEN=...                                         # DNS, Zone Settings and Origin Rules edit
+export CLOUDFLARE_API_TOKEN=...                                         # DNS, Zone Settings, Origin Rules, Email (docs/AUTHENTICATION.md)
 export TF_VAR_tls_certificate_pfx_path=~/.secrets/biffkittz-origin.pfx  # Cloudflare origin certificate
 read -rsp 'PFX password: ' TF_VAR_tls_certificate_pfx_password && export TF_VAR_tls_certificate_pfx_password
-read -rsp 'Gemini API key: ' TF_VAR_gemini_api_key && export TF_VAR_gemini_api_key  # optional: AI item pictures
+read -rsp 'Gemini API key: ' TF_VAR_gemini_api_key && export TF_VAR_gemini_api_key  # optional: AI pictures and cost estimates
 
 terraform init
 terraform plan -var-file=environments/demo.tfvars -out=demo.tfplan     # 1. platform (no app yet)
@@ -97,7 +97,7 @@ Run these before every pull request. CI (`.github/workflows/infra.yml`) and the 
 ```bash
 terraform fmt -recursive -check
 terraform init -backend=false && terraform validate
-terraform test                       # 52 runs against mocked providers
+terraform test                       # runs against mocked providers
 tflint --init && tflint --recursive
 terraform-docs .                     # refreshes the reference sections
 ```

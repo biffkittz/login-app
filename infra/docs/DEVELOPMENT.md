@@ -16,8 +16,7 @@ The application's own setup (the .NET SDK, Node.js, local PostgreSQL) is in the 
 
 ## 1. Install the tools
 
-All commands run in the WSL Ubuntu terminal (Ubuntu 26.04 "resolute" here; the repositories below also support
-24.04).
+All commands run in the WSL Ubuntu terminal (the repositories below support Ubuntu 24.04 and 26.04).
 
 | Tool | Version | Used for |
 | --- | --- | --- |
@@ -91,7 +90,7 @@ cd ~/login-app/infra
 terraform init -backend=false            # providers and modules only; works offline from Azure
 terraform fmt -recursive                 # format
 terraform validate                       # syntax and types
-terraform test                           # 52 runs against mocked providers (a few seconds)
+terraform test                           # runs against mocked providers (a few seconds)
 tflint --init && tflint --recursive      # lint (the root module and every module)
 terraform-docs .                         # refresh the READMEs after changing variables, outputs or resources
 ```

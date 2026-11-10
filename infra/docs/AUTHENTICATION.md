@@ -210,7 +210,7 @@ secret.
 
 ### Zone settings to check once
 
-Terraform manages the `app` record and Authenticated Origin Pulls (SSL/TLS → Origin Server). The settings below
+Terraform manages the instances' DNS records, the Origin Rules and Authenticated Origin Pulls (SSL/TLS → Origin Server). The settings below
 affect every record in `biffkittz.com`, so set them in the dashboard:
 
 | Setting | Value | Why |

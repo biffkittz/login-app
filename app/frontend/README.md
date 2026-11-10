@@ -1,6 +1,6 @@
-# Login App: frontend
+# Nibbles: frontend
 
-The Vue 3 + TypeScript single-page app for Login App, built with Vite and styled with Tailwind CSS. In production
+The Vue 3 + TypeScript single-page app for Nibbles (the Login App), built with Vite and styled with Tailwind CSS. In production
 it is served by the ASP.NET Core API (see [../../docs/BUILD_AND_DEPLOY.md](../../docs/BUILD_AND_DEPLOY.md)); in
 development the Vite dev server proxies `/api` to the API running on <http://localhost:5082>.
 

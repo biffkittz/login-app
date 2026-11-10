@@ -106,8 +106,8 @@ docker compose --file app/compose.yaml up --build  # the image + a throwaway Pos
 # browse to http://localhost:8080   (Ctrl+C to stop; `docker compose --file app/compose.yaml down --volumes` to reset)
 ```
 
-The compose file runs the image exactly as in production: Production environment, secure `__Host-` cookie, JSON
-logs and the internal-network check. Chrome, Edge and Firefox accept `Secure` cookies on `http://localhost`;
+The compose file runs the image as in production: Production environment, secure `__Host-` cookie and JSON logs
+(not the Cloudflare certificate requirement or the Key Vault secrets, which only Azure has). Chrome, Edge and Firefox accept `Secure` cookies on `http://localhost`;
 Safari does not.
 
 ## 3. Deploying to Azure Container Apps
@@ -228,7 +228,7 @@ the bootstrap job) are in [infra/docs/DEPLOYMENT.md](../infra/docs/DEPLOYMENT.md
 | Startup times out connecting to PostgreSQL | Private DNS for the server isn't linked to the VNet, or the NSG on the PostgreSQL subnet blocks the Container Apps subnet |
 | `password authentication failed for user "loginapp_app"` | The bootstrap job hasn't run since the password was created or rotated |
 | `The remote certificate is invalid` from Npgsql | The host name in the connection string doesn't match the server certificate; use the `*.postgres.database.azure.com` name |
-| Every request gets `403` and the log says `Refused a request from ...` | The ingress connects from a range missing in `Network:InternalNetworks`; add that CIDR |
+| Every request gets `403` and the log says `Refused a request from ...` | Only with `Network:RestrictToInternalNetworks` turned on (it is off by default): the peer is outside `Network:InternalNetworks`; add its CIDR |
 | Users share one rate-limit bucket | A proxy in front of the app is outside `Network:InternalNetworks`, so the app stops walking `X-Forwarded-For` at that proxy. Cloudflare's ranges are added by `infra/`; add any other proxy's range |
 | Readiness probe failing, liveness fine | The database is unreachable from the replica (see above); the app stays up and recovers by itself |
 | The list's status pill stays on "Offline", and other people's changes appear only every 30 seconds | WebSockets don't get through: Cloudflare's **WebSockets** setting is off, or the phone's network blocks them. The list falls back to reloading over HTTP every 30 seconds. The browser's developer tools show the failing `wss://.../api/grocery-list/hub` request |

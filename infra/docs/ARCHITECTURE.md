@@ -1,7 +1,7 @@
 # Architecture
 
-How Nibbles (the app's code still calls itself the Login App) runs in Azure: the request path, the network, identities, secrets and DNS, and why each part is
-built the way it is. For the application's own design (authentication flow, security headers, forwarded headers),
+How Nibbles (the app's code still calls itself the Login App) runs in Azure: the request path, the network,
+identities, secrets and DNS, and why each part is built the way it is. For the application's own design (authentication flow, security headers, forwarded headers),
 see the app's [docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md).
 
 - [Overview](#overview)
@@ -83,8 +83,8 @@ The path is the same for both instances; only the host name and port differ (gro
    zone's **Full (strict)** mode. During the same handshake Kestrel checks Cloudflare's client certificate against
    the origin-pull CA built into the image, and aborts the handshake if it doesn't chain to it. A connection that
    presents no certificate gets only the health endpoints; every other path answers 403.
-5. The app accepts the connection only from an internal peer (the ingress proxy). It takes the visitor's IP from the
-   `X-Forwarded-For` header Cloudflare added and uses it for rate limiting and logs.
+5. The app takes the visitor's IP from the `X-Forwarded-For` header Cloudflare added (the TCP peer is the ingress
+   proxy, an internal address that it trusts) and uses it for rate limiting and logs.
 6. The app connects to PostgreSQL's private IP with `SSL Mode=VerifyFull`. The PostgreSQL subnet's NSG admits only
    the Container Apps subnet on 5432.
 
@@ -130,7 +130,7 @@ Container App or job first needs them. A system-assigned identity only exists on
 | Principal | Role | Scope | Why |
 | --- | --- | --- | --- |
 | `id-loginapp-demo-app` (the app) | AcrPull | the registry | Pull the app image |
-| | Key Vault Secrets User | secrets `ConnectionStrings--DefaultConnection`, `grocery-db-connection-string`, `Jwt--SigningKey` and (with a Gemini key) `ImageGeneration--ApiKey`, and the certificate's secret | Its secrets and its TLS certificate, nothing else. Both instances run as this identity |
+| | Key Vault Secrets User | secrets `ConnectionStrings--DefaultConnection`, `grocery-db-connection-string`, `Jwt--SigningKey`, `ImageGeneration--ApiKey` (with a Gemini key), `Email--ApiToken` (with registration emails), and the certificate's secret | Its secrets and its TLS certificate, nothing else. Both instances run as this identity |
 | `id-loginapp-demo-dbinit` (bootstrap job) | Key Vault Secrets User | secrets `postgresql-admin-password` and `postgresql-app-password` | The only identity that can read the administrator password |
 | Whoever runs Terraform | Key Vault Secrets Officer, Key Vault Certificates Officer | the vault | Create and update secrets and import the certificate; Terraform grants these itself |
 
@@ -311,12 +311,12 @@ the header and pick their rate-limit bucket; that is one more reason the check m
 
 **Cloudflare's ranges are also trusted** (`Network__InternalNetworks__100+`; index 100 and up leaves the defaults in
 `appsettings.json` in place). They matter only if the ingress ever hands over Cloudflare's address as the peer
-instead of its own. The same setting guards the TCP peer, but every connection already comes through the ingress,
-so they open nothing.
+instead of its own. The same setting can also guard the TCP peer (`Network:RestrictToInternalNetworks`, off by
+default), but every connection already comes through the ingress, so they open nothing.
 
 ### PostgreSQL: private access instead of service endpoints
 
-**The question.** You asked whether service endpoints could keep the app-to-database traffic on Microsoft's network.
+**The question.** Could service endpoints keep the app-to-database traffic on Microsoft's network?
 
 **Why not service endpoints.** Azure Database for PostgreSQL flexible server doesn't support them. Virtual network
 service endpoint rules existed only for the retired Single Server. Flexible server offers two network models:
@@ -449,8 +449,8 @@ registering never waits for it or fails because of it. The app side is described
   it would need the domain's own SPF record (managed by hand for MXroute) rewritten, and because a domain has to be
   verified by hand before it can be linked. Cloudflare Email Routing would have replaced the domain's MX records.
 - **Everything is Terraform** (module `email-sending`): onboarding the domain, the recipients as verified destination
-  addresses, and the app's API token, which is account-owned, holds only the email sending permission, and goes
-  through Key Vault like every other secret. Cloudflare creates and locks the DNS records itself, because the zone is
+  addresses, and the app's API token, which is account-owned, is limited to Email Sending (the narrowest group that
+  can send), and goes through Key Vault like every other secret. Cloudflare creates and locks the DNS records itself, because the zone is
   on Cloudflare. Two steps stay manual, both once: the deploying token needs the permissions to do this
   ([AUTHENTICATION.md](AUTHENTICATION.md#cloudflare)), and each recipient follows the confirmation link Cloudflare
   emails it.
@@ -556,8 +556,8 @@ When the demo isn't needed, `terraform destroy` removes everything; see [DEPLOYM
   Origin Pulls with your own certificate closes that (see above).
 - **IP restrictions on TCP ingress are undocumented.** The client certificate is the control that is relied on.
 - **No egress filtering.** Outbound traffic uses the platform defaults; the app's only outbound calls go to the
-  Gemini API (`generativelanguage.googleapis.com`) for item pictures and cost estimates, and to Cloudflare's API (`api.cloudflare.com`)
-  for registration emails. For production, route egress through Azure Firewall with user-defined routes and allow
+  Gemini API (`generativelanguage.googleapis.com`) for item pictures and cost estimates, and to Cloudflare's API
+  (`api.cloudflare.com`) for registration emails. For production, route egress through Azure Firewall with user-defined routes and allow
   just those hosts. Workload profile environments support this, and a fixed egress IP would also let the email token
   be limited to it (`condition.request_ip`).
 - **Cloudflare Email Sending is in public beta** (since April 2026). Its API or limits may change before general
@@ -571,5 +571,6 @@ When the demo isn't needed, `terraform destroy` removes everything; see [DEPLOYM
 - **One replica and Burstable PostgreSQL.** There is no high availability. More replicas first need a SignalR
   backplane (Redis, for example); then raise the replica counts, and move PostgreSQL to General Purpose with
   zone-redundant high availability for production.
-- **The app setting `Network:InternalNetworks` serves two purposes,** guarding the TCP peer and trusting proxies.
-  Splitting it would make the Cloudflare configuration more explicit.
+- **The app setting `Network:InternalNetworks` serves two purposes,** trusting proxies' `X-Forwarded-For` and, when
+  `Network:RestrictToInternalNetworks` is on (it isn't), guarding the TCP peer. Splitting it would make the Cloudflare
+  configuration more explicit.

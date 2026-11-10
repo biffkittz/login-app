@@ -1,9 +1,8 @@
 # Development guide
 
-This guide takes you from a fresh Windows machine to running, debugging and testing Nibbles (the code's
-`LoginApp` projects) locally. The team
-develops in **VS Code** connected to **WSL (Ubuntu)**: all code, tools and builds live inside Linux, and VS Code
-on Windows is the editor.
+This guide takes you from a fresh Windows machine to running, debugging and testing Nibbles (the code's `LoginApp`
+projects) locally. Development happens in **VS Code** connected to **WSL (Ubuntu)**: all code, tools and builds live
+inside Linux, and VS Code on Windows is the editor.
 
 - [1. What you need](#1-what-you-need)
 - [2. Windows setup](#2-windows-setup)
@@ -26,7 +25,7 @@ on Windows is the editor.
 | VS Code (Windows) + WSL extension | Current | Editing and debugging inside WSL |
 | .NET SDK | 10.0.x (pinned by `global.json`) | Building, testing and running the API |
 | Node.js + npm | Node 24 LTS (≥ 24.15) or 22 (≥ 22.22.2) | Building and testing the Vue frontend |
-| PostgreSQL | 16 or newer (17 matches Azure) | The local database |
+| PostgreSQL | 16 or newer (Azure runs 18) | The local database |
 | Docker Desktop with WSL integration | Current (optional) | Building and running the container image locally |
 | Azure CLI | Current (optional) | Deploying to Azure |
 
@@ -182,6 +181,9 @@ the Extensions view (filter: `@recommended`):
 | Azure Container Apps | `ms-azuretools.vscode-azurecontainerapps` | Inspect and deploy the Container App |
 | ShellCheck | `timonwong.shellcheck` | Lints `buildAndRunSite.sh` (needs the `shellcheck` package) |
 
+The workspace also recommends HashiCorp Terraform and the Azure Resources extension, for `infra/`
+([infra/docs/DEVELOPMENT.md](../infra/docs/DEVELOPMENT.md#2-vs-code)).
+
 ### The workspace layout
 
 `login-app.code-workspace` is a multi-root workspace with five folders:
@@ -252,8 +254,8 @@ Vite dev server also exposes Vue DevTools in-page (`vite-plugin-vue-devtools`): 
 
 ## 8. Tests and quality checks
 
-Run these before pushing; CI should run the same commands. Run `dotnet` commands from inside the repository so the
-SDK picks up `global.json`.
+Run these before pushing. Only `infra/` has CI so far, so nothing else runs them for you. Run `dotnet` commands
+from inside the repository so the SDK picks up `global.json`.
 
 ```bash
 # Backend
@@ -293,8 +295,8 @@ npm audit --omit=dev  # vulnerabilities in what ships to browsers
   - Unit tests cover token issuing, options validation, the internal-network middleware, item positions, the Gemini
     client (what it sends, and how it reads pictures, refusals and errors), the Gemini cost estimator (the request,
     the prompt and schema, a name posing as instructions, and how it reads answers and failures), cleaning the model's
-    text, the estimate allowance, the picture shrinking, the Cloudflare email
-    client (the request, and how it reads deliveries, refusals and timeouts) and the registration email's text.
+    text, the estimate allowance, the picture shrinking, the Cloudflare email client (the request, and how it reads
+    deliveries, refusals and timeouts) and the registration email's text.
   - The SQLite database is a temporary file, so the hub and HTTP requests can use the database at the same time.
 - **Frontend (`src/**/__tests__`):**
   - Validation rules and error normalization.
@@ -365,8 +367,8 @@ for example `Jwt--SigningKey`.
 | `RegistrationNotifications:Subject` | `[grocery app] new registration detected` | The subject line; no control characters |
 | `RegistrationNotifications:SiteUrl` | none | This instance's address, which the email names (Terraform sets each instance's) |
 | `RegistrationNotifications:MaxPerDay` | `50` | Registration emails in any 24 hours, at most (counted in memory); the last says so. `0` sends none |
-| `Network:RestrictToInternalNetworks` | `true` | Refuse (403) peers outside `Network:InternalNetworks` |
-| `Network:InternalNetworks` | RFC 1918, 100.64/10, link-local, loopback, IPv6 ULA | CIDR list; also the proxies trusted for `X-Forwarded-*` |
+| `Network:RestrictToInternalNetworks` | `false` (appsettings.json; the class default is `true`) | Refuse (403) TCP peers outside `Network:InternalNetworks`. Off in the shipped settings, in Azure too; turn it on only where the immediate peer is always internal |
+| `Network:InternalNetworks` | RFC 1918, 100.64/10, link-local, loopback, IPv6 ULA | CIDR list: the proxies trusted for `X-Forwarded-*` (always) and the peers allowed in (when `RestrictToInternalNetworks` is on) |
 | `KeyVault:Uri` | empty (off) | e.g. `https://kv-login-app.vault.azure.net/`; loads all vault secrets at startup |
 | `KeyVault:ManagedIdentityClientId` | empty | User-assigned identity; falls back to `AZURE_CLIENT_ID`, then the system-assigned identity |
 
