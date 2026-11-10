@@ -366,7 +366,7 @@ After a local apply, the next CI plan should report no changes.
 | --- | --- |
 | `AADSTS700213: No matching federated identity record found for presented assertion subject '...'` | The credential's subject differs from the one in the message (it is exactly what GitHub presented). Compare the repository's name and IDs, the environment's name, and whether the job runs without its environment. Re-run `setup-github-oidc.sh` after renaming or transferring the repository, or after switching its subject format (Settings, Actions, OpenID Connect) |
 | `AADSTS700016` or `Identity not found` | `AZURE_CLIENT_ID` in that environment isn't the identity's **client** ID (the script prints it) |
-| Plan fails with `403` reading Key Vault secrets (`ForbiddenByRbac`) | The deploy identity isn't a Key Vault administrator yet: step 2, applied from your machine |
+| Plan fails with `403` reading Key Vault secrets (`ForbiddenByRbac`, `Assignment: (not found)`) | The deploy identity (the message's `appid` is its client ID) isn't a Key Vault administrator yet. The two lines in `demo.tfvars` only grant the role once they are **applied**, and a CI plan can't do that for itself because it fails first: step 2, applied from your machine. Then wait a few minutes for the role to take effect and re-run the job |
 | Plan fails with `AuthorizationFailed` on the state (`Storage Blob Data`) | The identity's state role is missing or hasn't propagated yet (a few minutes); re-run `setup-github-oidc.sh` |
 | `Error acquiring the state lock` | Someone else, or another run, holds it. Wait; `terraform force-unlock` only once you are sure nothing is running |
 | Apply: `Saved plan is stale` | The state changed after the plan (another apply). Re-run the whole workflow, so it plans again |
