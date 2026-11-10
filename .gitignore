@@ -34,3 +34,7 @@ appsettings.Local.json
 
 # Logs
 *.log
+
+# Python bytecode (the CI scripts are Python)
+__pycache__/
+*.pyc

@@ -44,6 +44,7 @@ for why it is off by default.
 | [azurerm_key_vault_certificate.tls](https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/key_vault_certificate) | resource |
 | [azurerm_key_vault_secret.this](https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/key_vault_secret) | resource |
 | [azurerm_monitor_diagnostic_setting.this](https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/monitor_diagnostic_setting) | resource |
+| [azurerm_role_assignment.additional_administrator](https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/role_assignment) | resource |
 | [azurerm_role_assignment.administrator](https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/role_assignment) | resource |
 | [azurerm_role_assignment.certificate_reader](https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/role_assignment) | resource |
 | [azurerm_role_assignment.secret_reader](https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/role_assignment) | resource |
@@ -63,6 +64,7 @@ for why it is off by default.
 | <a name="input_resource_group_name"></a> [resource\_group\_name](#input\_resource\_group\_name) | Resource group that holds the vault. | `string` | n/a | yes |
 | <a name="input_tags"></a> [tags](#input\_tags) | Tags applied to every taggable resource in this module. | `map(string)` | n/a | yes |
 | <a name="input_tenant_id"></a> [tenant\_id](#input\_tenant\_id) | Microsoft Entra tenant that authenticates requests to the vault. | `string` | n/a | yes |
+| <a name="input_additional_administrator_principal_ids"></a> [additional\_administrator\_principal\_ids](#input\_additional\_administrator\_principal\_ids) | More principals that get the same roles as administrator\_principal\_id, by a stable label (the map key), e.g. { github\_deploy = "<object ID>" }: everyone who runs Terraform against this vault. | `map(string)` | `{}` | no |
 | <a name="input_allowed_ip_ranges"></a> [allowed\_ip\_ranges](#input\_allowed\_ip\_ranges) | Public ranges (CIDR, e.g. "203.0.113.10/32") allowed through the firewall: the machines that run Terraform. | `list(string)` | `[]` | no |
 | <a name="input_allowed_subnet_ids"></a> [allowed\_subnet\_ids](#input\_allowed\_subnet\_ids) | Subnets (with the Microsoft.KeyVault service endpoint) allowed through the firewall. | `list(string)` | `[]` | no |
 | <a name="input_certificate_password"></a> [certificate\_password](#input\_certificate\_password) | Password of the PFX file, or null when it has none. | `string` | `null` | no |

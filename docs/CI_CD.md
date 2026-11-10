@@ -81,9 +81,12 @@ an origin certificate you renewed, or a rotated Gemini key.
 
 **No long-lived credentials.** The workflows sign in to Azure with GitHub's OpenID Connect tokens: Microsoft Entra ID
 exchanges a short-lived token that GitHub issues for one job for a token of a user-assigned managed identity. Each
-identity's federated credential names one GitHub environment of this repository
-(`repo:biffkittz/login-app:environment:<name>`), so only jobs that run in that environment can use it, and the
-environment decides which branches may run there and who must approve. Terraform's state backend uses Entra ID too
+identity's federated credential names one GitHub environment of this repository, so only jobs that run in that
+environment can use it, and the environment decides which branches may run there and who must approve. The credential
+uses GitHub's immutable subject format, which carries the numeric owner and repository IDs
+(`repo:biffkittz@<owner ID>/login-app@<repository ID>:environment:<name>`; GitHub uses it for repositories created
+after 2026-07-15 and for renamed or transferred ones), so a name this repository gives up can't be claimed by
+someone else to get tokens Azure would accept. Terraform's state backend uses Entra ID too
 (`use_azuread_auth`), so no storage account key exists in CI.
 
 **Least privilege per stage.**
@@ -152,8 +155,9 @@ az login && az account set --subscription 3c3f379f-8161-4631-a30c-a3af82622a6a
 
 [`setup-github-oidc.sh`](../infra/scripts/setup-github-oidc.sh) creates the three identities in `rg-terraform-state`
 (outside the Terraform-managed resource group, so `terraform destroy` can't remove the pipeline), their federated
-credentials and their roles. It is safe to run again. It ends by printing the values for the next steps. Keep that
-output.
+credentials and their roles. It looks up the owner and repository IDs for the credentials' subjects on GitHub's
+public API (for a private repository, set `GITHUB_OWNER_ID` and `GITHUB_REPOSITORY_ID`). It is safe to run again, and
+it ends by printing the values for the next steps. Keep that output.
 
 ### 2. Let the deploy identity manage Key Vault's contents
 
@@ -360,7 +364,7 @@ After a local apply, the next CI plan should report no changes.
 
 | Symptom | Cause and fix |
 | --- | --- |
-| `AADSTS70021: No matching federated identity record found` | The job's subject doesn't match a federated credential: the environment's name, the repository name, or the job runs without its environment. Re-run `setup-github-oidc.sh` after renaming either |
+| `AADSTS700213: No matching federated identity record found for presented assertion subject '...'` | The credential's subject differs from the one in the message (it is exactly what GitHub presented). Compare the repository's name and IDs, the environment's name, and whether the job runs without its environment. Re-run `setup-github-oidc.sh` after renaming or transferring the repository, or after switching its subject format (Settings, Actions, OpenID Connect) |
 | `AADSTS700016` or `Identity not found` | `AZURE_CLIENT_ID` in that environment isn't the identity's **client** ID (the script prints it) |
 | Plan fails with `403` reading Key Vault secrets (`ForbiddenByRbac`) | The deploy identity isn't a Key Vault administrator yet: step 2, applied from your machine |
 | Plan fails with `AuthorizationFailed` on the state (`Storage Blob Data`) | The identity's state role is missing or hasn't propagated yet (a few minutes); re-run `setup-github-oidc.sh` |

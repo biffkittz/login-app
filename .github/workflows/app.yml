@@ -62,7 +62,7 @@ jobs:
       - name: Compare with the base branch
         id: diff
         run: >-
-          .github/scripts/changed-areas.sh app
+          bash .github/scripts/changed-areas.sh app
           '^(app/|global\.json$|dotnet-tools\.json$|\.github/workflows/app\.yml$|\.github/actions/build-and-scan-image/|\.github/scripts/propose-deploy\.sh$)'
 
   backend:
@@ -274,7 +274,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           IMAGE_TAG: ${{ needs.publish.outputs.tag }}
           IMAGE_DIGEST: ${{ needs.publish.outputs.digest }}
-        run: .github/scripts/propose-deploy.sh
+        run: bash .github/scripts/propose-deploy.sh
 
   # The single status a branch ruleset requires for the app: passes when every check passed or was skipped.
   checks-passed:

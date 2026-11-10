@@ -66,7 +66,7 @@ jobs:
       - name: Compare with the base branch
         id: diff
         run: >-
-          .github/scripts/changed-areas.sh infra
+          bash .github/scripts/changed-areas.sh infra
           '^(infra/|\.github/workflows/infra\.yml$|\.github/actions/terraform-init/|\.github/scripts/(terraform-|smoke-test))'
 
   checks:
@@ -174,7 +174,7 @@ jobs:
           TLS_CERTIFICATE_PFX_BASE64: ${{ secrets.TLS_CERTIFICATE_PFX_BASE64 }}
           TLS_CERTIFICATE_PFX_PASSWORD: ${{ secrets.TLS_CERTIFICATE_PFX_PASSWORD }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        run: .github/scripts/terraform-plan.sh
+        run: bash .github/scripts/terraform-plan.sh
 
       - name: Comment the plan on the pull request
         env:
@@ -232,7 +232,7 @@ jobs:
           TLS_CERTIFICATE_PFX_PASSWORD: ${{ secrets.TLS_CERTIFICATE_PFX_PASSWORD }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           TF_PLAN_ENCRYPTION_KEY: ${{ secrets.TF_PLAN_ENCRYPTION_KEY }}
-        run: .github/scripts/terraform-plan.sh
+        run: bash .github/scripts/terraform-plan.sh
 
       - name: Keep the encrypted plan for the apply job
         if: github.event_name != 'schedule' && steps.plan.outputs.has_changes == 'true'
@@ -287,10 +287,10 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           TLS_CERTIFICATE_PFX_BASE64: ${{ secrets.TLS_CERTIFICATE_PFX_BASE64 }}
           TF_PLAN_ENCRYPTION_KEY: ${{ secrets.TF_PLAN_ENCRYPTION_KEY }}
-        run: .github/scripts/terraform-apply.sh
+        run: bash .github/scripts/terraform-apply.sh
 
       - name: Smoke test through Cloudflare
-        run: .github/scripts/smoke-test.sh
+        run: bash .github/scripts/smoke-test.sh
 
   # The single status a branch ruleset requires for the infrastructure: passes when the checks and the pull request
   # plan passed or were skipped.
