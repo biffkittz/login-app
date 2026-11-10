@@ -89,3 +89,37 @@ export function listIndexForGroupMove(
     .findIndex((other) => other.id === anchor.id)
   return to > from ? anchorIndex + 1 : anchorIndex
 }
+
+/**
+ * Turns a drop into another group of the list (another store's section) into the index the store's `moveItem`
+ * expects: the item's index in the whole list once moved. It lands directly before the row it was dropped above, or
+ * directly after the group's last row when dropped below all of them. Dropped into an empty group, it keeps its place
+ * in the whole list: only its store changes.
+ *
+ * @param list - The whole list, in order.
+ * @param itemId - The item being moved, which isn't in `group`.
+ * @param group - The target group's items, in order (a subsequence of `list`).
+ * @param to - Where among them it was dropped: 0 above the first, `group.length` below the last.
+ * @returns The index in the whole list, or `null` when the item isn't on it.
+ */
+export function listIndexForGroupTransfer(
+  list: readonly GroceryItem[],
+  itemId: string,
+  group: readonly GroceryItem[],
+  to: number,
+): number | null {
+  const fromIndex = list.findIndex((item) => item.id === itemId)
+  if (fromIndex < 0) {
+    return null
+  }
+  const others = list.filter((item) => item.id !== itemId)
+  const next = group[to]
+  const last = group[group.length - 1]
+  if (next !== undefined) {
+    return others.findIndex((item) => item.id === next.id)
+  }
+  if (last !== undefined) {
+    return others.findIndex((item) => item.id === last.id) + 1
+  }
+  return fromIndex
+}

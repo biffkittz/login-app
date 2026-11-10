@@ -70,6 +70,17 @@ export interface GroceryItemDetails {
 /** The body of `PATCH /api/grocery-list/items/{id}`: only the fields that changed. `''` clears a field. */
 export type GroceryItemChanges = Partial<GroceryItemDetails>
 
+/** The body of `POST /api/grocery-list/items/{id}/move`. */
+export interface GroceryItemMove {
+  /** The item it should follow; `null` puts it at the top. */
+  afterItemId: string | null
+  /**
+   * Its new store, when it was dropped into another store's section: one of the offered stores, or `''` for none.
+   * Left out, the item keeps its store.
+   */
+  store?: string
+}
+
 /** The body of `POST /api/grocery-list/items`. */
 export interface NewGroceryItem extends Partial<GroceryItemDetails> {
   /** Chosen by the app, so the item can be shown before the server answers. */

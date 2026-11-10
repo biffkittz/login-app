@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { nextTick, useId, useTemplateRef } from 'vue'
 
-import { useDragReorder } from '@/composables/useDragReorder'
 import type { GroceryItem } from '@/types/grocery'
 
 import GroceryItemRow from './grocery-item-row.vue'
@@ -15,37 +14,48 @@ interface Props {
   label: string
   /** Some items on the page have pictures: line every name up as if all had one. */
   pictureColumn?: boolean
+  /** The index of the row being dragged, or `null`. */
+  draggingIndex?: number | null
+  /**
+   * A row from another list is being dragged over this one and would land here: 0 above the first row, the number of
+   * rows below the last. `null` otherwise.
+   */
+  dropIndex?: number | null
+  /** The dragged row is over another store's section, with this heading; `null` otherwise. */
+  movingTo?: string | null
 }
 
-const { items, checkedIds, label, pictureColumn = false } = defineProps<Props>()
+const {
+  items,
+  checkedIds,
+  label,
+  pictureColumn = false,
+  draggingIndex = null,
+  dropIndex = null,
+  movingTo = null,
+} = defineProps<Props>()
 
 const emit = defineEmits<{
   check: [item: GroceryItem]
   edit: [item: GroceryItem]
-  /** Move an item so it ends up at `toIndex`. */
+  /** Move an item one place with the arrow keys, so it ends up at `toIndex`. */
   move: [item: GroceryItem, toIndex: number]
-  /** A drag began; realtime updates should wait until it ends. */
-  dragStart: []
-  dragEnd: []
+  /** A finger or mouse pressed the move handle of row `index`. */
+  dragStart: [event: PointerEvent, index: number]
 }>()
 
 const list = useTemplateRef<HTMLUListElement>('list')
 const moveHintId = useId()
 
-const { draggingIndex, start } = useDragReorder({
-  list,
-  onDrop: (fromIndex, toIndex) => {
-    const item = items[fromIndex]
-    if (item !== undefined) {
-      emit('move', item, toIndex)
-    }
-  },
-  onDragStart: () => emit('dragStart'),
-  onDragEnd: () => emit('dragEnd'),
-  // The sticky "Add an item" bar covers the top of the screen; auto-scroll upward starts below it.
-  topInset: () =>
-    document.querySelector('[data-sticky-header]')?.getBoundingClientRect().bottom ?? 0,
-})
+function dropMarker(index: number): 'before' | 'after' | null {
+  if (dropIndex === null) {
+    return null
+  }
+  if (dropIndex === index) {
+    return 'before'
+  }
+  return dropIndex === items.length && index === items.length - 1 ? 'after' : null
+}
 
 async function moveBy(index: number, delta: -1 | 1): Promise<void> {
   const item = items[index]
@@ -66,7 +76,8 @@ async function moveBy(index: number, delta: -1 | 1): Promise<void> {
 <template>
   <div>
     <p :id="moveHintId" class="sr-only">
-      Drag to reorder, or use the up and down arrow keys. The item's details also have move buttons.
+      Drag to reorder, or into another store's section to change its store. The up and down arrow
+      keys also reorder, and the item's details have move buttons and its store.
     </p>
     <ul ref="list" class="divide-y-2 divide-dashed divide-cream-300" :aria-label="label">
       <GroceryItemRow
@@ -74,12 +85,14 @@ async function moveBy(index: number, delta: -1 | 1): Promise<void> {
         :key="item.id"
         :item="item"
         :dragging="draggingIndex === index"
+        :drop-marker="dropMarker(index)"
+        :moving-to="draggingIndex === index ? movingTo : null"
         :checked="checkedIds.has(item.id)"
         :move-hint-id="moveHintId"
         :picture-column="pictureColumn"
         @check="emit('check', item)"
         @edit="emit('edit', item)"
-        @drag-start="start($event, index)"
+        @drag-start="emit('dragStart', $event, index)"
         @move-by="moveBy(index, $event)"
       />
     </ul>

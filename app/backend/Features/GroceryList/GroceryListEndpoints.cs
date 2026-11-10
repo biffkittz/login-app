@@ -70,7 +70,7 @@ internal static class GroceryListEndpoints
 
         items.MapPost("/{itemId:guid}/move", MoveItemAsync)
             .WithName("MoveGroceryItem")
-            .WithSummary("Moves an item to the top of the list, or directly after another item.");
+            .WithSummary("Moves an item to the top of the list, or directly after another item, optionally into another store.");
 
         items.MapDelete("/{itemId:guid}", DeleteItemAsync)
             .WithName("DeleteGroceryItem")
@@ -188,7 +188,7 @@ internal static class GroceryListEndpoints
         };
     }
 
-    private static async Task<Results<Ok<GroceryListChange>, ProblemHttpResult>> MoveItemAsync(
+    private static async Task<Results<Ok<GroceryListChange>, ValidationProblem, ProblemHttpResult>> MoveItemAsync(
         Guid itemId,
         MoveGroceryItemRequest request,
         ClaimsPrincipal principal,
@@ -203,7 +203,12 @@ internal static class GroceryListEndpoints
         }
 
         GroceryListWriteResult result = await groceryList.MoveItemAsync(userId, itemId, request, cancellationToken);
-        return result.Succeeded ? TypedResults.Ok(result.Change) : ToProblem(result.Status, authCookie, response);
+        return result switch
+        {
+            { Succeeded: true } => TypedResults.Ok(result.Change),
+            { Status: GroceryListWriteStatus.UnknownStore } => UnknownStore(),
+            _ => ToProblem(result.Status, authCookie, response),
+        };
     }
 
     private static async Task<Results<Ok<GroceryListChange>, ProblemHttpResult>> DeleteItemAsync(

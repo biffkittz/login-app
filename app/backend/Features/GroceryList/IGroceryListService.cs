@@ -51,11 +51,12 @@ internal interface IGroceryListService
         CancellationToken cancellationToken);
 
     /// <summary>
-    /// Moves an item to the top of the list or directly after another item.
+    /// Moves an item to the top of the list or directly after another item, and changes its store when the request
+    /// names one (dragged into another store's section).
     /// </summary>
     /// <param name="userId">The signed-in user making the change.</param>
     /// <param name="itemId">The item to move.</param>
-    /// <param name="request">Where to move it.</param>
+    /// <param name="request">Where to move it, and its new store.</param>
     /// <param name="cancellationToken">Cancels the operation.</param>
     /// <returns>The change, or why the item wasn't moved.</returns>
     public Task<GroceryListWriteResult> MoveItemAsync(

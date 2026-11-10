@@ -327,15 +327,25 @@ export const useGroceryListStore = defineStore('grocery-list', () => {
   }
 
   /**
-   * Moves an item so that it ends up at `toIndex` in the list.
+   * Moves an item so that it ends up at `toIndex` in the list, and into another store when `store` is given (it was
+   * dropped into that store's section): one of the offered stores, or `''` for none. The server saves both as one
+   * change, so the item never shows up moved but in its old store.
    *
    * @throws {@link ApiError} when the server refuses; the item has gone back to where it was.
    */
-  async function moveItem(itemId: string, toIndex: number): Promise<void> {
+  async function moveItem(itemId: string, toIndex: number, store?: string): Promise<void> {
     const list = items.value
     const fromIndex = list.findIndex((item) => item.id === itemId)
     const original = list[fromIndex]
-    if (original === undefined || toIndex === fromIndex || toIndex < 0 || toIndex >= list.length) {
+    const newStore = store === undefined ? undefined : store.trim() || null
+    const storeChanged =
+      original !== undefined && newStore !== undefined && newStore !== original.store
+    if (
+      original === undefined ||
+      (toIndex === fromIndex && !storeChanged) ||
+      toIndex < 0 ||
+      toIndex >= list.length
+    ) {
       return
     }
 
@@ -344,11 +354,23 @@ export const useGroceryListStore = defineStore('grocery-list', () => {
     const after = others[toIndex] ?? null
     putItem({
       ...original,
-      position: positionBetween(before?.position ?? null, after?.position ?? null),
+      position:
+        toIndex === fromIndex
+          ? original.position
+          : positionBetween(before?.position ?? null, after?.position ?? null),
+      // A new store is a change to the item's details, as it is from the editor.
+      ...(storeChanged
+        ? { store: newStore, lastModifiedAt: new Date().toISOString(), ...currentEditor() }
+        : {}),
     })
 
     try {
-      applyChange(await groceryApi.moveItem(itemId, before?.id ?? null))
+      applyChange(
+        await groceryApi.moveItem(itemId, {
+          afterItemId: before?.id ?? null,
+          ...(storeChanged ? { store: newStore ?? '' } : {}),
+        }),
+      )
     } catch (error: unknown) {
       restore(original)
       throw recoverFromFailedWrite(error)

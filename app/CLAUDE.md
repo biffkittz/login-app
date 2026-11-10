@@ -58,10 +58,12 @@ agreement:
   on delivery order.
 - Store choices come from `GroceryList:Stores` (appsettings.json) and are sent with `GET /api/grocery-list`; the
   server rejects other stores (400 on `Store`) and saves its own spelling. The SPA groups by store
-  (`utils/store-groups.ts`: no store first, then the configured order, then legacy stores) and items move only within
-  their group (`listIndexForGroupMove` turns that into a place in the whole list).
+  (`utils/store-groups.ts`: no store first, then the configured order, then legacy stores). Items move within their
+  group (`listIndexForGroupMove` turns that into a place in the whole list) or are dropped into another, which
+  changes their store (`listIndexForGroupTransfer`; `store` on the move request, one change with one version).
+  Legacy-store groups take no drops. `components/grocery/grocery-store-groups.vue` owns the drag across groups.
 - Order is a fractional `Position` (`ItemPositions`); a move names its neighbor (`afterItemId`), never an index.
-  Moving doesn't change `LastModifiedAt`/`LastModifiedById`.
+  Moving doesn't change `LastModifiedAt`/`LastModifiedById`; a move that changes the store does.
 - `PATCH` carries only the changed fields (null = unchanged, `""` = clear); the editor sends only what the user edited.
 - Writes take turns on `GroceryListWriteLock` (in-process): fine because the app is one instance (SignalR has no
   backplane; Terraform enforces one replica).

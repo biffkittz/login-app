@@ -18,13 +18,6 @@ function mountList() {
   })
 }
 
-// jsdom doesn't lay anything out, so give every row a 50px slot, as a browser would.
-function layOutRows(rows: HTMLElement[]): void {
-  rows.forEach((row, index) => {
-    row.getBoundingClientRect = () => new DOMRect(0, index * 50, 300, 50)
-  })
-}
-
 function pointer(type: string, clientY: number): PointerEvent {
   return new PointerEvent(type, {
     bubbles: true,
@@ -151,35 +144,40 @@ describe('GroceryItemList', () => {
     expect(wrapper.emitted('move')).toEqual([[items[1], 2]])
   })
 
-  it('moves an item dragged by its handle past its neighbors', () => {
+  it('reports a press on a move handle as the start of a drag of that row', () => {
     const wrapper = mountList()
-    layOutRows(wrapper.findAll('li').map((row) => row.element as HTMLElement))
-    const handle = wrapper.get('[aria-label="Move Apples"]').element
 
-    handle.dispatchEvent(pointer('pointerdown', 25))
-    handle.dispatchEvent(pointer('pointermove', 90))
-    handle.dispatchEvent(pointer('pointermove', 140))
-    handle.dispatchEvent(pointer('pointerup', 140))
+    wrapper.get('[aria-label="Move Bread"]').element.dispatchEvent(pointer('pointerdown', 75))
 
-    expect(wrapper.emitted('dragStart')).toHaveLength(1)
-    expect(wrapper.emitted('move')).toEqual([[items[0], 2]])
-    expect(wrapper.emitted('dragEnd')).toHaveLength(1)
-    // Every row is back in its slot; the parent re-renders the new order.
-    expect(
-      wrapper.findAll('li').every((row) => (row.element as HTMLElement).style.transform === ''),
-    ).toBe(true)
+    expect(wrapper.emitted('dragStart')).toEqual([[expect.any(PointerEvent), 1]])
   })
 
-  it('leaves the order alone when a drag is canceled', () => {
+  it('marks where a row dragged from another section would land, above a row or below the last', async () => {
     const wrapper = mountList()
-    layOutRows(wrapper.findAll('li').map((row) => row.element as HTMLElement))
-    const handle = wrapper.get('[aria-label="Move Apples"]').element
+    const markers = () =>
+      wrapper.findAll('li').map((row) => {
+        const marker = row.find('[data-drop-marker]')
+        return marker.exists() ? marker.classes().find((name) => name.includes('-[3px]')) : null
+      })
 
-    handle.dispatchEvent(pointer('pointerdown', 25))
-    handle.dispatchEvent(pointer('pointermove', 140))
-    handle.dispatchEvent(pointer('pointercancel', 140))
+    expect(markers()).toEqual([null, null, null])
 
-    expect(wrapper.emitted('move')).toBeUndefined()
-    expect(wrapper.emitted('dragEnd')).toHaveLength(1)
+    await wrapper.setProps({ dropIndex: 1 })
+    expect(markers()).toEqual([null, '-top-[3px]', null])
+
+    await wrapper.setProps({ dropIndex: 3 })
+    expect(markers()).toEqual([null, null, '-bottom-[3px]'])
+  })
+
+  it('lifts the row being dragged', async () => {
+    const wrapper = mountList()
+
+    await wrapper.setProps({ draggingIndex: 2 })
+
+    expect(
+      wrapper
+        .findAll('li')
+        .map((row) => row.classes().includes('shadow-[4px_4px_0_0_var(--color-walnut-800)]')),
+    ).toEqual([false, false, true])
   })
 })

@@ -61,3 +61,33 @@ export function groupByStore(
         ]
   })
 }
+
+/**
+ * The groups a dragged item could also be dropped into but that aren't shown, because nothing is bought there yet:
+ * "No store" and every offered store without items, in the same order as {@link groupByStore}. Each has no items.
+ *
+ * @param groups - The groups shown, from {@link groupByStore}.
+ * @param stores - The offered stores, in display order.
+ */
+export function emptyStoreGroups(
+  groups: readonly StoreGroup[],
+  stores: readonly string[],
+): StoreGroup[] {
+  const shown = new Set(groups.map((group) => group.key))
+  return ['', ...stores]
+    .filter((store) => !shown.has(store))
+    .map((store) => ({
+      key: store,
+      store: store === '' ? null : store,
+      label: store === '' ? NO_STORE_LABEL : store,
+      items: [],
+    }))
+}
+
+/**
+ * Whether items can be dropped into a group: "No store" and the offered stores. A store that is no longer offered
+ * keeps the items saved with it, but the server refuses to give it to any other.
+ */
+export function acceptsDrops(group: StoreGroup, stores: readonly string[]): boolean {
+  return group.store === null || stores.includes(group.store)
+}

@@ -99,7 +99,8 @@ login-app/
     picked from a dropdown (Whole Foods, Indian Grocery, Teeter/Lion, Costco), and the list groups itself by store,
     with items that have none in a "No store" section at the top.
   - Check items off with one tap and undo the mistake from the toast; drag the handle to reorder (or use the arrow
-    keys, or the move buttons in an item's details).
+    keys, or the move buttons in an item's details). Drag an item into another store's section, or onto a store with
+    nothing on the list yet, to change its store.
   - Every change shows at once (optimistically) and reaches every other open list within a fraction of a second over
     SignalR. A list reconnects and catches up by itself after a dropped connection, a server restart, or a phone
     coming out of a pocket.

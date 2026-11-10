@@ -94,6 +94,14 @@ internal sealed class Shopper : IDisposable
     public Task<HttpResponseMessage> MoveItemAsync(Guid itemId, Guid? afterItemId) =>
         Http.PostAsJsonAsync($"{ItemsPath}/{itemId}/move", new { afterItemId }, CancellationToken);
 
+    /// <summary>Sends <c>POST /api/grocery-list/items/{itemId}/move</c> with a new store, as a drop into another section does.</summary>
+    /// <param name="itemId">The item.</param>
+    /// <param name="afterItemId">The item to move it after, or <see langword="null"/> for the top.</param>
+    /// <param name="store">The new store; empty for none.</param>
+    /// <returns>The response.</returns>
+    public Task<HttpResponseMessage> MoveItemAsync(Guid itemId, Guid? afterItemId, string store) =>
+        Http.PostAsJsonAsync($"{ItemsPath}/{itemId}/move", new { afterItemId, store }, CancellationToken);
+
     /// <summary>Sends <c>PATCH /api/grocery-list/settings</c>.</summary>
     /// <param name="body">The request body.</param>
     /// <returns>The response.</returns>
@@ -120,10 +128,11 @@ internal sealed class Shopper : IDisposable
     /// <summary>Adds an item and returns the server's copy of it, failing the test if that doesn't work.</summary>
     /// <param name="name">The item's name.</param>
     /// <param name="afterItemId">The item to add it after, or <see langword="null"/> for the top.</param>
+    /// <param name="store">The store to buy it at, or <see langword="null"/> for none.</param>
     /// <returns>The saved item.</returns>
-    public async Task<GroceryItemResponse> AddItemAsync(string name, Guid? afterItemId = null)
+    public async Task<GroceryItemResponse> AddItemAsync(string name, Guid? afterItemId = null, string? store = null)
     {
-        using HttpResponseMessage response = await PostItemAsync(new { id = Guid.NewGuid(), name, afterItemId });
+        using HttpResponseMessage response = await PostItemAsync(new { id = Guid.NewGuid(), name, afterItemId, store });
         response.EnsureSuccessStatusCode();
         GroceryListChange change = await ReadChangeAsync(response);
         return Assert.Single(change.SavedItems);

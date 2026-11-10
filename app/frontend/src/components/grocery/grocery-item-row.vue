@@ -18,6 +18,13 @@ interface Props {
    * list without any pictures (they were never on) shows no tiles at all.
    */
   pictureColumn?: boolean
+  /** A row dragged from another store's section would land just above or below this one: mark the spot. */
+  dropMarker?: 'before' | 'after' | null
+  /**
+   * The row is being dragged over another store's section, named here: the row says where it is going, because it
+   * covers the spot it would land on, and a finger covers the rest.
+   */
+  movingTo?: string | null
 }
 
 const {
@@ -26,6 +33,8 @@ const {
   checked = false,
   moveHintId,
   pictureColumn = false,
+  dropMarker = null,
+  movingTo = null,
 } = defineProps<Props>()
 
 const showsTile = computed(() => pictureColumn || item.imageUrl !== null || item.imagePending)
@@ -52,6 +61,14 @@ const emit = defineEmits<{
         dragging,
     }"
   >
+    <!-- Drawn over the divider between rows, so marking the spot doesn't move anything. -->
+    <span
+      v-if="dropMarker"
+      class="pointer-events-none absolute inset-x-2 z-10 h-1 rounded-full bg-ember-600"
+      :class="dropMarker === 'before' ? '-top-[3px]' : '-bottom-[3px]'"
+      aria-hidden="true"
+      data-drop-marker
+    />
     <button
       type="button"
       class="group grid size-11 shrink-0 place-items-center rounded-full focus-visible:outline-3 focus-visible:outline-offset-1 focus-visible:outline-ember-600"
@@ -100,6 +117,24 @@ const emit = defineEmits<{
             class="rounded-full bg-mustard-400/40 px-2 py-0.5 text-xs font-bold text-walnut-900"
           >
             <span class="sr-only">, quantity </span>{{ item.quantity }}
+          </span>
+          <!-- Shown only during a pointer drag, so screen readers don't need it. -->
+          <span
+            v-if="movingTo"
+            class="inline-flex max-w-full items-center gap-1 rounded-full bg-ember-700 px-2 py-0.5 text-xs font-bold text-cream-50"
+            aria-hidden="true"
+            data-moving-to
+          >
+            <svg class="size-3.5 shrink-0" viewBox="0 0 24 24" fill="none">
+              <path
+                d="M5 12h14M13 6l6 6-6 6"
+                stroke="currentColor"
+                stroke-width="2.75"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+            <span class="truncate">{{ movingTo }}</span>
           </span>
         </span>
         <!-- No store here: the list is grouped by store, and the group's heading already names it. -->

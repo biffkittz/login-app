@@ -90,7 +90,7 @@ There is one list, shared by every registered user (the requirement is that any 
 | `GET /api/grocery-list` | | `200 { items, stores, settings }`: items in order, the store choices in display order, and the list's settings |
 | `POST /api/grocery-list/items` | `id?`, `name`, optional details, `afterItemId?` | `201` + change |
 | `PATCH /api/grocery-list/items/{id}` | only the fields to change; `""` clears one | `200` + change |
-| `POST /api/grocery-list/items/{id}/move` | `afterItemId` (`null` = top) | `200` + change |
+| `POST /api/grocery-list/items/{id}/move` | `afterItemId` (`null` = top), `store?` (dropped into another store's section; `""` = none) | `200` + change |
 | `DELETE /api/grocery-list/items/{id}` | | `200` + change |
 | `GET /api/grocery-list/images/{id}` | | `200` WebP picture, cacheable for a year; `404` |
 | `PATCH /api/grocery-list/settings` | `imageGenerationEnabled?` | `200` + settings, also broadcast as `SettingsChanged` |
@@ -327,7 +327,7 @@ app/frontend/src/
 ├── utils/                     Pure helpers: list order and positions, relative times, the editor's changed fields
 ├── validation/                Validation rules and the account and item limits mirrored from the API
 ├── views/                     Route-level containers: grocery list (home), login, register, not found
-├── components/                Presentational components: grocery/ (add form, rows, list, item editor, status),
+├── components/                Presentational components: grocery/ (add form, store sections, rows, item editor, status),
 │                              ui/ (fields, buttons, alerts, bottom sheet, toast), auth/, layout/, brand/
 ├── directives/                v-focus-on-mount (focus management after navigation)
 └── assets/main.css            Tailwind import and the design tokens (@theme)
@@ -348,10 +348,19 @@ app/frontend/src/
   - Big tap targets (44 px), 16 px inputs (so iOS doesn't zoom), safe-area padding, and a sticky "Add an item" bar.
   - Checking an item off shows the check for a moment, then removes it with an "Undo" toast (Ctrl/Cmd+Z works too):
     in a store nobody wants a confirmation dialog per item.
-  - Items are grouped into a section per store, and drag within their section.
+  - Items are grouped into a section per store. Dragging an item within its section reorders it; dropping it into
+    another section moves it there and gives it that store. While a row is dragged, stores with nothing on the list
+    get a drop zone below the sections. Stores no longer offered keep their section but take no drops, because the
+    server would refuse them.
+  - The store and the new place go to the server in one move request (`store` on `/move`), so it is one change with
+    one version: nobody sees the item moved but still in its old store, and a refused store moves nothing. A new store
+    counts as a change to the item's details (`lastModifiedAt` and author); a move alone doesn't.
   - Dragging uses Pointer Events and CSS transforms, so only the dragged row and the rows it passes move; the page
-    scrolls by itself near the edges. Arrow keys on the handle, and Move up/down buttons in the item's details,
-    offer the same without dragging (WCAG 2.5.7).
+    scrolls by itself near the edges. Over another section nothing there moves (rows stepping aside would spill out
+    of its card): a line marks the spot, the card is outlined, and the dragged row says which store it is going to,
+    since the row and the finger cover the spot itself.
+  - Arrow keys on the handle, and Move up/down buttons in the item's details, reorder without dragging, and the
+    details' store field changes the store (WCAG 2.5.7).
   - Item details open in a native `<dialog>` bottom sheet, which traps focus, closes with Escape and returns focus.
   - The realtime client is in the list page's chunk only, so the sign-in pages never download it.
 - **Design.**

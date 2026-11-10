@@ -289,8 +289,9 @@ npm audit --omit=dev  # vulnerabilities in what ships to browsers
   - The grocery list store: ordering, versions and deletions applied in any order, optimistic writes and their
     rollback, reloads that don't lose changes, the offline fallback, and the shared settings and picture placeholders.
   - The SignalR wrapper's retry, restart and stop behavior (with SignalR mocked).
-  - The field components' `v-model` and accessibility wiring; the add form, item list (including dragging with
-    pointer events and the arrow keys, and the pictures), item editor and list settings.
+  - The field components' `v-model` and accessibility wiring; the add form, item list (the arrow keys, drop markers
+    and pictures), store sections (dragging with pointer events within a section, into another one or an empty
+    store's drop zone, and not into a store no longer offered), item editor and list settings.
   - The login view and the grocery list view end to end, with the API mocked.
 
 The real EF Core migrations target PostgreSQL. They are exercised whenever the API starts against a real database,

@@ -397,11 +397,11 @@ describe('grocery list store', () => {
 
       void store.moveItem('a', 2)
       expect(ids(store)).toEqual(['b', 'c', 'a'])
-      expect(groceryApi.moveItem).toHaveBeenLastCalledWith('a', 'c')
+      expect(groceryApi.moveItem).toHaveBeenLastCalledWith('a', { afterItemId: 'c' })
 
       void store.moveItem('c', 0)
       expect(ids(store)).toEqual(['c', 'b', 'a'])
-      expect(groceryApi.moveItem).toHaveBeenLastCalledWith('c', null)
+      expect(groceryApi.moveItem).toHaveBeenLastCalledWith('c', { afterItemId: null })
     })
 
     it('moves the item back when the server refuses', async () => {
@@ -414,6 +414,57 @@ describe('grocery list store', () => {
       await expect(store.moveItem('a', 1)).rejects.toBeInstanceOf(ApiError)
 
       expect(ids(store)).toEqual(['a', 'b'])
+    })
+
+    it('moves an item into another store at once, as one change by the current user', async () => {
+      const store = await storeWith(
+        makeItem({ id: 'a', position: 0, store: 'Costco' }),
+        makeItem({ id: 'b', position: 1024, store: 'Whole Foods', lastModifiedById: 'someone' }),
+      )
+      vi.mocked(groceryApi.moveItem).mockReturnValue(new Promise(() => {}))
+
+      void store.moveItem('b', 0, 'Costco')
+
+      expect(ids(store)).toEqual(['b', 'a'])
+      expect(store.items[0]).toMatchObject({ store: 'Costco', lastModifiedById: 'me' })
+      expect(groceryApi.moveItem).toHaveBeenLastCalledWith('b', {
+        afterItemId: null,
+        store: 'Costco',
+      })
+    })
+
+    it('changes only the store when the item keeps its place, and clears it with an empty store', async () => {
+      const store = await storeWith(
+        makeItem({ id: 'a', position: 0 }),
+        makeItem({ id: 'b', position: 1024, store: 'Costco' }),
+      )
+      vi.mocked(groceryApi.moveItem).mockReturnValue(new Promise(() => {}))
+
+      void store.moveItem('b', 1, '')
+
+      expect(ids(store)).toEqual(['a', 'b'])
+      expect(store.items[1]).toMatchObject({ store: null, position: 1024 })
+      expect(groceryApi.moveItem).toHaveBeenLastCalledWith('b', { afterItemId: 'a', store: '' })
+    })
+
+    it('sends nothing for a store the item already has and a place it already is in', async () => {
+      const store = await storeWith(makeItem({ id: 'a', position: 0, store: 'Costco' }))
+      vi.mocked(groceryApi.moveItem).mockClear()
+
+      await store.moveItem('a', 0, 'Costco')
+
+      expect(groceryApi.moveItem).not.toHaveBeenCalled()
+    })
+
+    it('puts the item back in its store and place when the server refuses the store', async () => {
+      const original = makeItem({ id: 'b', position: 1024, store: 'Whole Foods' })
+      const store = await storeWith(makeItem({ id: 'a', position: 0, store: 'Costco' }), original)
+      vi.mocked(groceryApi.moveItem).mockRejectedValue(networkError())
+
+      await expect(store.moveItem('b', 0, 'Costco')).rejects.toBeInstanceOf(ApiError)
+
+      expect(ids(store)).toEqual(['a', 'b'])
+      expect(store.items[1]).toEqual(original)
     })
   })
 

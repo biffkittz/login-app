@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   dropIndex,
   listIndexForGroupMove,
+  listIndexForGroupTransfer,
   POSITION_SPACING,
   positionBetween,
   sortByPosition,
@@ -78,5 +79,31 @@ describe('listIndexForGroupMove', () => {
   it('reports that nothing moves', () => {
     expect(listIndexForGroupMove(list, costco, 1, 1)).toBeNull()
     expect(listIndexForGroupMove(list, costco, 0, 5)).toBeNull()
+  })
+})
+
+describe('listIndexForGroupTransfer', () => {
+  // The whole list interleaves two stores: C1 W1 C2 W2 C3.
+  const list = ['c1', 'w1', 'c2', 'w2', 'c3'].map((id, position) => makeItem({ id, position }))
+  const wholeFoods = list.filter((item) => item.id.startsWith('w'))
+
+  it('places an item dropped above a row of the other group directly before that row', () => {
+    // c1 above w1: without c1 the list is w1 c2 w2 c3, so it goes to index 0.
+    expect(listIndexForGroupTransfer(list, 'c1', wholeFoods, 0)).toBe(0)
+    // c3 above w2: without c3 the list is c1 w1 c2 w2, so it goes to index 3.
+    expect(listIndexForGroupTransfer(list, 'c3', wholeFoods, 1)).toBe(3)
+  })
+
+  it('places an item dropped below the other group’s last row directly after it', () => {
+    // c1 below w2: without c1 the list is w1 c2 w2 c3, so it goes to index 3.
+    expect(listIndexForGroupTransfer(list, 'c1', wholeFoods, 2)).toBe(3)
+  })
+
+  it('keeps the item’s place in the whole list when dropped into an empty group', () => {
+    expect(listIndexForGroupTransfer(list, 'c2', [], 0)).toBe(2)
+  })
+
+  it('reports an item that is no longer on the list', () => {
+    expect(listIndexForGroupTransfer(list, 'gone', wholeFoods, 0)).toBeNull()
   })
 })

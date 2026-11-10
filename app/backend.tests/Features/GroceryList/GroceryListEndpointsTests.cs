@@ -404,6 +404,92 @@ public sealed class GroceryListEndpointsTests(LoginApiFactory factory) : IClassF
     }
 
     [Fact]
+    public async Task MoveItem_IntoAnotherStore_MovesItAndSavesTheStoreAsOneChangeByTheMover()
+    {
+        // Arrange: the list reads C, B, A; B is bought at Costco.
+        using Shopper ada = await Shopper.SignUpAsync(factory, "Ada");
+        using Shopper grace = await Shopper.SignUpAsync(factory, "Grace");
+        GroceryItemResponse a = await ada.AddItemAsync("Apricots");
+        GroceryItemResponse b = await ada.AddItemAsync("Basmati", store: "Costco");
+        GroceryItemResponse c = await ada.AddItemAsync("Cumin");
+        await using RealtimeListener adasPhone = new(factory, ada.AccessToken);
+        await adasPhone.StartAsync();
+
+        // Act: Grace drags C into the Whole Foods section, just below B. The store's spelling is the server's.
+        using HttpResponseMessage response = await grace.MoveItemAsync(c.Id, afterItemId: b.Id, store: "whole foods");
+
+        // Assert
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        GroceryItemResponse moved = Assert.Single((await Shopper.ReadChangeAsync(response)).SavedItems);
+        Assert.Equal("Whole Foods", moved.Store);
+        Assert.Equal(c.Version + 1, moved.Version);
+        Assert.Equal(grace.UserId, moved.LastModifiedById);
+        Assert.True(moved.LastModifiedAt >= c.LastModifiedAt);
+
+        GroceryListResponse list = await grace.GetListAsync();
+        Assert.Equal([b.Id, c.Id, a.Id], InListOrder(list, a.Id, b.Id, c.Id));
+        // Ada's phone hears of it once, with the new place and the new store together.
+        GroceryListChange broadcast = await adasPhone.NextChangeAsync();
+        Assert.Equal(moved, Assert.Single(broadcast.SavedItems));
+    }
+
+    [Fact]
+    public async Task MoveItem_IntoAnotherStoreWithoutChangingPlace_ChangesOnlyTheStore()
+    {
+        // Arrange: the list reads B, A. Dropping B at the top of an empty section keeps its place in the whole list.
+        using Shopper shopper = await Shopper.SignUpAsync(factory);
+        GroceryItemResponse a = await shopper.AddItemAsync("Almonds", store: "Costco");
+        GroceryItemResponse b = await shopper.AddItemAsync("Bananas", store: "Costco");
+
+        // Act: "after itself" means "stay where it is".
+        using HttpResponseMessage response = await shopper.MoveItemAsync(b.Id, afterItemId: b.Id, store: "Indian Grocery");
+
+        // Assert
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        GroceryItemResponse moved = Assert.Single((await Shopper.ReadChangeAsync(response)).SavedItems);
+        Assert.Equal("Indian Grocery", moved.Store);
+        Assert.Equal(b.Position, moved.Position);
+        Assert.Equal(b.Version + 1, moved.Version);
+        Assert.Equal([b.Id, a.Id], InListOrder(await shopper.GetListAsync(), a.Id, b.Id));
+    }
+
+    [Fact]
+    public async Task MoveItem_WithAnEmptyStore_ClearsTheStore()
+    {
+        // Arrange
+        using Shopper shopper = await Shopper.SignUpAsync(factory);
+        GroceryItemResponse item = await shopper.AddItemAsync("Chickpeas", store: "Indian Grocery");
+
+        // Act
+        using HttpResponseMessage response = await shopper.MoveItemAsync(item.Id, afterItemId: null, store: string.Empty);
+
+        // Assert
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Null(Assert.Single((await Shopper.ReadChangeAsync(response)).SavedItems).Store);
+    }
+
+    [Fact]
+    public async Task MoveItem_IntoAStoreThatIsNotOffered_ReturnsValidationProblemAndMovesNothing()
+    {
+        // Arrange: the list reads B, A.
+        using Shopper shopper = await Shopper.SignUpAsync(factory);
+        GroceryItemResponse a = await shopper.AddItemAsync("Dates");
+        GroceryItemResponse b = await shopper.AddItemAsync("Eggs");
+
+        // Act
+        using HttpResponseMessage response = await shopper.MoveItemAsync(b.Id, afterItemId: a.Id, store: "Aldi");
+
+        // Assert
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        HttpValidationProblemDetails? problem =
+            await response.Content.ReadFromJsonAsync<HttpValidationProblemDetails>(CancellationToken);
+        Assert.Equal(["Store"], problem?.Errors.Keys);
+        GroceryListResponse list = await shopper.GetListAsync();
+        Assert.Equal([b.Id, a.Id], InListOrder(list, a.Id, b.Id));
+        Assert.Equal(b, list.Items.Single(item => item.Id == b.Id));
+    }
+
+    [Fact]
     public async Task MoveItem_AfterAnItemThatNoLongerExists_ReturnsConflict()
     {
         // Arrange

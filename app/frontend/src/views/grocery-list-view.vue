@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, ref, shallowRef, useId } from 'vue'
+import { computed, ref, shallowRef } from 'vue'
 import { storeToRefs } from 'pinia'
 
 import StarburstMark from '@/components/brand/starburst-mark.vue'
 import AddItemForm from '@/components/grocery/add-item-form.vue'
 import ConnectionStatus from '@/components/grocery/connection-status.vue'
-import GroceryItemList from '@/components/grocery/grocery-item-list.vue'
+import { GROCERY_CARD_CLASS } from '@/components/grocery/card'
+import GroceryStoreGroups from '@/components/grocery/grocery-store-groups.vue'
 import ItemEditor from '@/components/grocery/item-editor.vue'
 import ListSettings from '@/components/grocery/list-settings.vue'
 import BaseButton from '@/components/ui/base-button.vue'
@@ -19,14 +20,11 @@ import { toApiError, type ApiError } from '@/services/api-error'
 import { useAuthStore } from '@/stores/auth'
 import { useGroceryListStore } from '@/stores/grocery-list'
 import type { GroceryItem, GroceryItemChanges, RemovedItem } from '@/types/grocery'
-import { listIndexForGroupMove } from '@/utils/list-order'
+import { listIndexForGroupMove, listIndexForGroupTransfer } from '@/utils/list-order'
 import type { StoreGroup } from '@/utils/store-groups'
 
 // A checked-off item shows its check mark this long before it leaves the list: enough to see that the tap landed.
 const CHECK_OFF_DELAY_MS = 350
-
-const CARD_CLASS =
-  'rounded-[1.75rem] border-2 border-walnut-800 bg-cream-100 shadow-[6px_6px_0_0_var(--color-walnut-800)]'
 
 const auth = useAuthStore()
 const groceryList = useGroceryListStore()
@@ -42,7 +40,6 @@ const editorOpen = ref(false)
 const editingId = ref<string | null>(null)
 const saving = ref(false)
 const saveError = shallowRef<ApiError | null>(null)
-const groupIdPrefix = useId()
 // The editor works within the item's store group: its position and its move buttons are relative to that group.
 const editingGroup = computed(
   () =>
@@ -147,6 +144,26 @@ async function moveWithinGroup(
   } catch (error: unknown) {
     showError(error, `Couldn't move ${item.name}.`)
   }
+}
+
+// Dropped into another store's section: the item takes that store, and lands where it was dropped among the
+// section's items. The store and the place are saved together.
+async function moveToGroup(item: GroceryItem, group: StoreGroup, toIndex: number): Promise<void> {
+  const listIndex = listIndexForGroupTransfer(items.value, item.id, group.items, toIndex)
+  if (listIndex === null) {
+    return
+  }
+
+  announce(`${item.name} moved to ${group.label}.`)
+  try {
+    await groceryList.moveItem(item.id, listIndex, group.store ?? '')
+  } catch (error: unknown) {
+    showError(error, `Couldn't move ${item.name} to ${group.label}.`)
+  }
+}
+
+function moveItem(item: GroceryItem, from: StoreGroup, to: StoreGroup, toIndex: number): void {
+  void (from.key === to.key ? moveWithinGroup(from, item, toIndex) : moveToGroup(item, to, toIndex))
 }
 
 function openEditor(item: GroceryItem): void {
@@ -269,7 +286,7 @@ useEventListener(document, 'keydown', (event) => {
       <AddItemForm @add="addItem" />
     </div>
 
-    <div v-if="items.length === 0" :class="CARD_CLASS">
+    <div v-if="items.length === 0" :class="GROCERY_CARD_CLASS">
       <div
         v-if="loadState === 'loading'"
         class="flex items-center justify-center gap-3 px-6 py-12 text-walnut-700"
@@ -313,52 +330,22 @@ useEventListener(document, 'keydown', (event) => {
       </div>
     </div>
 
-    <!-- The list, grouped by store. Each group is its own reorderable list: items move within their store. -->
-    <div v-else class="flex flex-col gap-6">
-      <section
-        v-for="(group, groupIndex) in groups"
-        :key="group.key"
-        :aria-labelledby="`${groupIdPrefix}-${groupIndex}`"
-      >
-        <h2
-          :id="`${groupIdPrefix}-${groupIndex}`"
-          class="mb-2 flex items-center gap-2 px-1 font-display text-lg font-bold text-walnut-900"
-        >
-          <svg
-            v-if="group.store"
-            class="size-5 shrink-0 text-ember-700"
-            viewBox="0 0 24 24"
-            fill="none"
-            aria-hidden="true"
-          >
-            <path
-              d="M4 9l1.5-5h13L20 9M4 9h16M4 9v11h16V9M9 20v-6h6v6"
-              stroke="currentColor"
-              stroke-width="2.25"
-              stroke-linejoin="round"
-            />
-          </svg>
-          <span class="min-w-0 flex-1 truncate">{{ group.label }}</span>
-          <span class="sr-only">: </span>
-          <span class="shrink-0 font-sans text-sm font-semibold text-walnut-700">
-            {{ group.items.length }} {{ group.items.length === 1 ? 'item' : 'items' }}
-          </span>
-        </h2>
-        <div :class="CARD_CLASS">
-          <GroceryItemList
-            :items="group.items"
-            :checked-ids="checkedIds"
-            :label="`${group.label} items`"
-            :picture-column="pictureColumn"
-            @check="checkOff"
-            @edit="openEditor"
-            @move="(item, toIndex) => moveWithinGroup(group, item, toIndex)"
-            @drag-start="groceryList.holdChanges()"
-            @drag-end="groceryList.releaseChanges()"
-          />
-        </div>
-      </section>
-    </div>
+    <!--
+      The list, grouped by store. Items move within their store's section, or into another one, which changes their
+      store.
+    -->
+    <GroceryStoreGroups
+      v-else
+      :groups="groups"
+      :stores="stores"
+      :checked-ids="checkedIds"
+      :picture-column="pictureColumn"
+      @check="checkOff"
+      @edit="openEditor"
+      @move="moveItem"
+      @drag-start="groceryList.holdChanges()"
+      @drag-end="groceryList.releaseChanges()"
+    />
 
     <p class="sr-only" aria-live="polite" aria-atomic="true">{{ announcement }}</p>
 

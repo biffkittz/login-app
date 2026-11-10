@@ -155,3 +155,7 @@ important that images remain small to maximize the responsiveness of the site. T
 You need to add a second container instance of this app, which will use the existing container image, and will be available at `grocery.biffkittz.com`. Please update the
 infrastructure to support the second container instance, DNS records, and so on. The new instance of the app should share the existing key vault and secrets and create a new database in
 the existing PostgreSQL database server.
+
+In the current iteration of the grocery app, list items cannot be dragged from one grocery store group to another. You must implement a feature that allows
+the user to drag and drop grocery items into different store groups. When the item is dropped into another group, the item will be assigned the new store, e.g.
+Whole Foods.

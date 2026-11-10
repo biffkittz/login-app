@@ -1,5 +1,6 @@
 import type {
   GroceryItemChanges,
+  GroceryItemMove,
   GroceryList,
   GroceryListChange,
   GroceryListSettings,
@@ -54,18 +55,20 @@ export async function updateItem(
 }
 
 /**
- * Moves an item directly after another one, or to the top when `afterItemId` is `null`.
+ * Moves an item directly after another one, or to the top when `move.afterItemId` is `null`, and changes its store
+ * when `move.store` is given.
  *
- * @throws {@link ApiError} 404 when the item no longer exists, 409 when `afterItemId` no longer does.
+ * @throws {@link ApiError} 400 on `Store` for a store that isn't offered, 404 when the item no longer exists, 409 when
+ * `afterItemId` no longer does.
  */
 export async function moveItem(
   itemId: string,
-  afterItemId: string | null,
+  move: GroceryItemMove,
   options: RequestOptions = {},
 ): Promise<GroceryListChange> {
   const { data } = await httpClient.post<GroceryListChange>(
     `${ITEMS}/${encodeURIComponent(itemId)}/move`,
-    { afterItemId },
+    move,
     options,
   )
   return data

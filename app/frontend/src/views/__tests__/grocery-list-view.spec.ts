@@ -106,7 +106,7 @@ describe('GroceryListView', () => {
 
     await wrapper.get('[aria-label="Move Apples"]').trigger('keydown', { key: 'ArrowDown' })
 
-    expect(groceryApi.moveItem).toHaveBeenCalledWith('a', 'd')
+    expect(groceryApi.moveItem).toHaveBeenCalledWith('a', { afterItemId: 'd' })
   })
 
   it('invites the user to add something when the list is empty', async () => {

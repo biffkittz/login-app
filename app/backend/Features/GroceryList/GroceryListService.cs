@@ -174,6 +174,12 @@ internal sealed class GroceryListService(
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        string? store = null;
+        if (request.Store is not null && !TryResolveStore(request.Store, out store))
+        {
+            return GroceryListWriteResult.Failure(GroceryListWriteStatus.UnknownStore);
+        }
+
         if (!await UserExistsAsync(userId, cancellationToken))
         {
             return GroceryListWriteResult.Failure(GroceryListWriteStatus.UnknownUser);
@@ -195,32 +201,58 @@ internal sealed class GroceryListService(
         if (request.AfterItemId is Guid afterItemId)
         {
             int anchorIndex = items.FindIndex(item => item.Id == afterItemId);
-            if (anchorIndex < 0)
+            if (anchorIndex >= 0)
+            {
+                newIndex = anchorIndex + 1;
+            }
+            else if (afterItemId == itemId)
             {
                 // "After itself" finds nothing because the item was just taken out of the list; it means "stay".
-                return afterItemId == itemId
-                    ? await UnchangedAsync(itemId, cancellationToken)
-                    : GroceryListWriteResult.Failure(GroceryListWriteStatus.AnchorNotFound);
+                newIndex = currentIndex;
             }
-
-            newIndex = anchorIndex + 1;
+            else
+            {
+                return GroceryListWriteResult.Failure(GroceryListWriteStatus.AnchorNotFound);
+            }
         }
 
-        if (newIndex == currentIndex)
+        // A section's first item can follow an item of another section in the whole list, so a move into another
+        // store's section may leave the item where it is and change only its store.
+        bool storeChanged = request.Store is not null && store != movingItem.Store;
+        bool positionChanged = newIndex != currentIndex;
+        if (!storeChanged && !positionChanged)
         {
             return await UnchangedAsync(itemId, cancellationToken);
         }
 
-        // A move changes the item's place, not its details, so the last-modified time and author stay as they are.
-        // The version still goes up: that is what tells clients the new position is the newer copy.
-        List<GroceryItem> renumbered = Place(movingItem, items, newIndex);
+        List<GroceryItem> renumbered = positionChanged ? Place(movingItem, items, newIndex) : [];
+
+        // A move alone changes the item's place, not its details, so the last-modified time and author stay as they
+        // are. A new store is a new detail, as it would be from the editor. The version goes up either way: that is
+        // what tells clients this copy is the newer one.
+        if (storeChanged)
+        {
+            movingItem.Store = store;
+            movingItem.LastModifiedAt = timeProvider.GetUtcNow();
+            movingItem.LastModifiedById = userId;
+        }
+
         movingItem.Version++;
         if (!await TrySaveAsync(itemId, cancellationToken))
         {
             return GroceryListWriteResult.Failure(GroceryListWriteStatus.ConcurrentChange);
         }
 
-        GroceryListLog.ItemMoved(logger, userId, itemId);
+        if (positionChanged)
+        {
+            GroceryListLog.ItemMoved(logger, userId, itemId);
+        }
+
+        if (storeChanged)
+        {
+            GroceryListLog.ItemUpdated(logger, userId, itemId);
+        }
+
         return await CompleteAsync([itemId, .. renumbered.Select(item => item.Id)], deletedItemIds: []);
     }
 

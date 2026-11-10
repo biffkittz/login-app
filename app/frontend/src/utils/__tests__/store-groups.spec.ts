@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { groupByStore } from '../store-groups'
+import { acceptsDrops, emptyStoreGroups, groupByStore } from '../store-groups'
 
 import { makeItem } from './test-items'
 
@@ -47,5 +47,48 @@ describe('groupByStore', () => {
 
   it('has no groups for an empty list', () => {
     expect(groupByStore([], STORES)).toEqual([])
+  })
+})
+
+describe('emptyStoreGroups', () => {
+  it('offers "No store" and every offered store without items, in group order', () => {
+    const groups = groupByStore(
+      [makeItem({ id: 'a', store: 'Costco' }), makeItem({ id: 'b', store: 'Whole Foods' })],
+      STORES,
+    )
+
+    expect(summary(emptyStoreGroups(groups, STORES))).toEqual([
+      ['No store', null, []],
+      ['Indian Grocery', 'Indian Grocery', []],
+      ['Teeter/Lion', 'Teeter/Lion', []],
+    ])
+  })
+
+  it('offers nothing when every store has items', () => {
+    const groups = groupByStore(
+      [null, ...STORES].map((store, index) => makeItem({ id: `${index}`, store })),
+      STORES,
+    )
+
+    expect(emptyStoreGroups(groups, STORES)).toEqual([])
+  })
+})
+
+describe('acceptsDrops', () => {
+  it('takes items into "No store" and the offered stores, not into stores no longer offered', () => {
+    const [noStore, costco, aldi] = groupByStore(
+      [
+        makeItem({ id: 'a', store: null }),
+        makeItem({ id: 'b', store: 'costco' }),
+        makeItem({ id: 'c', store: 'Aldi' }),
+      ],
+      STORES,
+    )
+
+    expect([noStore, costco, aldi].map((group) => group && acceptsDrops(group, STORES))).toEqual([
+      true,
+      true,
+      false,
+    ])
   })
 })
