@@ -34,12 +34,43 @@ export interface GroceryListSettings {
   imageGenerationEnabled: boolean
   /** The server can draw pictures at all: it has a Gemini API key. */
   imageGenerationAvailable: boolean
+  /** The server can estimate the list's cost: it has a Gemini API key, and estimates aren't turned off. */
+  costEstimateAvailable: boolean
 }
 
 /** The body of `PATCH /api/grocery-list/settings`: only the settings to change. */
 export type GroceryListSettingsChanges = Partial<
   Pick<GroceryListSettings, 'imageGenerationEnabled'>
 >
+
+/** One item of a {@link CostEstimate} (`CostEstimateLineResponse` in the backend). */
+export interface CostEstimateLine {
+  itemId: string
+  /** The item's name and quantity, from the list. */
+  name: string
+  quantity: string | null
+  /** The average U.S. price of that quantity in dollars, or `null` when the AI couldn't price it. */
+  estimatedUsd: number | null
+  /** What the AI priced, in a few words ("1 gallon, store brand"). Plain text written by the AI. */
+  basis: string | null
+}
+
+/**
+ * What the whole list would cost at average U.S. prices, as Google's Gemini estimates them: the body of
+ * `POST /api/grocery-list/cost-estimate` (`CostEstimateResponse` in the backend).
+ */
+export interface CostEstimate {
+  /** The sum of the items' estimates, in dollars, added up by the server. */
+  totalUsd: number
+  /** How many items have an estimate. */
+  estimatedItemCount: number
+  /** Every item on the list, in list order. */
+  items: CostEstimateLine[]
+  /** The AI's one-sentence remark on the estimate. Plain text written by the AI. */
+  note: string | null
+  /** ISO 8601 instant the estimate was made. */
+  estimatedAt: string
+}
 
 /** The body of `GET /api/grocery-list`. */
 export interface GroceryList {

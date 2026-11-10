@@ -1,4 +1,5 @@
 import type {
+  CostEstimate,
   GroceryItemChanges,
   GroceryItemMove,
   GroceryList,
@@ -12,6 +13,9 @@ import type { RequestOptions } from './auth-api'
 import { httpClient } from './http-client'
 
 const ITEMS = '/grocery-list/items'
+
+// The server gives Gemini a minute to price the list; this leaves room for the trip there and back.
+const COST_ESTIMATE_TIMEOUT_MS = 75_000
 
 /**
  * Returns the whole list, in order.
@@ -104,5 +108,20 @@ export async function updateSettings(
     changes,
     options,
   )
+  return data
+}
+
+/**
+ * Asks Google's Gemini, through the server, what the whole list costs at average U.S. prices. Each call is a paid
+ * request that counts against the app's daily allowance, so call it only when the user asks.
+ *
+ * @throws {@link ApiError} 409 when the list is empty, 429 when today's estimates are used up, 502 or 503 when the AI
+ * couldn't answer, 503 when the server has no Gemini API key.
+ */
+export async function estimateCost(options: RequestOptions = {}): Promise<CostEstimate> {
+  const { data } = await httpClient.post<CostEstimate>('/grocery-list/cost-estimate', null, {
+    ...options,
+    timeout: COST_ESTIMATE_TIMEOUT_MS,
+  })
   return data
 }

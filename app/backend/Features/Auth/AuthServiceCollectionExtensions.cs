@@ -1,3 +1,4 @@
+using LoginApp.Api.Features.Auth.Notifications;
 using LoginApp.Api.Infrastructure.Data;
 using LoginApp.Api.Infrastructure.Security;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -66,6 +67,7 @@ internal static class AuthServiceCollectionExtensions
         services.AddSingleton<IAccessTokenIssuer, JwtAccessTokenIssuer>();
         services.AddSingleton<AuthCookieManager>();
         services.AddScoped<IAuthService, AuthService>();
+        services.AddRegistrationNotifications();
 
         services.AddAuthRateLimiting();
 

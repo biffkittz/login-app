@@ -127,6 +127,7 @@ describe('createGroceryListHub', () => {
       version: 2,
       imageGenerationEnabled: false,
       imageGenerationAvailable: true,
+      costEstimateAvailable: true,
     }
 
     fake.messageHandlers.get('SettingsChanged')?.(settings)

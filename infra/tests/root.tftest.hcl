@@ -277,6 +277,105 @@ run "a_gemini_key_reaches_the_app_through_key_vault" {
 }
 
 # ---------------------------------------------------------------------------------------------------------------------
+# Registration emails (Cloudflare Email Service)
+# ---------------------------------------------------------------------------------------------------------------------
+
+run "registration_emails_are_off_without_recipients" {
+  command = plan
+
+  variables {
+    app_image_tag = "1a2b3c4"
+  }
+
+  assert {
+    condition     = length(module.email_sending) == 0 && length(data.cloudflare_account_api_token_permission_groups_list.this) == 0
+    error_message = "Without recipients, Cloudflare Email Service must be left unconfigured."
+  }
+
+  assert {
+    condition = (
+      !contains(keys(local.app_secret_environment_variables), "Email__ApiToken") &&
+      length(local.registration_notification_settings) == 0 &&
+      !contains(keys(local.app_instance_environment_variables["main"]), "RegistrationNotifications__SiteUrl")
+    )
+    error_message = "Without recipients, the app must get no email settings."
+  }
+
+  assert {
+    condition     = output.registration_notifications == null && !contains(keys(output.next_steps), "confirm_recipients")
+    error_message = "Without recipients there is nothing to report or confirm."
+  }
+}
+
+# The module's own runs (tests/email-sending.tftest.hcl) cover what it creates in Cloudflare. Here its outputs are
+# fixed, as mocks can't fill the permission catalogue it chooses from, and the run checks how they reach the app.
+run "registration_emails_reach_every_instance_through_key_vault" {
+  command = apply
+
+  variables {
+    app_image_tag                        = "1a2b3c4"
+    registration_notification_recipients = ["Owner@Example.com", "second@example.org"]
+    additional_app_instances = {
+      grocery = {
+        hostname      = "grocery.biffkittz.com"
+        exposed_port  = 8444
+        database_name = "grocery"
+      }
+    }
+  }
+
+  override_module {
+    target = module.email_sending
+    outputs = {
+      api_token        = "mock-cloudflare-email-sending-token"
+      token_name       = "loginapp-demo app: send registration emails (managed by Terraform, project:loginapp)"
+      permission_group = "Email Sending Send"
+      sending_domain   = "biffkittz.com"
+      recipients       = { "owner@example.com" = "awaiting confirmation", "second@example.org" = "awaiting confirmation" }
+    }
+  }
+
+  assert {
+    condition = (
+      contains(keys(module.key_vault.secret_ids), "email_api_token") &&
+      local.app_secrets["main"]["email-api-token"] == module.key_vault.secret_ids["email_api_token"] &&
+      local.app_secrets["grocery"]["email-api-token"] == module.key_vault.secret_ids["email_api_token"] &&
+      local.app_secret_environment_variables["Email__ApiToken"] == "email-api-token"
+    )
+    error_message = "The token must reach every instance through Key Vault, as Email__ApiToken."
+  }
+
+  assert {
+    condition = local.registration_notification_settings == tomap({
+      Email__AccountId                         = "abcdef0123456789abcdef0123456789"
+      Email__SenderAddress                     = "notifications@biffkittz.com"
+      RegistrationNotifications__Recipients__0 = "owner@example.com"
+      RegistrationNotifications__Recipients__1 = "second@example.org"
+    })
+    error_message = "Every instance must send from notifications@biffkittz.com, for the zone's account, to the recipients in lower case and in order."
+  }
+
+  assert {
+    condition = (
+      local.app_instance_environment_variables["main"]["RegistrationNotifications__SiteUrl"] == "https://app.biffkittz.com" &&
+      local.app_instance_environment_variables["grocery"]["RegistrationNotifications__SiteUrl"] == "https://grocery.biffkittz.com" &&
+      local.app_instance_environment_variables["grocery"]["Jwt__Audience"] == "grocery.biffkittz.com"
+    )
+    error_message = "Each instance's emails must name its own site, and the grocery instance keeps its own audience."
+  }
+
+  assert {
+    condition = (
+      output.registration_notifications.sender == "notifications@biffkittz.com" &&
+      output.registration_notifications.recipients["owner@example.com"] == "awaiting confirmation" &&
+      output.registration_notifications.permission == "Email Sending Send" &&
+      strcontains(output.next_steps.confirm_recipients, "owner@example.com, second@example.org")
+    )
+    error_message = "The outputs must show the sender, and who is still to confirm their address with Cloudflare."
+  }
+}
+
+# ---------------------------------------------------------------------------------------------------------------------
 # Input validation
 # ---------------------------------------------------------------------------------------------------------------------
 
@@ -508,6 +607,36 @@ run "rejects_the_port_reserved_for_container_apps_health_checks" {
   }
 
   expect_failures = [var.app_exposed_port]
+}
+
+run "rejects_a_malformed_notification_recipient" {
+  command = plan
+
+  variables {
+    registration_notification_recipients = ["Owner <owner@example.com>"]
+  }
+
+  expect_failures = [var.registration_notification_recipients]
+}
+
+run "rejects_a_notification_recipient_listed_twice" {
+  command = plan
+
+  variables {
+    registration_notification_recipients = ["owner@example.com", "OWNER@example.com"]
+  }
+
+  expect_failures = [var.registration_notification_recipients]
+}
+
+run "rejects_a_sender_username_that_is_not_an_address_part" {
+  command = plan
+
+  variables {
+    notification_sender_username = "notifications@biffkittz.com"
+  }
+
+  expect_failures = [var.notification_sender_username]
 }
 
 run "rejects_an_empty_gemini_key" {

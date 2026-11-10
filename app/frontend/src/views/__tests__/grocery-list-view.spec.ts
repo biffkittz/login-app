@@ -8,7 +8,8 @@ import { polyfillDialog } from '@/components/grocery/__tests__/dialog-polyfill'
 import * as groceryApi from '@/services/grocery-api'
 import { createGroceryListHub } from '@/services/grocery-list-hub'
 import { useAuthStore } from '@/stores/auth'
-import type { GroceryItem } from '@/types/grocery'
+import { useGroceryListStore } from '@/stores/grocery-list'
+import type { CostEstimate, GroceryItem } from '@/types/grocery'
 import { makeItem } from '@/utils/__tests__/test-items'
 
 import GroceryListView from '../grocery-list-view.vue'
@@ -20,7 +21,12 @@ async function mountView(...items: GroceryItem[]) {
   vi.mocked(groceryApi.getList).mockResolvedValue({
     items,
     stores: ['Whole Foods', 'Indian Grocery', 'Teeter/Lion', 'Costco'],
-    settings: { version: 1, imageGenerationEnabled: true, imageGenerationAvailable: true },
+    settings: {
+      version: 1,
+      imageGenerationEnabled: true,
+      imageGenerationAvailable: true,
+      costEstimateAvailable: true,
+    },
   })
   const router = createRouter({
     history: createMemoryHistory(),
@@ -196,6 +202,7 @@ describe('GroceryListView', () => {
       version: 2,
       imageGenerationEnabled: false,
       imageGenerationAvailable: true,
+      costEstimateAvailable: true,
     })
 
     await wrapper.get('button[aria-label="List settings"]').trigger('click')
@@ -239,5 +246,91 @@ describe('GroceryListView', () => {
 
     expect(wrapper.text()).toContain("We couldn't reach the server.")
     expect(wrapper.findAll('li')).toHaveLength(0)
+  })
+
+  describe('Estimate Cost', () => {
+    const estimate: CostEstimate = {
+      totalUsd: 7.68,
+      estimatedItemCount: 2,
+      items: [
+        { itemId: 'a', name: 'Apples', quantity: '3 lb', estimatedUsd: 4.19, basis: 'Bagged' },
+        { itemId: 'b', name: 'Bread', quantity: null, estimatedUsd: 3.49, basis: null },
+      ],
+      note: null,
+      estimatedAt: '2026-11-10T18:00:00.000Z',
+    }
+
+    const estimateButton = (wrapper: Awaited<ReturnType<typeof mountView>>) =>
+      wrapper.findAll('button').find((button) => button.text() === 'Estimate Cost')
+
+    const estimateSheet = (wrapper: Awaited<ReturnType<typeof mountView>>) =>
+      wrapper.findAll('dialog').find((dialog) => dialog.text().includes('Estimated cost'))
+
+    it('prices the whole list when the button is pressed', async () => {
+      const wrapper = await mountView(
+        makeItem({ id: 'a', name: 'Apples', quantity: '3 lb', position: 1 }),
+        makeItem({ id: 'b', name: 'Bread', position: 2 }),
+      )
+      vi.mocked(groceryApi.estimateCost).mockResolvedValue(estimate)
+
+      await estimateButton(wrapper)!.trigger('click')
+      await flushPromises()
+
+      expect(groceryApi.estimateCost).toHaveBeenCalledOnce()
+      const sheet = estimateSheet(wrapper)
+      expect(sheet?.attributes('open')).toBeDefined()
+      expect(sheet!.get('[data-total]').text()).toBe('$7.68')
+      expect(sheet!.text()).toContain('Bread')
+    })
+
+    it("isn't offered while the list is empty", async () => {
+      const wrapper = await mountView()
+
+      expect(estimateButton(wrapper)).toBeUndefined()
+    })
+
+    it('shows why the estimate failed, and tries again on request', async () => {
+      const wrapper = await mountView(makeItem({ id: 'a', name: 'Apples' }))
+      vi.mocked(groceryApi.estimateCost).mockRejectedValueOnce(
+        Object.assign(new Error('Too many'), {
+          isAxiosError: true,
+          response: {
+            status: 429,
+            data: {
+              title:
+                'The app has made its 500 cost estimates for today. Please try again tomorrow.',
+            },
+          },
+        }),
+      )
+
+      await estimateButton(wrapper)!.trigger('click')
+      await flushPromises()
+      const sheet = estimateSheet(wrapper)!
+      expect(sheet.get('[role="alert"]').text()).toContain('500 cost estimates for today')
+
+      vi.mocked(groceryApi.estimateCost).mockResolvedValueOnce(estimate)
+      await sheet
+        .findAll('button')
+        .find((button) => button.text() === 'Try again')!
+        .trigger('click')
+      await flushPromises()
+
+      expect(groceryApi.estimateCost).toHaveBeenCalledTimes(2)
+      expect(estimateSheet(wrapper)!.get('[data-total]').text()).toBe('$7.68')
+    })
+
+    it("doesn't call the server when it can't estimate", async () => {
+      const wrapper = await mountView(makeItem({ id: 'a', name: 'Apples' }))
+      const groceryList = useGroceryListStore()
+      groceryList.settings = { ...groceryList.settings!, costEstimateAvailable: false }
+      await flushPromises()
+
+      await estimateButton(wrapper)!.trigger('click')
+      await flushPromises()
+
+      expect(groceryApi.estimateCost).not.toHaveBeenCalled()
+      expect(estimateSheet(wrapper)!.text()).toContain('it needs a Gemini API key')
+    })
   })
 })

@@ -1,7 +1,10 @@
 using System.ComponentModel.DataAnnotations;
 using LoginApp.Api.Features.Auth;
+using LoginApp.Api.Features.Auth.Notifications;
 using LoginApp.Api.Features.GroceryList;
+using LoginApp.Api.Features.GroceryList.CostEstimates;
 using LoginApp.Api.Features.GroceryList.Images;
+using LoginApp.Api.Infrastructure.Email;
 using LoginApp.Api.Infrastructure.Networking;
 
 namespace LoginApp.Api.Tests.Infrastructure;
@@ -164,6 +167,233 @@ public sealed class OptionsValidationTests
         Assert.False(options.IsConfigured);
         Assert.Equal("gemini-3.1-flash-lite-image", options.Model);
     }
+
+    [Fact]
+    public void CostEstimateOptions_Defaults_PassValidation_AndUseFlashLite500TimesADay()
+    {
+        // Arrange
+        CostEstimateOptions options = new();
+
+        // Act + Assert
+        Assert.Empty(Validate(options));
+        Assert.Equal("gemini-3.1-flash-lite", options.Model);
+        Assert.Equal(500, options.MaxEstimatesPerDay);
+        Assert.False(options.IsAvailable(new ImageGenerationOptions()));
+        Assert.True(options.IsAvailable(new ImageGenerationOptions { ApiKey = "key" }));
+        Assert.False(new CostEstimateOptions { MaxEstimatesPerDay = 0 }.IsAvailable(new ImageGenerationOptions { ApiKey = "key" }));
+    }
+
+    [Theory]
+    [InlineData("http://generativelanguage.googleapis.com/v1beta/")] // the key would cross the network unencrypted
+    [InlineData("ftp://localhost/v1beta/")]
+    public void CostEstimateOptions_WithUnsafeEndpoint_FailValidation(string endpoint)
+    {
+        // Arrange
+        CostEstimateOptions options = new() { Endpoint = new Uri(endpoint) };
+
+        // Act + Assert
+        Assert.NotEmpty(Validate(options));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("../tunedModels/x")] // would change the request path
+    [InlineData("gemini flash")]
+    public void CostEstimateOptions_WithInvalidModel_FailValidation(string model)
+    {
+        // Arrange
+        CostEstimateOptions options = new() { Model = model };
+
+        // Act + Assert
+        Assert.NotEmpty(Validate(options));
+    }
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(100_001)]
+    public void CostEstimateOptions_WithDailyLimitOutOfRange_FailValidation(int limit)
+    {
+        // Arrange
+        CostEstimateOptions options = new() { MaxEstimatesPerDay = limit };
+
+        // Act + Assert
+        Assert.NotEmpty(Validate(options));
+    }
+
+    [Fact]
+    public void EmailOptions_Defaults_PassValidationButSendNothing()
+    {
+        // Arrange
+        EmailOptions options = new();
+
+        // Act + Assert
+        Assert.Empty(Validate(options));
+        Assert.False(options.IsConfigured);
+    }
+
+    [Fact]
+    public void EmailOptions_WithAccountTokenAndSender_PassValidation()
+    {
+        // Arrange
+        EmailOptions options = ConfiguredEmail();
+
+        // Act + Assert
+        Assert.Empty(Validate(options));
+        Assert.True(options.IsConfigured);
+    }
+
+    [Theory]
+    [InlineData("", "token", "notifications@example.com")] // the token's Key Vault secret is there, the rest isn't
+    [InlineData("0123456789abcdef0123456789abcdef", "", "notifications@example.com")] // the secret is missing
+    [InlineData("0123456789abcdef0123456789abcdef", "token", "")]
+    public void EmailOptions_WithHalfAConfiguration_FailValidation(string accountId, string apiToken, string senderAddress)
+    {
+        // Arrange
+        EmailOptions options = new() { AccountId = accountId, ApiToken = apiToken, SenderAddress = senderAddress };
+
+        // Act + Assert
+        Assert.NotEmpty(Validate(options));
+    }
+
+    [Theory]
+    [InlineData("0123456789ABCDEF0123456789ABCDEF")] // Cloudflare IDs are lowercase
+    [InlineData("0123456789abcdef")]
+    [InlineData("../zones/0123456789abcdef0123456789")]
+    public void EmailOptions_WithMalformedAccountId_FailValidation(string accountId)
+    {
+        // Arrange
+        EmailOptions options = ConfiguredEmail();
+        options.AccountId = accountId;
+
+        // Act + Assert
+        Assert.NotEmpty(Validate(options));
+    }
+
+    [Theory]
+    [InlineData("Nibbles <notifications@example.com>")]
+    [InlineData("notifications")]
+    [InlineData("notifications@localhost")]
+    [InlineData("notifications@example.com\r\nBcc: someone@example.org")]
+    public void EmailOptions_WithAnythingButAPlainSenderAddress_FailValidation(string senderAddress)
+    {
+        // Arrange
+        EmailOptions options = ConfiguredEmail();
+        options.SenderAddress = senderAddress;
+
+        // Act + Assert
+        Assert.NotEmpty(Validate(options));
+    }
+
+    [Theory]
+    [InlineData("http://api.cloudflare.com/client/v4/")]
+    [InlineData("ftp://api.cloudflare.com/")]
+    public void EmailOptions_WithUnsafeEndpoint_FailValidation(string endpoint)
+    {
+        // Arrange
+        EmailOptions options = ConfiguredEmail();
+        options.Endpoint = new Uri(endpoint);
+
+        // Act + Assert
+        Assert.NotEmpty(Validate(options));
+    }
+
+    [Fact]
+    public void EmailOptions_WithAControlCharacterInTheSenderName_FailValidation()
+    {
+        // Arrange: a line break in the From header could start a header of its own.
+        EmailOptions options = ConfiguredEmail();
+        options.SenderName = "Nibbles\r\nBcc: someone@example.org";
+
+        // Act + Assert
+        Assert.NotEmpty(Validate(options));
+    }
+
+    [Fact]
+    public void RegistrationNotificationOptions_Defaults_PassValidationAndEmailNobody()
+    {
+        // Arrange
+        RegistrationNotificationOptions options = new();
+
+        // Act + Assert
+        Assert.Empty(Validate(options));
+        Assert.Empty(options.Recipients);
+        Assert.Equal("[grocery app] new registration detected", options.Subject);
+    }
+
+    [Theory]
+    [InlineData("owner@example.com")]
+    [InlineData("owner@example.com|second.person+family@example.co.uk")]
+    public void RegistrationNotificationOptions_WithPlainDistinctRecipients_PassValidation(string recipients)
+    {
+        // Arrange: recipients separated by "|".
+        RegistrationNotificationOptions options = new()
+        {
+            Recipients = [.. recipients.Split('|')],
+            SiteUrl = new Uri("https://grocery.example.com"),
+        };
+
+        // Act + Assert
+        Assert.Empty(Validate(options));
+    }
+
+    [Theory]
+    [InlineData("owner@example.com|OWNER@example.com")] // twice, in different case
+    [InlineData("Owner <owner@example.com>")]
+    [InlineData("owner")]
+    [InlineData(" owner@example.com")]
+    public void RegistrationNotificationOptions_WithRepeatedOrMalformedRecipients_FailValidation(string recipients)
+    {
+        // Arrange
+        RegistrationNotificationOptions options = new() { Recipients = [.. recipients.Split('|')] };
+
+        // Act + Assert
+        Assert.NotEmpty(Validate(options));
+    }
+
+    [Fact]
+    public void RegistrationNotificationOptions_WithMoreRecipientsThanOneEmailCanHave_FailValidation()
+    {
+        // Arrange
+        RegistrationNotificationOptions options = new()
+        {
+            Recipients = [.. Enumerable.Range(0, CloudflareEmailSender.MaxRecipients + 1).Select(index => $"person{index}@example.com")],
+        };
+
+        // Act + Assert
+        Assert.NotEmpty(Validate(options));
+    }
+
+    [Theory]
+    [InlineData("[grocery app] new registration\r\nBcc: someone@example.org")]
+    [InlineData("")]
+    public void RegistrationNotificationOptions_WithAnUnsafeOrEmptySubject_FailValidation(string subject)
+    {
+        // Arrange
+        RegistrationNotificationOptions options = new() { Subject = subject };
+
+        // Act + Assert
+        Assert.NotEmpty(Validate(options));
+    }
+
+    [Theory]
+    [InlineData("/relative/path")]
+    [InlineData("ftp://grocery.example.com")]
+    public void RegistrationNotificationOptions_WithASiteUrlThatIsNotAWebAddress_FailValidation(string siteUrl)
+    {
+        // Arrange
+        RegistrationNotificationOptions options = new() { SiteUrl = new Uri(siteUrl, UriKind.RelativeOrAbsolute) };
+
+        // Act + Assert
+        Assert.NotEmpty(Validate(options));
+    }
+
+    private static EmailOptions ConfiguredEmail() =>
+        new()
+        {
+            AccountId = "0123456789abcdef0123456789abcdef",
+            ApiToken = "test-email-token",
+            SenderAddress = "notifications@example.com",
+        };
 
     private static List<ValidationResult> Validate(object options)
     {

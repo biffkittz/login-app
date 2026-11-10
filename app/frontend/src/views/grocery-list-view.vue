@@ -5,6 +5,7 @@ import { storeToRefs } from 'pinia'
 import StarburstMark from '@/components/brand/starburst-mark.vue'
 import AddItemForm from '@/components/grocery/add-item-form.vue'
 import ConnectionStatus from '@/components/grocery/connection-status.vue'
+import CostEstimateSheet from '@/components/grocery/cost-estimate-sheet.vue'
 import { GROCERY_CARD_CLASS } from '@/components/grocery/card'
 import GroceryStoreGroups from '@/components/grocery/grocery-store-groups.vue'
 import ItemEditor from '@/components/grocery/item-editor.vue'
@@ -12,6 +13,7 @@ import ListSettings from '@/components/grocery/list-settings.vue'
 import BaseButton from '@/components/ui/base-button.vue'
 import FormAlert from '@/components/ui/form-alert.vue'
 import ToastNotice from '@/components/ui/toast-notice.vue'
+import { useCostEstimate } from '@/composables/useCostEstimate'
 import { useEventListener } from '@/composables/useEventListener'
 import { useGroceryListLiveUpdates } from '@/composables/useGroceryListLiveUpdates'
 import { useToast } from '@/composables/useToast'
@@ -57,6 +59,13 @@ const pictureColumn = computed(() =>
 
 const settingsOpen = ref(false)
 const settingsError = ref<string | null>(null)
+
+const costEstimate = useCostEstimate()
+const estimateOpen = ref(false)
+const estimateAvailable = computed(() => settings.value?.costEstimateAvailable === true)
+const displayOrder = computed(() =>
+  groups.value.flatMap((group) => group.items.map((item) => item.id)),
+)
 
 function announce(message: string): void {
   announcement.value = message
@@ -205,6 +214,15 @@ function moveFromEditor(delta: -1 | 1): void {
   }
 }
 
+// Every tap asks Gemini again (a paid request, counted against the app's daily allowance), so the estimate always
+// prices the list as it is now. Without a Gemini key on the server, the sheet just says so.
+function estimateCost(): void {
+  estimateOpen.value = true
+  if (estimateAvailable.value) {
+    void costEstimate.run()
+  }
+}
+
 function openSettings(): void {
   settingsError.value = null
   settingsOpen.value = true
@@ -347,6 +365,17 @@ useEventListener(document, 'keydown', (event) => {
       @drag-end="groceryList.releaseChanges()"
     />
 
+    <div v-if="items.length > 0" class="mt-6 flex justify-center">
+      <BaseButton
+        variant="secondary"
+        aria-haspopup="dialog"
+        :loading="costEstimate.loading.value"
+        @click="estimateCost"
+      >
+        Estimate Cost
+      </BaseButton>
+    </div>
+
     <p class="sr-only" aria-live="polite" aria-atomic="true">{{ announcement }}</p>
 
     <ItemEditor
@@ -362,6 +391,16 @@ useEventListener(document, 'keydown', (event) => {
       @save="saveChanges"
       @remove="removeFromEditor"
       @move-by="moveFromEditor"
+    />
+
+    <CostEstimateSheet
+      v-model:open="estimateOpen"
+      :estimate="costEstimate.estimate.value"
+      :loading="costEstimate.loading.value"
+      :error="costEstimate.error.value"
+      :available="estimateAvailable"
+      :order="displayOrder"
+      @estimate="costEstimate.run()"
     />
 
     <ListSettings

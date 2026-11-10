@@ -69,6 +69,47 @@ sequenceDiagram
 
 All errors are [RFC 9457 problem details](https://www.rfc-editor.org/rfc/rfc9457) (`application/problem+json`).
 
+### Registration emails
+
+Every successful registration emails the people in `RegistrationNotifications:Recipients`, so the family hears when
+someone new joins. In Azure they are set by Terraform (`registration_notification_recipients`, the site's owner);
+locally the list is empty and nothing is sent.
+
+```mermaid
+sequenceDiagram
+  participant B as Browser
+  participant A as AuthService
+  participant Q as RegistrationNotificationQueue
+  participant W as RegistrationNotificationWorker
+  participant C as Cloudflare Email Service
+  B->>A: POST /api/auth/register
+  A->>A: create the account (Identity)
+  A->>Q: NotifyRegistered(display name): returns at once
+  A-->>B: 201 + cookie
+  W->>Q: next registration
+  W->>C: POST accounts/{id}/email/sending/send (Bearer token)
+  C-->>W: delivered / queued / bounced
+```
+
+- **From and to.** From notifications@biffkittz.com (`Email:SenderAddress`, a domain onboarded for Cloudflare Email
+  Sending), to the recipients, subject `[grocery app] new registration detected`. The text names the site
+  (`RegistrationNotifications:SiteUrl`, set per instance), the time in UTC and the name the person typed. Not their
+  email address: the app copies that nowhere, logs included.
+- **Registering never waits for it, or fails because of it.** `AuthService` only queues the email (an in-memory
+  channel), and a hosted service sends it with Cloudflare's REST API (`CloudflareEmailSender`, a typed `HttpClient`).
+  Passing failures (no connection, 429, 5xx) are retried twice, 5 and 10 seconds apart; a refusal isn't. A timeout
+  isn't retried either: Cloudflare may have taken the email, and a second copy is worse than a logged miss.
+- **Plain text, and a name that can't pose as anything else.** The name is quoted and labelled as the person's own,
+  and line breaks and bidirectional controls in it are replaced, so it can't add lines to the email or read in
+  another order than it was typed. The subject and sender come from configuration and are validated at startup
+  (no control characters), because they become headers.
+- **Limits.** At most `RegistrationNotifications:MaxPerDay` (50) emails in any 24 hours, so a flood of sign-ups can't
+  flood the inbox; the last one allowed says so. At most 100 wait in the queue. Registrations over either limit
+  still succeed and are logged.
+- **The token** is a Cloudflare account token limited to Email Sending, created by Terraform and read from Key Vault
+  (`Email:ApiToken`). `Email:AccountId`, `Email:ApiToken` and `Email:SenderAddress` go together: the app refuses to
+  start with only some of them set.
+
 ## The grocery list
 
 There is one list, shared by every registered user (the requirement is that any signed-in user may use it).
@@ -94,6 +135,7 @@ There is one list, shared by every registered user (the requirement is that any 
 | `DELETE /api/grocery-list/items/{id}` | | `200` + change |
 | `GET /api/grocery-list/images/{id}` | | `200` WebP picture, cacheable for a year; `404` |
 | `PATCH /api/grocery-list/settings` | `imageGenerationEnabled?` | `200` + settings, also broadcast as `SettingsChanged` |
+| `POST /api/grocery-list/cost-estimate` | | `200 { totalUsd, estimatedItemCount, items, note, estimatedAt }` (see [Cost estimates](#cost-estimates)) |
 
 Every write answers with a **change**, `{ savedItems, deletedItemIds }`, and the hub sends the very same change to
 every connected browser, the author's included. The SPA therefore has one code path for its own changes and
@@ -206,6 +248,52 @@ sequenceDiagram
   items without one show a plain tile, so the names stay in line. The setting is one database
   row (`GroceryListSettings`), versioned like items and broadcast to every phone as `SettingsChanged`.
 
+### Cost estimates
+
+The **Estimate Cost** button below the list asks Gemini what the whole list would cost at average U.S. prices, and
+shows the total with a price per item in a bottom sheet.
+
+```mermaid
+sequenceDiagram
+  participant A as Ada's phone
+  participant API as API
+  participant Gm as Gemini API
+  A->>API: POST /api/grocery-list/cost-estimate
+  API->>API: read the list; spend one of the day's 500 estimates
+  API->>Gm: generateContent: instructions, the JSON Schema, the list as JSON (number, name, quantity, brand)
+  Gm-->>API: JSON matching the schema: { items: [{ itemNumber, estimatedCostUsd, basis }], note }
+  API->>API: match answers to items by number, check every value, add up the total
+  API-->>A: 200 { totalUsd, items, note }
+```
+
+- **What is asked.** The prompt (`GeminiCostEstimator.Prompt`) asks for each item's price in U.S. dollars, using the
+  average across all of America rather than any one region or store, so that regional differences even out. It
+  prices the quantity given, or one typical retail unit, and the brand given, or a mainstream one. The list goes in as
+  JSON, so a name can't pose as more instructions, and the prompt says that everything in it is data.
+- **What is sent.** Each item's name, quantity and brand, which decide the price. Not its store, notes, or who added
+  it. The model is Gemini 3.1 Flash-Lite (`CostEstimates:Model`), with the app's one Gemini key
+  (`ImageGeneration:ApiKey`).
+- **A schema, twice.** The prompt includes the answer's JSON Schema (`GeminiCostEstimator.ResponseSchema`), and the
+  same schema goes in `generationConfig.responseJsonSchema` with `responseMimeType: application/json`, which holds
+  Gemini's output to it (hence the `v1beta` endpoint, where Google documents it). Items are referred to by number, so
+  the app never has to trust the model to repeat a name. A price may be `null` for something no grocery store sells.
+- **The answer is untrusted input.** The app parses it itself and keeps only what fits: entries without a valid
+  number or with a negative or non-numeric price are dropped, the first answer for an item counts, numbers not on
+  the list are ignored, and a price over $10,000 for one item counts as none. The model's short texts lose control,
+  bidi and zero-width characters and are cut to length; the SPA shows them as text, never HTML. The total is the
+  app's own sum of the item prices, not the model's arithmetic. An answer that matches no item at all is an error.
+- **A daily limit.** Each tap is a paid request, so at most `CostEstimates:MaxEstimatesPerDay` (500) are asked of
+  Gemini in any 24 hours, by everyone together, whether or not they succeed. Over it the button gets a `429` saying
+  so. The count is in memory, per instance, and starts again when the app restarts. The per-user rate limit of the
+  list's writes applies too, so one client can't spend the day's allowance in a burst.
+- **On request only.** Nothing is estimated in the background or retried behind the user's back. Every tap prices the
+  list as it is then; "Estimate again" in the sheet asks again. The sheet lists the items in the order the screen
+  groups them.
+- **Failures.** `409` for an empty list (not sent, not counted), `503` without a Gemini key (the button then says so
+  without calling the server), `503` when Gemini is busy, rate-limiting or unreachable, or takes over a minute
+  (just under Cloudflare's 100-second limit), and `502` when it refuses or its answer is unusable. Log events
+  5030-5033 give the reason, with user IDs and item counts only.
+
 ### Order
 
 Items are ordered by a floating-point `position` (fractional indexing). Moving an item gives it the midpoint between
@@ -247,6 +335,8 @@ removed items meanwhile. New items go to the top, next to the "Add an item" fiel
 | **Internal-network allow-list** | The app refuses TCP peers outside `Network:InternalNetworks`, in case the image is ever exposed somewhere without the other controls. It checks the *immediate* peer (in Azure, the Container Apps ingress proxy), not the forwarded client, because users legitimately arrive from the internet through Cloudflare. |
 | **Trusted forwarded headers** | `X-Forwarded-For` and `X-Forwarded-Proto` are honored only from internal networks (and Cloudflare's ranges), walking back through trusted hops to the real client. That is what makes per-client rate limits and logs correct behind Cloudflare. The client-certificate check is what makes the header trustworthy: only Cloudflare can send it. |
 | **AI pictures: little out, nothing raw back in** | Only an item's name goes to Gemini, with the API key in a header (never in a URL). What the app serves is its own re-encoding, never Gemini's bytes: the decoder checks the size in the header before decoding (at most 4096 pixels a side), the HTTP client stops reading at 16 MB, and the result is a fresh WebP served as `image/webp` with `nosniff`. Pictures need the auth cookie like the rest of the list, and the daily limit bounds what a hostile account can spend. |
+| **Cost estimates: little out, the answer checked** | Only each item's name, quantity and brand go to Gemini, as JSON inside a prompt that calls them data, with the key in a header. The answer must fit a JSON Schema the decoder enforces, and the app checks it again field by field, adds up the total itself, and strips control and bidi characters from the model's text before the SPA shows it as plain text. A daily limit of 500 estimates (all users together) caps the spend. |
+| **Registration emails: little out, never in the way** | The email carries the site, the time and the display name the person typed, never their email address. The name is quoted and stripped of line breaks and bidirectional controls, the email is plain text, and the subject and sender can't contain control characters. Sending is queued, so a slow or failing mail service can't delay or break registration, and a daily limit stops a sign-up flood from becoming an inbox flood. The Cloudflare token is limited to Email Sending. |
 | **Request body limit 64 KB, no `Server` header** | The largest legitimate request is an item with long notes, a few kilobytes, and the server software is nobody's business. |
 | **Data Protection keys in memory** | `AddAuthentication` registers Data Protection, but nothing uses it. Keeping its keys in memory avoids writing unused secret material into the container. |
 | **No secrets in source or image** | Secrets come from Key Vault (or user secrets locally). `.dockerignore` keeps `appsettings.Development.json` out of the image, and Development generates a temporary JWT key rather than committing one. |
@@ -265,6 +355,7 @@ app/backend/
 │   ├── AuthCookieManager.cs             Writes and deletes the HttpOnly cookie
 │   ├── AuthServiceCollectionExtensions  Identity, JWT bearer, options and rate limiting registration
 │   ├── Contracts/                       Request and response DTOs (validated by the .NET 10 validation generator)
+│   ├── Notifications/                   Registration emails: queue, background worker, daily limit, the email's text
 │   └── *Options.cs, *Result.cs, ...     Validated settings and result types for expected failures
 ├── Features/GroceryList/                The shared list and its realtime updates
 │   ├── GroceryItem.cs, ...Configuration EF Core entity and mapping (concurrency token, ordering index)
@@ -274,6 +365,7 @@ app/backend/
 │   ├── GroceryListHubNotifier.cs        Broadcasts through the hub (behind IGroceryListNotifier)
 │   ├── ItemPositions.cs                 Fractional positions and the renumbering threshold
 │   ├── GroceryListWriteLock.cs          Lets writes take turns within the instance
+│   ├── CostEstimates/                   Estimate Cost: the Gemini text client, prompt and schema, daily limit, checks
 │   └── Contracts/                       Requests, responses, the change message and text validation attributes
 └── Infrastructure/
     ├── Data/                            ApplicationDbContext, ApplicationUser, migrations, startup migration
@@ -281,6 +373,7 @@ app/backend/
     ├── Networking/                      Internal-network middleware and forwarded-header trust
     ├── Security/                        Security headers, Kestrel hardening, in-memory Data Protection keys
     ├── Tls/                             HTTPS in Kestrel with the origin certificate; Cloudflare client-certificate check
+    ├── Email/                           Sending email with Cloudflare Email Service's REST API (IEmailSender)
     └── Hosting/                         SPA static files and fallback; health checks
 ```
 
@@ -323,11 +416,12 @@ app/frontend/src/
 ├── services/                  Axios client, typed API calls (auth-api, grocery-api), the SignalR connection
 │                              (grocery-list-hub: WebSockets only, retries forever), ApiError normalization
 ├── composables/               useFormValidation, useAsyncAction, useDragReorder, useGroceryListLiveUpdates,
-│                              useToast, useNow, useRedirectTarget, useSignedOutRedirect, ...
+│                              useToast, useNow, useRedirectTarget, useSignedOutRedirect, useCostEstimate, ...
 ├── utils/                     Pure helpers: list order and positions, relative times, the editor's changed fields
 ├── validation/                Validation rules and the account and item limits mirrored from the API
 ├── views/                     Route-level containers: grocery list (home), login, register, not found
-├── components/                Presentational components: grocery/ (add form, store sections, rows, item editor, status),
+├── components/                Presentational components: grocery/ (add form, store sections, rows, item editor, status,
+│                              cost estimate sheet),
 │                              ui/ (fields, buttons, alerts, bottom sheet, toast), auth/, layout/, brand/
 ├── directives/                v-focus-on-mount (focus management after navigation)
 └── assets/main.css            Tailwind import and the design tokens (@theme)
@@ -373,7 +467,8 @@ app/frontend/src/
 ## Known limitations and possible next steps
 
 - **Anyone can register.** As required, every registered user can see and change the list, and registration is open
-  to anyone who finds the site. For a real family, consider an invitation code or an allow-list of email addresses.
+  to anyone who finds the site. The site's owner now hears of every registration by email, but only after the fact.
+  For a real family, consider an invitation code or an allow-list of email addresses.
 - **Hour-long sessions.** Sessions last 60 minutes with no refresh, so a shopper is signed out every hour. A sliding
   session (re-issuing the cookie while the user is active, with an absolute maximum) would fix that; it changes the
   security trade-offs above, so it hasn't been done without a decision.
@@ -382,11 +477,18 @@ app/frontend/src/
   shown is the last one loaded, and the status pill says it may be out of date.
 - **Undo re-creates.** "Undo" adds the item back, in its old place, as a new item: its creation date is the time of
   the undo.
+- **Estimates are a language model's guesses.** Gemini has no live price data: its prices come from what it learned
+  in training (Flash-Lite's knowledge ends in January 2025), so they lag inflation and can be plain wrong for unusual
+  items. The sheet says they are estimates. Grounding with Google Search would make them more current, at a cost per
+  request. The daily allowance is in memory, so a restart resets it, and each instance has its own.
 
 - **No server-side session revocation.** A stolen cookie stays valid until it expires (at most 60 minutes). If
   needed, add the Identity security stamp as a claim and validate it on each request, or keep a revocation list.
-- **No email confirmation or password reset.** These need an email service. Identity supports both once a sender is
-  configured.
+- **No email confirmation or password reset.** The app can send email now (`IEmailSender`, Cloudflare Email Service),
+  but on Cloudflare's free plan only to verified addresses such as the site owner's. Sending to every user needs the
+  Workers Paid plan; Identity supports both features once that is in place.
+- **Registration emails wait in memory.** One queued just before a restart gets ten seconds to go out, then is lost
+  and logged. Cloudflare Email Sending is also still in public beta.
 - **Passwordless database access.** The app uses a password connection string as required. Microsoft Entra
   authentication for PostgreSQL (managed identity tokens via Npgsql) would remove that secret altogether.
 - **Single signing key.** Rotating the key signs everyone out. Supporting a list of validation keys would allow

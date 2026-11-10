@@ -91,7 +91,7 @@ cd ~/login-app/infra
 terraform init -backend=false            # providers and modules only; works offline from Azure
 terraform fmt -recursive                 # format
 terraform validate                       # syntax and types
-terraform test                           # 38 runs against mocked providers (a few seconds)
+terraform test                           # 52 runs against mocked providers (a few seconds)
 tflint --init && tflint --recursive      # lint (the root module and every module)
 terraform-docs .                         # refresh the READMEs after changing variables, outputs or resources
 ```
@@ -116,11 +116,17 @@ Cloudflare credentials and create nothing.
 | --- | --- |
 | `tests/root.tftest.hcl` | Region, required tags, naming, the two-phase app deployment, the DNS record, generated secrets, and the validation of every input that has rules |
 | `tests/modules.tftest.hcl` | Each module on its own: NSG rules and their order, delegations and service endpoints, private PostgreSQL on B1ms, Basic registry without admin user, Key Vault RBAC and per-secret scopes, public single-replica Container App with TCP ingress (8443 outside, HTTPS on 443 in the container) |
+| `tests/email-sending.tftest.hcl` | The `email-sending` module (Cloudflare only): the sending domain without previews, the recipients, and which permission the app's token gets from a given catalogue (the narrowest, a fallback, a clear failure) |
 | `tests/mocks/` | Realistic values for computed attributes (resource IDs, FQDNs), so mocked applies pass the provider's own validation |
 
 Assertions can reference only the root module's resources and the modules' outputs. To test a module's internals,
 add a `run` block with a `module { source = "./modules/<name>" }` block, as `modules.tftest.hcl` does. A run with
 `command = apply` uses the mocks to produce known values, which helps when an assertion needs a computed attribute.
+
+Mocks give computed lists no elements, and a default for a list of objects applies to elements that don't exist. A
+data source whose result is a list (such as Cloudflare's permission catalogue) therefore can't be mocked with
+content. Pass such a list into a module as a variable instead: the module's tests supply their own lists, and root
+runs replace the module's outputs with `override_module`, as `root.tftest.hcl` does for `module.email_sending`.
 
 ## 5. Pre-commit hooks
 

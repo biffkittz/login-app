@@ -3,7 +3,7 @@
 A realtime grocery list for a family, built for phones. Everyone who signs in shares one list: they can add, edit,
 check off, delete and drag items into order, and every change appears on everybody else's screen as it happens.
 Items carry a quantity, brand, store and notes, remember who changed them last and when, and get a small picture
-drawn by Google's Gemini.
+drawn by Google's Gemini, which can also estimate what the whole list costs.
 
 Nibbles grew out of a sign-up / sign-in app built to production standards, which is still its foundation (the code
 keeps its original `LoginApp` names):
@@ -28,7 +28,8 @@ flowchart LR
   end
   kv[Azure Key Vault] -.->|secrets and certificate via managed identity| app
   acr[Azure Container Registry] -.->|image pull| app
-  app -->|"HTTPS: item names"| gemini[Gemini API<br/>item pictures]
+  app -->|"HTTPS: item names (and quantities, brands)"| gemini[Gemini API<br/>item pictures, cost estimates]
+  app -->|"HTTPS: new registrations"| mail[Cloudflare Email Service<br/>notifications@biffkittz.com]
 ```
 
 The Azure side is built with Terraform in [`infra/`](infra/README.md).
@@ -108,9 +109,14 @@ login-app/
   - Each new item gets a picture, left of its name: Gemini draws it from the name in the background, and the server
     shrinks it to a WebP of a few kilobytes that phones cache for good. Items with the same name share one picture.
     A switch in the list's settings turns AI pictures off for everyone.
+  - **Estimate Cost**, below the list, asks Gemini 3.1 Flash-Lite what everything on the list costs at average U.S.
+    prices and shows the total with a price per item. Only names, quantities and brands are sent, the answer must
+    match a JSON Schema and is checked by the server, and the whole site allows 500 estimates a day.
 - **Accounts:** registration with name, email and password. Passwords need at least 12 characters (a length-based
   policy per NIST SP 800-63B) and are hashed with PBKDF2 by ASP.NET Core Identity. Any registered user can use the
-  list.
+  list. In Azure, every registration sends the site's owner an email from notifications@biffkittz.com,
+  "[grocery app] new registration detected", naming the site, the time and the name given (not the email address),
+  through Cloudflare Email Service.
 - **Sessions:** a signed JWT, valid for 60 minutes, stored in an `HttpOnly`, `Secure`, `SameSite=Strict`, `__Host-`
   cookie. JavaScript never sees the token; the UI signs out automatically when it expires, and the realtime
   connection closes with it.

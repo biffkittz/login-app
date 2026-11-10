@@ -11,6 +11,7 @@ WSL from `infra/` unless they say otherwise.
 - [Phase 4: deploy the app](#phase-4-deploy-the-app)
 - [Migrating from the Application Gateway version](#migrating-from-the-application-gateway-version)
 - [Verify](#verify)
+- [Registration emails](#registration-emails)
 - [Day-2 operations](#day-2-operations)
 - [Teardown](#teardown)
 - [Troubleshooting](#troubleshooting)
@@ -23,7 +24,7 @@ release is just phase 2 plus phase 4.
 
 | Phase | You run | Creates | Time |
 | --- | --- | --- | --- |
-| 1. Platform | `terraform apply` (no `app_image_tag`) | Everything except the Container Apps: network, NSGs, Log Analytics, identities, registry, Key Vault + secrets + certificate, PostgreSQL + a database per instance, Container Apps environment (public IP), bootstrap job, Cloudflare records, Origin Rules and Authenticated Origin Pulls | 15–25 min |
+| 1. Platform | `terraform apply` (no `app_image_tag`) | Everything except the Container Apps: network, NSGs, Log Analytics, identities, registry, Key Vault + secrets + certificate, PostgreSQL + a database per instance, Container Apps environment (public IP), bootstrap job, Cloudflare records, Origin Rules and Authenticated Origin Pulls; with `registration_notification_recipients`, Cloudflare Email Service for registration emails | 15–25 min |
 | 2. Image | `az acr build` | `login-app:<tag>` in the registry | 5–10 min |
 | 3. Database role | `az containerapp job start` | Role `loginapp_app` with its password from Key Vault, allowed into every instance's database | 1–2 min |
 | 4. App | `terraform apply` with `app_image_tag` | A Container App per instance (`app` and `grocery`); each migrates its own schema on first start | 3–5 min |
@@ -35,7 +36,8 @@ release is just phase 2 plus phase 4.
       Administrator) on it ([AUTHENTICATION.md](AUTHENTICATION.md#azure)).
 - [ ] The state storage account (`demonstration` in `rg-terraform-state`) exists and you can read and write it
       ([AUTHENTICATION.md](AUTHENTICATION.md#remote-state)).
-- [ ] A Cloudflare API token that can edit DNS, **zone settings and Origin Rules** in `biffkittz.com`
+- [ ] A Cloudflare API token that can edit DNS, **zone settings and Origin Rules** in `biffkittz.com`, and, for
+      registration emails, **Email Sending, Email Routing Addresses and Account API Tokens** (Edit) in its account
       ([AUTHENTICATION.md](AUTHENTICATION.md#cloudflare)).
 - [ ] The origin certificate PFX for `*.biffkittz.com` and its password
       ([AUTHENTICATION.md](AUTHENTICATION.md#the-origin-certificate-pfx)).
@@ -50,12 +52,12 @@ az login && az account set --subscription 3c3f379f-8161-4631-a30c-a3af82622a6a
 read -rsp 'Cloudflare API token: ' CLOUDFLARE_API_TOKEN && export CLOUDFLARE_API_TOKEN && echo
 export TF_VAR_tls_certificate_pfx_path=/home/biffkittz/login-app/infra/.secrets/biffkittz-origin.pfx
 read -rsp 'PFX password: ' TF_VAR_tls_certificate_pfx_password && export TF_VAR_tls_certificate_pfx_password && echo
-# Optional: AI pictures of items. Without it the app runs, and its picture switch says pictures aren't set up.
+# Optional: AI pictures of items and cost estimates. Without it the app runs, and both say they aren't set up.
 read -rsp 'Gemini API key: ' TF_VAR_gemini_api_key && export TF_VAR_gemini_api_key && echo
 ```
 
 Set `TF_VAR_gemini_api_key` in every terminal you apply from once you use it: an apply without it removes the key from
-Key Vault and the app, and pictures stop (the ones already drawn stay).
+Key Vault and the app, and pictures and cost estimates stop (pictures already drawn stay).
 
 ## Phase 1: the platform
 
@@ -206,13 +208,62 @@ curl -sS -m 10 -k --resolve app.biffkittz.com:8443:"$ORIGIN" https://app.biffkit
 
 Then, in a browser, open <https://app.biffkittz.com>, register, sign out and sign in again. Do the same on
 <https://grocery.biffkittz.com>: it has its own accounts and list, so the account from app.biffkittz.com doesn't
-exist there.
+exist there. Each registration sends the recipients an email "[grocery app] new registration detected" naming the site
+([Registration emails](#registration-emails)).
 
 **Check idempotency.** A plan right after an apply must report **No changes**:
 
 ```bash
 terraform plan -var-file=environments/demo.tfvars -detailed-exitcode   # exit code 0 = no changes, 2 = drift
 ```
+
+## Registration emails
+
+Whenever someone registers on either instance, the app emails everyone in `registration_notification_recipients`
+(`environments/demo.tfvars`) from notifications@biffkittz.com, through Cloudflare Email Service. The email says which
+site, when, and the name the person typed; not their email address. Why Cloudflare, and what it adds to the zone:
+[ARCHITECTURE.md](ARCHITECTURE.md#registration-emails-through-cloudflare-email-service).
+
+The apply that first sets recipients (any phase) onboards biffkittz.com for Email Sending, adds each recipient to the
+Cloudflare account, creates the app's email token, and gives the apps the token (Key Vault) and settings. Then,
+once:
+
+1. **Confirm each recipient.** Cloudflare emails every new recipient a link to verify the address. Follow it;
+   until then, emails to that address may be refused. Check who has:
+
+   ```bash
+   terraform apply -var-file=environments/demo.tfvars -refresh-only   # reads the current state from Cloudflare
+   terraform output registration_notifications                          # recipients: "verified" or "awaiting confirmation"
+   ```
+
+2. **Try it.** Register a throwaway account on <https://grocery.biffkittz.com>. The email arrives within a minute;
+   the first one may land in spam until you mark it as wanted. The app logs each email (counts only, never addresses):
+
+   ```bash
+   az containerapp logs show --name ca-loginapp-demo-grocery --resource-group "$RG" --tail 100 | grep -E '"EventId":11(0[0-9]|10)'
+   # 1100 at start: emails are on. 1103: sent. 1104-1110: why one wasn't (see Troubleshooting).
+   ```
+
+To change who gets the emails, edit the list and apply; new addresses get Cloudflare's confirmation email. An empty
+list turns the emails off and removes the Cloudflare setup, including the DNS records Cloudflare added.
+
+### Rotating the email token
+
+```bash
+terraform apply -var-file=environments/demo.tfvars -replace='module.email_sending[0].cloudflare_account_token.this'
+# Re-read the secret now instead of waiting for the 30-minute sync, then restart each instance's revision.
+IDENTITY="$(az identity show -n id-loginapp-demo-app -g "$RG" --query id -o tsv)"
+VAULT="$(terraform output -raw key_vault_uri)"
+for APP in ca-loginapp-demo ca-loginapp-demo-grocery; do
+  az containerapp secret set --name "$APP" --resource-group "$RG" --secrets \
+    "email-api-token=keyvaultref:${VAULT}secrets/Email--ApiToken,identityref:${IDENTITY}"
+  az containerapp revision restart --name "$APP" --resource-group "$RG" \
+    --revision "$(az containerapp show --name "$APP" --resource-group "$RG" --query properties.latestRevisionName -o tsv)"
+done
+```
+
+The old token is deleted in the same apply, so an email sent between the apply and the restart fails and is logged
+(event 1106); registering itself is unaffected.
 
 ## Day-2 operations
 
@@ -227,6 +278,8 @@ terraform plan -var-file=environments/demo.tfvars -detailed-exitcode   # exit co
 | **Cloudflare publishes new IP ranges** | The next plan shows the ingress IP restrictions and NSG rule changing; apply it. Plan regularly, e.g. weekly, so new edge locations aren't blocked |
 | **Cloudflare replaces its origin-pull CA** | The current one expires on 2029-11-01. Replace `app/backend/Infrastructure/Tls/cloudflare-origin-pull-ca.pem` and release a new image before Cloudflare switches |
 | **Add another instance of the app** | See [Adding an instance](#adding-an-instance) |
+| **Change who gets registration emails** | Edit `registration_notification_recipients` and apply; new addresses confirm Cloudflare's link ([Registration emails](#registration-emails)) |
+| **Rotate the email token** | See [Rotating the email token](#rotating-the-email-token) |
 | **Scale** | Up only: `app_cpu` / `app_memory`. `app_max_replicas` must stay 1 (validated): the realtime hub broadcasts in-process, without a backplane, so a second replica's users would miss each other's changes |
 | **Detect drift** | `terraform plan -detailed-exitcode` (exit code 2 = changes). Fix by re-applying, or by moving the change into code |
 | **Upgrade Terraform or providers** | See [DEVELOPMENT.md](DEVELOPMENT.md#8-upgrading-terraform-and-providers) |
@@ -368,5 +421,13 @@ Destroying takes about 15 to 20 minutes.
 | Container exits with `SocketException (13): Permission denied` | See [If the app can't bind port 443](#if-the-app-cant-bind-port-443) |
 | Plan wants to destroy the Container Apps | `app_image_tag` was removed from `environments/demo.tfvars` |
 | Plan wants to destroy and re-create `ca-loginapp-demo` or the `app` DNS record | The `moved` blocks were removed from `main.tf` before this state was applied with them. Put them back |
+| Plan fails: "The Cloudflare account offers none of the permission groups in preferred_permission_groups" | The account has no Email Sending yet, or Cloudflare names the permission differently. The message lists the email sending groups it found; put the right one in `cloudflare_email_sending_permission_groups` |
+| Plan or apply fails on `data.cloudflare_account_api_token_permission_groups_list` or `module.email_sending[0].cloudflare_account_token.this` with `403` / `Authentication error` | The deploying token lacks **Account API Tokens: Edit** ([AUTHENTICATION.md](AUTHENTICATION.md#cloudflare)) |
+| Apply fails on `module.email_sending[0].cloudflare_email_sending_subdomain.this` with `401 Unauthorized` and code 2036 | The deploying token lacks the **Account** permission **Email Sending: Edit** (Read isn't enough, and there's no Zone one; [AUTHENTICATION.md](AUTHENTICATION.md#cloudflare)). Add it and apply again. Resources that don't wait for the domain, the apps included, may already be applied: until it is onboarded, registering works but each email fails (log 1106) |
+| Apply fails on `module.email_sending[0].cloudflare_email_sending_subdomain.this` with `403`, or still fails with the permission in place | The account may not be entitled to Email Sending (a public beta). Open **Compute → Email Service → Email Sending** in the dashboard to see whether it's available; a Workers Paid plan may be needed |
+| Apply fails on `module.email_sending[0].cloudflare_email_routing_address.recipients[...]`: the address already exists | It is already a destination address of the account (added by hand). Import it: `terraform import -var-file=environments/demo.tfvars 'module.email_sending[0].cloudflare_email_routing_address.recipients["<address>"]' '<account id>/<destination address id>'` |
+| No registration email arrives | Look in spam first. Then the app's log: 1101/1102 at start mean the emails are off (no recipients, or the email settings didn't arrive); 1106 gives Cloudflare's reason. `terraform output registration_notifications` should show the recipient as verified |
+| App log 1106: `Cloudflare answered 403 (10102 ...)` or `(10105 ...)` | The token can't send (10102: wrong permission; rotate it) or the account isn't entitled to send to that address (10105: confirm the recipient, or Workers Paid for other addresses) |
+| App log 1106: `Cloudflare answered 401` | The token was deleted or replaced: apply, then restart the revisions ([Rotating the email token](#rotating-the-email-token)) |
 | `Error acquiring the state lock` | Someone else is running Terraform, or a crashed run left the lock. Wait, or `terraform force-unlock <LOCK_ID>` once you're sure |
 | A plan right after an apply isn't empty | Something drifts. Note the attribute and fix it in code (for example a value Azure sets that the configuration should state explicitly). Please don't silence it with `ignore_changes` without a comment explaining why |

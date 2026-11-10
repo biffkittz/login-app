@@ -32,7 +32,14 @@ independent instance of the same image runs at https://grocery.biffkittz.com, wi
 - SignalR runs in-process, never Azure SignalR Service (a requirement), so the app is exactly one instance. Writes go
   through the REST API; the hub only pushes.
 - AI pictures of items come from the Gemini API (`ImageGeneration:ApiKey`; a secret like the others). Only item names
-  are sent, and pictures are stored as small WebPs (a few KB). Tests never call Gemini; don't add ones that do.
+  are sent, and pictures are stored as small WebPs (a few KB). The Estimate Cost button uses the same key with Gemini
+  3.1 Flash-Lite and sends only names, quantities and brands; its answer is checked against a JSON Schema, and 500
+  estimates a day (all users) cap the spend. Tests never call Gemini; don't add ones that do.
+- Every registration emails `registration_notification_recipients` (Terraform; the site owner) from
+  notifications@biffkittz.com through Cloudflare Email Service, with a Cloudflare token limited to Email Sending,
+  from Key Vault (`Email:ApiToken`). The email names the site, time and display name, never the registrant's email
+  address.
+  Registering never waits for or fails because of it. Tests never send email; don't add ones that do.
 
 ## Documentation
 

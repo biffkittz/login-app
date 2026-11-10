@@ -53,6 +53,9 @@ flowchart LR
   acr -.->|image pull| app2
   app -.-> law
   kv -.-> law
+  app -->|"HTTPS: registration email"| mail["Cloudflare Email Service<br/>notifications@biffkittz.com"]
+  app2 -->|"HTTPS: registration email"| mail
+  mail --> inbox([Recipients' inboxes])
 ```
 
 | Component | Resource | Purpose |
@@ -64,6 +67,7 @@ flowchart LR
 | Secrets | Key Vault (RBAC) | A connection string per instance; the JWT signing key, Gemini API key, database passwords and TLS certificate, shared by the instances |
 | Images | Azure Container Registry (Basic) | The app's images |
 | Observability | Log Analytics workspace | Container logs, Key Vault audit events |
+| Email | Cloudflare Email Service: `biffkittz.com` onboarded for Email Sending, the recipients as verified destination addresses, an account token for Email Sending | Emails `registration_notification_recipients` from notifications@biffkittz.com whenever someone registers on either instance |
 
 ## Request path
 
@@ -144,14 +148,16 @@ only after the wait.
 | `ConnectionStrings--DefaultConnection` | Terraform (composed) | app (main instance) | `Host=<server>.postgres.database.azure.com;Port=5432;Database=loginapp;Username=loginapp_app;Password=…;SSL Mode=VerifyFull` |
 | `grocery-db-connection-string` | Terraform (composed) | app (grocery instance) | The same, with `Database=grocery`. One such secret per additional instance |
 | `Jwt--SigningKey` | `random_bytes` (64 bytes, Base64) | app | HMAC-SHA256 signing key for session tokens |
-| `ImageGeneration--ApiKey` | you (`TF_VAR_gemini_api_key`); only when given | app | Google Gemini API key for AI pictures of items |
+| `ImageGeneration--ApiKey` | you (`TF_VAR_gemini_api_key`); only when given | app | Google Gemini API key for AI pictures of items and cost estimates |
+| `Email--ApiToken` | `cloudflare_account_token` (module `email-sending`); only with registration email recipients | app | Cloudflare account token limited to Email Sending (sending, and managing sending domains) |
 | `postgresql-admin-password` | `random_password` (32 characters) | bootstrap job | Server administrator password |
 | `postgresql-app-password` | `random_password` (40 alphanumerics) | bootstrap job | Password the job sets on `loginapp_app` |
 | certificate `app-biffkittz-com-origin` | imported from your PFX | app | Cloudflare origin certificate and private key |
 
 - **How the app receives them.** The app gets its secrets as Container Apps Key Vault references, which the platform
   resolves with the app's identity and exposes as environment variables: `ConnectionStrings__DefaultConnection`,
-  `Jwt__SigningKey`, `OriginTls__CertificatePfxBase64` and, when there is a Gemini key, `ImageGeneration__ApiKey`. A Key Vault certificate is served through a secret of the
+  `Jwt__SigningKey`, `OriginTls__CertificatePfxBase64`, `ImageGeneration__ApiKey` when there is a Gemini key, and
+  `Email__ApiToken` when registration emails are on. A Key Vault certificate is served through a secret of the
   same name, whose value is the PFX in Base64 without a password; the app loads it at startup and refuses to start
   if it can't (no private key, expired, unreadable).
 - **Rotation.** The references carry no version. A new secret or certificate version therefore reaches the app
@@ -170,6 +176,7 @@ only after the wait.
 | Zone | Type | Records | Purpose |
 | --- | --- | --- | --- |
 | `biffkittz.com` (Cloudflare) | public | `app` and `grocery` A → environment public IP, **proxied** | Public names of the app's two instances |
+| `biffkittz.com` (Cloudflare) | public | Created and locked by Cloudflare Email Service, not Terraform: `cf-bounce` MX ×3 and SPF TXT, `cf-bounce._domainkey` TXT (DKIM), `_dmarc` TXT | Sending from notifications@biffkittz.com: bounces return to Cloudflare, and receivers can check the mail is genuine |
 | `<server>.private.postgres.database.azure.com` | private, linked to the VNet | managed by the PostgreSQL service | Makes `<server>.postgres.database.azure.com` resolve to the server's private IP |
 
 Terraform turns on one zone setting: **Authenticated Origin Pulls** (`tls_client_auth`, the "global" variant), so
@@ -202,7 +209,9 @@ flowchart TD
   db[database]
   kvm[key-vault]
   aca[container-app]
-  root --> net & reg & db & kvm & aca
+  mail[email-sending]
+  root --> net & reg & db & kvm & aca & mail
+  mail -->|email token| kvm
   net -->|subnet IDs| db & aca & kvm
   db -->|FQDN| kvm
   db -->|FQDN| aca
@@ -218,6 +227,7 @@ flowchart TD
 | `key-vault` | Vault, secrets, certificate import, per-secret role assignments, propagation waits, audit diagnostics |
 | `database` | PostgreSQL flexible server (private access), private DNS zone and link, a database per instance, TLS enforcement |
 | `container-app` | External environment, a Container App with TCP ingress per instance, the bootstrap job and its script |
+| `email-sending` | Cloudflare only: the domain onboarded for Email Sending, the recipients as destination addresses, the app's account token for Email Sending (exists only with recipients) |
 
 Module outputs that something must wait for are gated on that event with `depends_on`. Subnet IDs appear once their
 NSG is attached, and secret URIs once read access has propagated. Consumers therefore don't start too early, and no
@@ -423,6 +433,40 @@ and list; nobody signed in to one sees the other.
   blocks in `main.tf` map them to the `"main"` key, so the first plan with this version reports them as moved, and
   nothing is replaced.
 
+### Registration emails through Cloudflare Email Service
+
+Whenever someone registers on either instance, the app emails `registration_notification_recipients` from
+notifications@biffkittz.com, with the subject "[grocery app] new registration detected": which site, when, and the
+name the person typed (not their email address). The app queues the email and a background worker sends it, so
+registering never waits for it or fails because of it. The app side is described in the app's
+[ARCHITECTURE.md](../../docs/ARCHITECTURE.md).
+
+- **Why Cloudflare.** biffkittz.com already receives mail through another host (MXroute: its MX records and an SPF
+  record with `include:mxlogin.com`), so the service must leave those alone. Cloudflare Email Service puts what it
+  needs on `cf-bounce.biffkittz.com` and the DKIM key at `cf-bounce._domainkey`, not on the domain's own MX or SPF.
+  Azure Communication Services Email was the other candidate the allowed providers cover. It was passed over because
+  Microsoft announced in September 2026 that it retires on 30 September 2028 and advises against new setups, because
+  it would need the domain's own SPF record (managed by hand for MXroute) rewritten, and because a domain has to be
+  verified by hand before it can be linked. Cloudflare Email Routing would have replaced the domain's MX records.
+- **Everything is Terraform** (module `email-sending`): onboarding the domain, the recipients as verified destination
+  addresses, and the app's API token, which is account-owned, holds only the email sending permission, and goes
+  through Key Vault like every other secret. Cloudflare creates and locks the DNS records itself, because the zone is
+  on Cloudflare. Two steps stay manual, both once: the deploying token needs the permissions to do this
+  ([AUTHENTICATION.md](AUTHENTICATION.md#cloudflare)), and each recipient follows the confirmation link Cloudflare
+  emails it.
+- **Why verified destination addresses.** Sending to them is free on every Cloudflare plan and outside the sending
+  quota, and on the Workers Free plan they are the only addresses Email Sending reaches. Since the recipients are the
+  site's own people, nothing more is needed.
+- **DMARC.** Onboarding adds a DMARC record at `_dmarc.biffkittz.com` with Cloudflare's policy (`p=reject` in its
+  documentation). It applies to all mail from the domain, including MXroute's, which signs its mail with DKIM (selector
+  `x`) and passes. Mail that is neither DKIM-signed for biffkittz.com nor sent from a host in its SPF record would now
+  be rejected by receivers that honour DMARC.
+- **Privacy.** The emails name the person who registered, so Cloudflare's previews of sent messages are turned off
+  (`preview_enabled = false`). Cloudflare still processes each email to deliver it.
+- **Testing.** `terraform test` mocks can't return a list from a data source (computed lists come back empty), so the
+  module takes Cloudflare's permission catalogue as an input. Its tests (`tests/email-sending.tftest.hcl`) choose from
+  catalogues of their own, and the root tests replace the module's outputs to check how the token reaches the app.
+
 ### Smaller choices
 
 - **Workload profiles environment, Consumption profile.** This is the current environment type. It supports a /27
@@ -480,12 +524,23 @@ Approximate monthly cost of the demo, from the
 | Container Registry Basic | $0.1666/day | ≈ $5.07 |
 | Private DNS zone (PostgreSQL) | $0.50/zone | $0.50 |
 | Key Vault, Log Analytics, Cloudflare | Per operation; first 5 GB of logs free; free plan | ≈ $0 |
+| Cloudflare Email Service | Free for verified destination addresses, which the recipients are, on every plan | $0 |
 | **Total** | | **≈ $65–115** with two instances (each further instance adds ≈ $10–34) |
 
 AI pictures are billed by Google, not Azure: about $0.034 per picture with the default model
 (`gemini-3.1-flash-lite-image`, list price on 2026-11-09). A family adding a few dozen new item names a month spends
 around a dollar, since items with a name seen before reuse its picture. The app's daily limit (100 pictures) caps the
 worst case at about $3.40 a day.
+
+Cost estimates (the Estimate Cost button) use the same key with a text model, Gemini 3.1 Flash-Lite, billed per
+token: roughly $0.25 per million input tokens and $1.50 per million output tokens (a third-party listing on
+2026-11-10; check Google's pricing page). A family-sized list costs a fraction of a cent to price. The app allows 500
+estimates a day per instance, which caps a runaway at about a dollar a day for lists of a few dozen items, and about
+$13 a day if every estimate priced a full 500-item list.
+
+Registration emails are free while they go only to verified destination addresses. Emailing other addresses would
+need the Workers Paid plan ($5 a month with 3,000 emails, then $0.35 per 1,000; Cloudflare's pricing page on
+2026-11-10).
 
 Removing Application Gateway saved about $150 a month (its fixed charge, its public IP and one private DNS zone).
 
@@ -501,8 +556,14 @@ When the demo isn't needed, `terraform destroy` removes everything; see [DEPLOYM
   Origin Pulls with your own certificate closes that (see above).
 - **IP restrictions on TCP ingress are undocumented.** The client certificate is the control that is relied on.
 - **No egress filtering.** Outbound traffic uses the platform defaults; the app's only outbound calls go to the
-  Gemini API (`generativelanguage.googleapis.com`) for item pictures. For production, route egress through Azure
-  Firewall with user-defined routes and allow just that host. Workload profile environments support this.
+  Gemini API (`generativelanguage.googleapis.com`) for item pictures and cost estimates, and to Cloudflare's API (`api.cloudflare.com`)
+  for registration emails. For production, route egress through Azure Firewall with user-defined routes and allow
+  just those hosts. Workload profile environments support this, and a fixed egress IP would also let the email token
+  be limited to it (`condition.request_ip`).
+- **Cloudflare Email Sending is in public beta** (since April 2026). Its API or limits may change before general
+  availability; the app logs every failed email (events 1105-1107), and a registration never depends on its email.
+- **Registration emails wait in memory.** One queued in the seconds before a restart gets ten seconds to go out, then
+  is lost (and logged). Registrations are rare, so a table for them wasn't worth it.
 - **Key Vault and the registry have public endpoints.** Private endpoints need Premium for the registry, and a CI
   agent inside the VNet.
 - **The instances share one database role.** See [Several instances in one environment](#several-instances-in-one-environment)

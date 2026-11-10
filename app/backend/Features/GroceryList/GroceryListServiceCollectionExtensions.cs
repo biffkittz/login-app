@@ -1,10 +1,12 @@
+using LoginApp.Api.Features.GroceryList.CostEstimates;
 using LoginApp.Api.Features.GroceryList.Images;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace LoginApp.Api.Features.GroceryList;
 
 /// <summary>
-/// Registers the grocery list feature: its options, service, realtime hub, rate limit and item pictures.
+/// Registers the grocery list feature: its options, service, realtime hub, rate limit, item pictures and cost
+/// estimates.
 /// </summary>
 internal static class GroceryListServiceCollectionExtensions
 {
@@ -34,6 +36,7 @@ internal static class GroceryListServiceCollectionExtensions
         services.AddScoped<IGroceryListService, GroceryListService>();
         services.AddGroceryListRateLimiting();
         services.AddGroceryImages();
+        services.AddGroceryCostEstimates();
 
         return services;
     }

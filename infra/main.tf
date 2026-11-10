@@ -89,6 +89,24 @@ locals {
   # here, never the key: it decides which of those exist, and for_each refuses sensitive values.
   image_generation_configured = nonsensitive(var.gemini_api_key != null)
 
+  # Registration emails, on when anyone is to receive them. The app sends them through Cloudflare Email Service's REST
+  # API with an account token of its own, which travels like the other secrets: Key Vault, a Container App secret,
+  # then the environment variable Email__ApiToken. Addresses are kept in lower case, as Cloudflare keeps destination
+  # addresses, so a second plan compares like with like.
+  registration_notifications_enabled   = length(var.registration_notification_recipients) > 0
+  registration_notification_recipients = [for address in var.registration_notification_recipients : lower(address)]
+  notification_sender_address          = "${var.notification_sender_username}@${var.dns_zone_name}"
+  cloudflare_account_id                = data.cloudflare_zone.this.account.id
+
+  # The settings every instance shares. The recipients become RegistrationNotifications:Recipients:0, :1, ...
+  registration_notification_settings = local.registration_notifications_enabled ? merge(
+    {
+      Email__AccountId     = local.cloudflare_account_id
+      Email__SenderAddress = local.notification_sender_address
+    },
+    { for index, address in local.registration_notification_recipients : "RegistrationNotifications__Recipients__${index}" => address },
+  ) : {}
+
   # Each instance's secrets: Container App secrets that reference Key Vault, the same ones for every instance except the
   # connection string, which names the instance's own database. The environment variables below take their values
   # from them. The certificate's secret holds the PFX (Base64, no password), which the app loads as its HTTPS
@@ -101,6 +119,7 @@ locals {
         origin-certificate   = module.key_vault.certificate_secret_id
       },
       local.image_generation_configured ? { gemini-api-key = module.key_vault.secret_ids["gemini_api_key"] } : {},
+      local.registration_notifications_enabled ? { email-api-token = module.key_vault.secret_ids["email_api_token"] } : {},
     )
   }
   app_secret_environment_variables = merge(
@@ -110,13 +129,18 @@ locals {
       OriginTls__CertificatePfxBase64      = "origin-certificate"
     },
     local.image_generation_configured ? { ImageGeneration__ApiKey = "gemini-api-key" } : {},
+    local.registration_notifications_enabled ? { Email__ApiToken = "email-api-token" } : {},
   )
 
   # Settings of each instance's own. The instances share the JWT signing key, so each additional one names itself as
   # its tokens' audience: a session from one instance is then refused by another (their accounts are separate anyway).
-  # The main instance keeps the app's default audience, so its existing sessions stay valid.
+  # The main instance keeps the app's default audience, so its existing sessions stay valid. Registration emails name
+  # the site that was registered on, since every instance sends them to the same people.
   app_instance_environment_variables = {
-    for key, instance in local.app_instances : key => key == "main" ? {} : { Jwt__Audience = instance.hostname }
+    for key, instance in local.app_instances : key => merge(
+      key == "main" ? {} : { Jwt__Audience = instance.hostname },
+      local.registration_notifications_enabled ? { RegistrationNotifications__SiteUrl = "https://${instance.hostname}" } : {},
+    )
   }
 
   # Npgsql connection strings, stored in Key Vault, one per instance: the same server, role and password, each naming
@@ -271,10 +295,11 @@ module "key_vault" {
   allowed_ip_ranges  = var.key_vault_allowed_ip_ranges
   allowed_subnet_ids = [module.networking.subnet_ids.container_apps]
 
-  # The app reads the first two, and the Gemini API key when there is one. Their "--" names map to the configuration
-  # keys ConnectionStrings:DefaultConnection, Jwt:SigningKey and ImageGeneration:ApiKey, which is also what the app's
-  # optional built-in Key Vault provider expects. Each additional instance of the app gets a connection string of its
-  # own, "<instance>-db-connection-string", for its database; every other secret is shared.
+  # The app reads the first two, the Gemini API key when there is one, and its Cloudflare token for sending email when
+  # registration emails are on. Their "--" names map to the configuration keys ConnectionStrings:DefaultConnection,
+  # Jwt:SigningKey, ImageGeneration:ApiKey and Email:ApiToken, which is also what the app's optional built-in Key Vault
+  # provider expects. Each additional instance of the app gets a connection string of its own,
+  # "<instance>-db-connection-string", for its database; every other secret is shared.
   secret_names = merge(
     {
       db_connection_string      = "ConnectionStrings--DefaultConnection"
@@ -284,6 +309,7 @@ module "key_vault" {
     },
     { for key in keys(var.additional_app_instances) : "${key}_db_connection_string" => "${key}-db-connection-string" },
     local.image_generation_configured ? { gemini_api_key = "ImageGeneration--ApiKey" } : {},
+    local.registration_notifications_enabled ? { email_api_token = "Email--ApiToken" } : {},
   )
   secret_values = merge(
     {
@@ -294,6 +320,7 @@ module "key_vault" {
     },
     { for key in keys(var.additional_app_instances) : "${key}_db_connection_string" => local.app_connection_strings[key] },
     local.image_generation_configured ? { gemini_api_key = var.gemini_api_key } : {},
+    local.registration_notifications_enabled ? { email_api_token = module.email_sending[0].api_token } : {},
   )
   secret_readers = merge(
     {
@@ -307,6 +334,7 @@ module "key_vault" {
       "app_${key}_connection_string" => { secret = "${key}_db_connection_string", principal_id = azurerm_user_assigned_identity.app.principal_id }
     },
     local.image_generation_configured ? { app_gemini_api_key = { secret = "gemini_api_key", principal_id = azurerm_user_assigned_identity.app.principal_id } } : {},
+    local.registration_notifications_enabled ? { app_email_api_token = { secret = "email_api_token", principal_id = azurerm_user_assigned_identity.app.principal_id } } : {},
   )
 
   certificate_name                 = "${replace(var.app_hostname, ".", "-")}-origin"
@@ -351,7 +379,7 @@ module "container_apps" {
     }
   }
   app_secret_environment_variables = local.app_secret_environment_variables
-  app_environment_variables = merge(local.app_trusted_proxy_settings, {
+  app_environment_variables = merge(local.app_trusted_proxy_settings, local.registration_notification_settings, {
     ASPNETCORE_ENVIRONMENT                        = "Production"
     OriginTls__RequireCloudflareClientCertificate = tostring(var.require_cloudflare_client_certificate)
   })
@@ -449,4 +477,34 @@ resource "cloudflare_zone_setting" "authenticated_origin_pulls" {
   zone_id    = data.cloudflare_zone.this.id
   setting_id = "tls_client_auth"
   value      = "on"
+}
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Registration emails. Whenever someone registers on any instance, the app emails registration_notification_recipients
+# from notifications@biffkittz.com through Cloudflare Email Service's REST API. Nothing here exists while the list of
+# recipients is empty. Azure Communication Services Email was passed over: Microsoft is retiring it (September 2028),
+# and it would need the domain's own SPF record, which already serves the domain's mail host.
+# ---------------------------------------------------------------------------------------------------------------------
+
+# Cloudflare's catalogue of permissions a token can be given, from which the module picks the one that sends email.
+data "cloudflare_account_api_token_permission_groups_list" "this" {
+  count = local.registration_notifications_enabled ? 1 : 0
+
+  account_id = local.cloudflare_account_id
+}
+
+# The zone apex onboarded for Email Sending, the recipients as verified destination addresses, and the app's own
+# API token for Email Sending. Its value goes to Key Vault (Email--ApiToken) and from there to the app. Rotate it with:
+#   terraform apply -replace='module.email_sending[0].cloudflare_account_token.this'
+module "email_sending" {
+  source = "./modules/email-sending"
+  count  = local.registration_notifications_enabled ? 1 : 0
+
+  account_id                  = local.cloudflare_account_id
+  zone_id                     = data.cloudflare_zone.this.id
+  domain                      = var.dns_zone_name
+  recipients                  = local.registration_notification_recipients
+  token_name                  = "${local.name} app: send registration emails (managed by Terraform, project:${var.project})"
+  permission_groups           = data.cloudflare_account_api_token_permission_groups_list.this[0].result
+  preferred_permission_groups = var.cloudflare_email_sending_permission_groups
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { describeEditor, formatRelativeTime } from '../grocery-format'
+import { describeEditor, formatRelativeTime, formatUsd } from '../grocery-format'
 
 const NOW = Date.parse('2026-11-09T12:00:00.000Z')
 
@@ -41,5 +41,16 @@ describe('describeEditor', () => {
     expect(describeEditor({ lastModifiedById: null, lastModifiedByName: null }, 'me')).toBe(
       'a former member',
     )
+  })
+})
+
+describe('formatUsd', () => {
+  it.each([
+    [4.5, '$4.50'],
+    [0, '$0.00'],
+    [1234, '$1,234.00'],
+    [19.999, '$20.00'],
+  ])('formats %s as %s', (amount, expected) => {
+    expect(formatUsd(amount)).toBe(expected)
   })
 })

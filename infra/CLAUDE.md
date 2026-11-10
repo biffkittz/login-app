@@ -25,8 +25,8 @@ touches Azure. Run all of them before calling a change done.
 
 - **Never `terraform apply` without the user's go-ahead.** A real plan needs `CLOUDFLARE_API_TOKEN`,
   `TF_VAR_tls_certificate_pfx_path` and `TF_VAR_tls_certificate_pfx_password`, plus `TF_VAR_gemini_api_key` once the
-  app uses one (an apply without it removes the key and stops AI pictures). Don't touch `backend.tf` (the
-  user's remote state config) or `.terraform/terraform.tfstate`.
+  app uses one (an apply without it removes the key and stops AI pictures and cost estimates). Don't touch
+  `backend.tf` (the user's remote state config) or `.terraform/terraform.tfstate`.
 - **Providers:** azurerm, cloudflare, random, time only. Anything else (including azapi or external modules) needs
   the user's approval and a comment explaining why. Prefer azurerm over azapi.
 - **Idempotency:** a second plan must show no changes. No provisioners or apply-time scripts. Every
@@ -41,9 +41,9 @@ touches Azure. Run all of them before calling a change done.
 ## Layout
 
 Root (`main.tf`, `variables.tf`, `outputs.tf`, `providers.tf`, `backend.tf`) holds naming, tags, identities,
-generated secrets and the Cloudflare record. Modules: `networking`, `registry`, `key-vault`, `database`,
-`container-app` (environment, app, DB bootstrap job). Environment values:
-`environments/demo.tfvars`.
+generated secrets and the Cloudflare records. Modules: `networking`, `registry`, `key-vault`, `database`,
+`container-app` (environment, app, DB bootstrap job), `email-sending` (Cloudflare Email Service, only while
+`registration_notification_recipients` lists anyone). Environment values: `environments/demo.tfvars`.
 
 ## Things that will bite
 
@@ -78,6 +78,16 @@ generated secrets and the Cloudflare record. Modules: `networking`, `registry`, 
   their host name. Exposed ports must be unique (two TCP apps can't share one). After adding an instance, the
   bootstrap job must run again (it grants per database). The `moved` blocks in `main.tf` keep the pre-instance
   addresses of the main app and DNS record; keep them.
+- **Registration emails** go through Cloudflare Email Service (`module.email_sending`): biffkittz.com onboarded for
+  Email Sending (Cloudflare adds and locks `cf-bounce` MX/SPF, DKIM and `_dmarc` records itself; the domain's MXroute
+  MX and SPF records are not ours, don't touch them), the recipients as verified destination addresses (each confirms
+  Cloudflare's link once), and an account-owned token that reaches the app as `Email--ApiToken`. That token holds
+  Email Sending Write, the narrowest group that can send (it also manages sending domains). The deploying Cloudflare
+  token also needs the Account permissions Email Sending, Email Routing Addresses and Account API Tokens, all at
+  Edit. Email Sending has no Zone form, although onboarding is a zone call; without it, onboarding answers 401 with
+  code 2036. ACS Email was rejected (retiring 2028; it needs the root SPF record). The module takes Cloudflare's
+  permission catalogue as a variable because mocks can't return lists: test choices in
+  `tests/email-sending.tftest.hcl`, and use `override_module` for it in root runs.
 - **The exposed port can't be 80 or 443:** the environment's HTTP ingress holds them ("exposedPort already in use").
   `cloudflare_ruleset.origin_port` (an Origin Rule) sends Cloudflare to 8443; the container still listens on 443.
   The Cloudflare token needs DNS, Zone Settings and Origin Rules edit.

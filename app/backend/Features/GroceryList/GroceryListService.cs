@@ -1,4 +1,5 @@
 using LoginApp.Api.Features.GroceryList.Contracts;
+using LoginApp.Api.Features.GroceryList.CostEstimates;
 using LoginApp.Api.Features.GroceryList.Images;
 using LoginApp.Api.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
@@ -20,6 +21,7 @@ namespace LoginApp.Api.Features.GroceryList;
 /// <param name="notifier">Broadcasts saved changes.</param>
 /// <param name="options">The list's limits.</param>
 /// <param name="imageOptions">Whether pictures can be drawn at all (an API key is configured).</param>
+/// <param name="costEstimateOptions">Whether the list's cost can be estimated, which the settings report.</param>
 /// <param name="imageSignal">Wakes the worker that draws pictures.</param>
 /// <param name="timeProvider">The clock for creation and modification times.</param>
 /// <param name="logger">The logger.</param>
@@ -29,6 +31,7 @@ internal sealed class GroceryListService(
     IGroceryListNotifier notifier,
     IOptions<GroceryListOptions> options,
     IOptions<ImageGenerationOptions> imageOptions,
+    IOptions<CostEstimateOptions> costEstimateOptions,
     GroceryImageSignal imageSignal,
     TimeProvider timeProvider,
     ILogger<GroceryListService> logger) : IGroceryListService
@@ -464,7 +467,11 @@ internal sealed class GroceryListService(
     }
 
     private GroceryListSettingsResponse ToResponse(GroceryListSettings settings) =>
-        new(settings.Version, settings.ImageGenerationEnabled, imageOptions.Value.IsConfigured);
+        new(
+            settings.Version,
+            settings.ImageGenerationEnabled,
+            imageOptions.Value.IsConfigured,
+            costEstimateOptions.Value.IsAvailable(imageOptions.Value));
 
     private Task<bool> UserExistsAsync(string userId, CancellationToken cancellationToken) =>
         dbContext.Users.AnyAsync(user => user.Id == userId, cancellationToken);

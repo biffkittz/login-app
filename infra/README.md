@@ -4,7 +4,9 @@ Terraform that builds everything Nibbles (the Login App's code base) needs to ru
 two independent instances of it, <https://app.biffkittz.com> and <https://grocery.biffkittz.com>, each with its own
 list and accounts. That includes the network, the Container Apps environment and a Container App per instance,
 PostgreSQL with a database per instance, Key Vault, the container registry, logging, and the Cloudflare DNS records,
-Origin Rules and Authenticated Origin Pulls. The instances share the image, the Key Vault and its secrets. The app
+Origin Rules and Authenticated Origin Pulls. It also sets up Cloudflare Email Service, so that every registration
+emails the people in `registration_notification_recipients` from notifications@biffkittz.com. The instances share the
+image, the Key Vault and its secrets. The app
 terminates TLS itself with the Cloudflare origin certificate, so there is no Application Gateway. Defaults target
 `eastus`, and every Azure resource is tagged `project:loginapp`.
 
@@ -25,6 +27,8 @@ flowchart LR
     acr[Container Registry<br/>Basic] -.->|image| app
     acr -.-> app2
   end
+  app -->|"registration email (HTTPS)"| mail[Cloudflare Email Service<br/>notifications@biffkittz.com]
+  app2 --> mail
 ```
 
 ## Quick start
@@ -62,7 +66,7 @@ operations (including [adding an instance](docs/DEPLOYMENT.md#adding-an-instance
 | --- | --- |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Request path, network and NSG rules, identities and RBAC, secrets, DNS, the reasoning behind each design decision, Well-Architected alignment, cost |
 | [docs/AUTHENTICATION.md](docs/AUTHENTICATION.md) | Signing in to Azure, required permissions, remote state access, CI with OIDC, the Cloudflare API token, and creating the origin certificate PFX |
-| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | First deployment step by step, verification, upgrades, secret and certificate rotation, teardown, troubleshooting |
+| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | First deployment step by step, verification, registration emails, upgrades, secret and certificate rotation, teardown, troubleshooting |
 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Tools and VS Code setup in WSL, the everyday check loop, tests, pre-commit, CI, conventions, provider upgrades |
 
 ## Layout
@@ -79,7 +83,8 @@ infra/
 │   ├── registry/            Azure Container Registry + AcrPull
 │   ├── key-vault/           Key Vault, secrets, TLS certificate, per-secret RBAC
 │   ├── database/            PostgreSQL flexible server (private access), database, private DNS
-│   └── container-app/       External environment, the app (TCP ingress), the database bootstrap job
+│   ├── container-app/       External environment, the app (TCP ingress), the database bootstrap job
+│   └── email-sending/       Cloudflare Email Service: sending domain, recipients, the app's email token
 ├── tests/                   `terraform test` suites with mocked providers (no credentials needed)
 ├── .tflint.hcl              Lint rules (Terraform "all" preset + azurerm ruleset)
 └── .terraform-docs.yml      Generates the reference below and in each module's README
@@ -92,7 +97,7 @@ Run these before every pull request. CI (`.github/workflows/infra.yml`) and the 
 ```bash
 terraform fmt -recursive -check
 terraform init -backend=false && terraform validate
-terraform test                       # 38 runs against mocked providers
+terraform test                       # 52 runs against mocked providers
 tflint --init && tflint --recursive
 terraform-docs .                     # refreshes the reference sections
 ```

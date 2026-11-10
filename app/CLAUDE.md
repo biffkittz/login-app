@@ -78,6 +78,13 @@ agreement:
   `x-goog-api-key` header), shrinks to a 128 px WebP (`GroceryImageThumbnails`, SkiaSharp) and finishes through
   `IGroceryListService.FinishImageAsync`, which bumps `Version` but not `LastModifiedAt`. Never send Gemini anything
   but the name, and never log names. `ImageGeneration:MaxImagesPerDay` caps spend (in memory).
+- Cost estimates (`Features/GroceryList/CostEstimates/`): `POST /api/grocery-list/cost-estimate` (the Estimate Cost
+  button). `CostEstimateService` reads the list, takes one of `CostEstimates:MaxEstimatesPerDay` (500, all users, in
+  memory) and asks `GeminiCostEstimator` (model `gemini-3.1-flash-lite`, `v1beta` `generateContent`, the
+  `ImageGeneration:ApiKey` key). The prompt carries the JSON Schema (`ResponseSchema`), which also goes in
+  `responseJsonSchema`. Send only number, name, quantity and brand (as JSON); match answers by item number, never
+  name; treat the answer as untrusted (`ReadEstimate`, `Clean`, the $10,000 cap) and add up the total in the app.
+  Tests use `CostEstimateApiFactory` with `FakeCostEstimator`; never call Gemini.
 - Picture URLs (`/api/grocery-list/images/{id}`) are immutable and the one API response that may be cached:
   `SecurityHeadersMiddleware` sets `no-store` only when an endpoint hasn't set `Cache-Control` itself.
 - The list's settings (`GroceryListSettings`, one row, versioned) are shared by everyone: `PATCH
@@ -88,6 +95,24 @@ agreement:
   one plus `FakeImageGenerator`, so no test calls the paid API. Tests sharing that factory use unique item names.
 - Publishing is per platform (`--use-current-runtime`, in the Dockerfile and `buildAndRunSite.sh`): portable output
   would carry SkiaSharp's native library for every OS (over 450 MB).
+
+## Registration emails (`Features/Auth/Notifications/`, `Infrastructure/Email/`)
+
+- `AuthService.RegisterAsync` calls `IRegistrationNotifier.NotifyRegistered` after the account is saved; it only
+  queues (`RegistrationNotificationQueue`, a bounded in-memory channel) and never throws. `RegistrationNotificationWorker`
+  sends one email at a time with `IEmailSender` (`CloudflareEmailSender`: Cloudflare Email Service REST API,
+  `POST accounts/{Email:AccountId}/email/sending/send`, bearer `Email:ApiToken`). Registration must never wait for or
+  fail because of the email; keep it that way.
+- Off unless `RegistrationNotifications:Recipients` has entries and `Email:AccountId`/`:ApiToken`/`:SenderAddress` are
+  all set (all-or-none is validated at startup). Terraform sets them in Azure; locally they are empty.
+- The email is plain text: site (`RegistrationNotifications:SiteUrl`), UTC time and the quoted display name with line
+  breaks and bidi controls replaced (`RegistrationEmail.Sanitize`). Never put the registrant's email address in it, and
+  never log addresses, names or email text (`RegistrationNotificationLog`, events 1100-1110).
+- Retries: transient failures twice (5 s, 10 s), refusals and client timeouts never (a timeout may have sent it).
+  `MaxPerDay` (50) caps a sign-up flood; the queue holds 100; at shutdown waiting emails get 10 s.
+- Tests never call Cloudflare: `NotificationApiFactory` swaps in `FakeEmailSender`; the worker's timing tests use
+  `FakeTimeProvider`. Source files must stay ASCII: write `\uXXXX` escapes for special characters in C# literals
+  (a literal U+2028 breaks a string).
 
 ## Origin TLS (`Infrastructure/Tls/`)
 
@@ -104,12 +129,16 @@ Set as Container App environment variables by Terraform (`infra/main.tf`), so co
 agree:
 
 - Key Vault secret names map to config keys: `ConnectionStrings--DefaultConnection`, `Jwt--SigningKey`,
-  `ImageGeneration--ApiKey` (only when Terraform gets `TF_VAR_gemini_api_key`); the
+  `ImageGeneration--ApiKey` (only when Terraform gets `TF_VAR_gemini_api_key`; it also powers cost estimates); the
   certificate's secret becomes `OriginTls__CertificatePfxBase64`.
 - The same image runs as two instances (app.biffkittz.com and grocery.biffkittz.com). The grocery instance gets its
   connection string from `grocery-db-connection-string` (its own database) and `Jwt__Audience=grocery.biffkittz.com`,
   so a session from one instance isn't accepted by the other. The app itself needs no instance awareness: keep
   per-instance differences in configuration.
+- Registration emails: `Email__AccountId`, `Email__SenderAddress` (`notifications@biffkittz.com`),
+  `RegistrationNotifications__Recipients__N` and each instance's `RegistrationNotifications__SiteUrl` are plain
+  variables; `Email__ApiToken` comes from Key Vault (`Email--ApiToken`, a Cloudflare account token for Email Sending).
+  All only when `registration_notification_recipients` is set.
 - `ASPNETCORE_URLS=https://+:443` overrides the image's `ASPNETCORE_HTTP_PORTS=80`.
 - `Network__InternalNetworks__100+` holds Cloudflare's IP ranges, so `X-Forwarded-For` is trusted and rate
   limiting sees the real client IP. Indices 0-8 come from `appsettings.json`; keep them below 100.

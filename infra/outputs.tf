@@ -90,11 +90,26 @@ output "virtual_network_name" {
   value       = module.networking.virtual_network_name
 }
 
+output "registration_notifications" {
+  description = "Who gets an email when someone registers, and the address it comes from, or null while registration_notification_recipients is empty. Each recipient shows \"verified\" once its owner has followed the link in Cloudflare's confirmation email (as of the last plan or apply; terraform apply -refresh-only updates it)."
+  value = local.registration_notifications_enabled ? {
+    sender           = local.notification_sender_address
+    recipients       = module.email_sending[0].recipients
+    cloudflare_token = module.email_sending[0].token_name
+    permission       = module.email_sending[0].permission_group
+  } : null
+}
+
 output "next_steps" {
   description = "Commands for the steps that follow an apply (run them from the repository root)."
-  value = {
-    build_image  = "az acr build --registry ${module.registry.name} --image ${var.app_image_repository}:<tag> --file app/Dockerfile app"
-    bootstrap_db = "az containerapp job start --name ${module.container_apps.db_bootstrap_job_name} --resource-group ${azurerm_resource_group.this.name}"
-    deploy_app   = "Set app_image_tag = \"<tag>\" in infra/environments/${var.environment}.tfvars, then terraform plan and apply."
-  }
+  value = merge(
+    {
+      build_image  = "az acr build --registry ${module.registry.name} --image ${var.app_image_repository}:<tag> --file app/Dockerfile app"
+      bootstrap_db = "az containerapp job start --name ${module.container_apps.db_bootstrap_job_name} --resource-group ${azurerm_resource_group.this.name}"
+      deploy_app   = "Set app_image_tag = \"<tag>\" in infra/environments/${var.environment}.tfvars, then terraform plan and apply."
+    },
+    local.registration_notifications_enabled ? {
+      confirm_recipients = "Each of ${join(", ", local.registration_notification_recipients)} gets an email from Cloudflare asking to verify the address: follow its link once. terraform output registration_notifications shows who has."
+    } : {},
+  )
 }

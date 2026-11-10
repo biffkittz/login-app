@@ -68,3 +68,15 @@ export function describeEditor(
 export function pictureNameKey(name: string): string {
   return name.trim().split(/\s+/).join(' ').toUpperCase()
 }
+
+const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' })
+
+/**
+ * Formats an amount of U.S. dollars the American way, whatever the browser's locale: the estimates are U.S. prices.
+ *
+ * @param amount - Dollars, e.g. `4.5`.
+ * @returns The amount with its dollar sign and cents, e.g. "$4.50" or "$1,234.00".
+ */
+export function formatUsd(amount: number): string {
+  return usd.format(amount)
+}

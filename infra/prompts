@@ -159,3 +159,10 @@ the existing PostgreSQL database server.
 In the current iteration of the grocery app, list items cannot be dragged from one grocery store group to another. You must implement a feature that allows
 the user to drag and drop grocery items into different store groups. When the item is dropped into another group, the item will be assigned the new store, e.g.
 Whole Foods.
+
+I want the app to send an email from `notifications@biffkittz.com` every time someone registers a new user. I want the email sent to `benjamin.e.burner@gmail.com`,
+and I want the email to state something like `[grocery app] new registration detected`. The implementation should make full use of Terraform to automate provisioning as much as possible.
+
+You must implement a new app feature that adds a button to the app called `Estimate Cost`. When the button is clicked, all list items are serialized into a prompt that asks the AI
+to estimate the cost of the grocery list in U.S. dollars. The prompt should ask for the average cost across all of America so as to smooth out regional fluctuations in grocery prices.
+The app should allow 500 clicks per day to prevent model API abuse. The app should use the Gemini 3.1 Flash Lite model to evaluate prompts.

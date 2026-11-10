@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Security.Claims;
 using LoginApp.Api.Features.Auth.Contracts;
+using LoginApp.Api.Features.Auth.Notifications;
 using LoginApp.Api.Infrastructure.Data;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.IdentityModel.JsonWebTokens;
@@ -22,11 +23,13 @@ namespace LoginApp.Api.Features.Auth;
 /// <param name="userManager">Identity's user API.</param>
 /// <param name="signInManager">Identity's sign-in API, used for password checks with lockout.</param>
 /// <param name="tokenIssuer">Issues the access token for a successful sign-in.</param>
+/// <param name="registrationNotifier">Emails the people who want to hear about new accounts.</param>
 /// <param name="logger">The logger.</param>
 internal sealed class AuthService(
     UserManager<ApplicationUser> userManager,
     SignInManager<ApplicationUser> signInManager,
     IAccessTokenIssuer tokenIssuer,
+    IRegistrationNotifier registrationNotifier,
     ILogger<AuthService> logger) : IAuthService
 {
     // Error keys match the request property names, the same keys the validation filter uses for its errors.
@@ -54,9 +57,10 @@ internal sealed class AuthService(
             return RegistrationResult.Failure(GroupErrorsByField(result.Errors));
         }
 
-        // No cancellation check from here on: the account is saved, so the remaining work (logging it and
-        // signing a token) must finish even if the client has gone.
+        // No cancellation check from here on: the account is saved, so the remaining work (logging it, queuing the
+        // email about it and signing a token) must finish even if the client has gone. Queuing returns at once.
         AuthLog.UserRegistered(logger, user.Id);
+        registrationNotifier.NotifyRegistered(user.DisplayName);
         return RegistrationResult.Success(CreateSession(user));
     }
 

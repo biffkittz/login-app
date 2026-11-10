@@ -8,4 +8,10 @@ namespace LoginApp.Api.Features.GroceryList.Contracts;
 /// <param name="ImageGenerationEnabled">Whether new and renamed items get an AI-drawn picture.</param>
 /// <param name="ImageGenerationAvailable">Whether the server can draw pictures at all: it has a Gemini API key. When
 /// it can't, <paramref name="ImageGenerationEnabled"/> is kept but has no effect.</param>
-public sealed record GroceryListSettingsResponse(int Version, bool ImageGenerationEnabled, bool ImageGenerationAvailable);
+/// <param name="CostEstimateAvailable">Whether the server can estimate the list's cost: it has a Gemini API key and
+/// estimates aren't turned off (<c>CostEstimates:MaxEstimatesPerDay</c> is above 0).</param>
+public sealed record GroceryListSettingsResponse(
+    int Version,
+    bool ImageGenerationEnabled,
+    bool ImageGenerationAvailable,
+    bool CostEstimateAvailable);

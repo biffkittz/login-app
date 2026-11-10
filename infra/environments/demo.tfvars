@@ -21,7 +21,7 @@ app_hostname  = "app.biffkittz.com"
 
 # Image tag of the app to run, e.g. the short commit SHA pushed with `az acr build`. Leave it commented out for the
 # first apply (no image exists yet). Once set, keep it set: removing it again would delete the Container App.
-app_image_tag = "v6"
+app_image_tag = "v7"
 
 # One replica: this is a demonstration environment.
 app_min_replicas = 1
@@ -38,6 +38,11 @@ additional_app_instances = {
     database_name = "grocery"
   }
 }
+
+# Whenever someone registers on either instance, this address gets an email from notifications@biffkittz.com
+# ("[grocery app] new registration detected"), sent through Cloudflare Email Service. Cloudflare emails it a
+# confirmation link after the first apply that adds it: follow it once (docs/DEPLOYMENT.md, "Registration emails").
+registration_notification_recipients = ["benjamin.e.burner@gmail.com"]
 
 # Smallest PostgreSQL size available.
 postgresql_sku_name = "B_Standard_B1ms"

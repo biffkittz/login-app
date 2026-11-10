@@ -1,9 +1,11 @@
 using System.Security.Claims;
 using LoginApp.Api.Features.Auth;
 using LoginApp.Api.Features.GroceryList.Contracts;
+using LoginApp.Api.Features.GroceryList.CostEstimates;
 using LoginApp.Api.Features.GroceryList.Images;
 using Microsoft.AspNetCore.Http.Connections;
 using Microsoft.AspNetCore.Http.HttpResults;
+using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.JsonWebTokens;
 using Microsoft.Net.Http.Headers;
 
@@ -57,6 +59,13 @@ internal static class GroceryListEndpoints
             .RequireRateLimiting(GroceryListRateLimiting.PolicyName)
             .WithName("UpdateGroceryListSettings")
             .WithSummary("Changes the list settings present in the body, for everyone.");
+
+        // POST, not GET: every call is a paid request to Gemini, counted against the day's allowance, and its answer
+        // must not be cached or prefetched. The per-user limit stops one client from spending the allowance in a burst.
+        list.MapPost("/cost-estimate", EstimateCostAsync)
+            .RequireRateLimiting(GroceryListRateLimiting.PolicyName)
+            .WithName("EstimateGroceryListCost")
+            .WithSummary("Asks Gemini what the whole list costs at average U.S. prices. Limited to CostEstimates:MaxEstimatesPerDay a day.");
 
         RouteGroupBuilder items = list.MapGroup("/items").RequireRateLimiting(GroceryListRateLimiting.PolicyName);
 
@@ -138,6 +147,41 @@ internal static class GroceryListEndpoints
                 StatusCodes.Status409Conflict,
                 "Someone changed the settings at the same moment. Please try again."),
             _ => ToProblem(result.Status, authCookie, response),
+        };
+    }
+
+    private static async Task<Results<Ok<CostEstimateResponse>, ProblemHttpResult>> EstimateCostAsync(
+        ClaimsPrincipal principal,
+        CostEstimateService costEstimates,
+        IOptions<CostEstimateOptions> options,
+        AuthCookieManager authCookie,
+        HttpResponse response,
+        CancellationToken cancellationToken)
+    {
+        if (UserIdOf(principal) is not string userId)
+        {
+            return SessionEnded(authCookie, response);
+        }
+
+        CostEstimateResult result = await costEstimates.EstimateAsync(userId, cancellationToken);
+        return result switch
+        {
+            { Succeeded: true } => TypedResults.Ok(result.Estimate),
+            { Status: CostEstimateStatus.NotAvailable } => Problem(
+                StatusCodes.Status503ServiceUnavailable,
+                "Cost estimates aren't set up on this server: it needs a Gemini API key."),
+            { Status: CostEstimateStatus.EmptyList } => Problem(
+                StatusCodes.Status409Conflict,
+                "The list is empty. Add a few items first."),
+            { Status: CostEstimateStatus.DailyLimitReached } => Problem(
+                StatusCodes.Status429TooManyRequests,
+                $"The app has made its {options.Value.MaxEstimatesPerDay} cost estimates for today. Please try again tomorrow."),
+            { Status: CostEstimateStatus.ModelBusy } => Problem(
+                StatusCodes.Status503ServiceUnavailable,
+                "The AI is busy right now. Please try again in a minute."),
+            _ => Problem(
+                StatusCodes.Status502BadGateway,
+                "We couldn't get an estimate this time. Please try again."),
         };
     }
 

@@ -153,7 +153,7 @@ variable "tls_certificate_pfx_password" {
 }
 
 variable "gemini_api_key" {
-  description = "Google Gemini API key with which the app draws pictures of grocery items. Gemini's image models have no free tier, so the key's Google Cloud project needs billing. Null leaves pictures unavailable (the app's switch for them says so). Pass it as TF_VAR_gemini_api_key; never put it in a tfvars file."
+  description = "Google Gemini API key with which the app draws pictures of grocery items and estimates what the list costs. Gemini's image models have no free tier, so the key's Google Cloud project needs billing. Null leaves pictures and cost estimates unavailable (the app says so). Pass it as TF_VAR_gemini_api_key; never put it in a tfvars file."
   type        = string
   default     = null
   sensitive   = true
@@ -167,6 +167,50 @@ variable "gemini_api_key" {
 # ---------------------------------------------------------------------------------------------------------------------
 # Container registry and the Container App
 # ---------------------------------------------------------------------------------------------------------------------
+
+variable "registration_notification_recipients" {
+  description = "Email addresses that get an email whenever someone registers an account on any instance of the app, sent through Cloudflare Email Service from notification_sender_username@dns_zone_name. Empty (the default) turns the emails off and leaves Cloudflare Email Service unconfigured. Cloudflare emails each address a confirmation link once (docs/DEPLOYMENT.md); sending to confirmed addresses is free on every Cloudflare plan."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition = alltrue([
+      for address in var.registration_notification_recipients :
+      can(regex("^[^@\\s\"<>,;]+@[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)+$", address)) && length(address) <= 254
+    ])
+    error_message = "Each of registration_notification_recipients must be a plain email address (name@example.com), at most 254 characters."
+  }
+
+  validation {
+    condition = (
+      length(var.registration_notification_recipients) <= 50 &&
+      length(distinct([for address in var.registration_notification_recipients : lower(address)])) == length(var.registration_notification_recipients)
+    )
+    error_message = "registration_notification_recipients must not repeat an address, and holds at most 50: Cloudflare's limit for one email."
+  }
+}
+
+variable "notification_sender_username" {
+  description = "The part before the @ of the address the app sends its emails from, in dns_zone_name: \"notifications\" sends from notifications@biffkittz.com. Nobody reads replies: Cloudflare Email Service only sends from it."
+  type        = string
+  default     = "notifications"
+
+  validation {
+    condition     = can(regex("^[a-z0-9]([a-z0-9._-]{0,62}[a-z0-9])?$", var.notification_sender_username)) && !strcontains(var.notification_sender_username, "..")
+    error_message = "notification_sender_username must be 1-64 lowercase letters, digits, dots, hyphens or underscores, start and end with a letter or digit, and have no two dots in a row."
+  }
+}
+
+variable "cloudflare_email_sending_permission_groups" {
+  description = "Names of Cloudflare API token permission groups that allow sending email, narrowest first. The app's own sending token gets the first one the Cloudflare account offers. Change this only if Cloudflare renames them; the plan then fails and lists the email sending groups it found."
+  type        = list(string)
+  default     = ["Email Sending Send", "Email Sending Write"]
+
+  validation {
+    condition     = length(var.cloudflare_email_sending_permission_groups) > 0 && alltrue([for name in var.cloudflare_email_sending_permission_groups : trimspace(name) != ""])
+    error_message = "cloudflare_email_sending_permission_groups must list at least one permission group name."
+  }
+}
 
 variable "container_registry_sku" {
   description = "Azure Container Registry SKU."

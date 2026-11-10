@@ -10,6 +10,7 @@ const PICTURES_ON: GroceryListSettings = {
   version: 1,
   imageGenerationEnabled: true,
   imageGenerationAvailable: true,
+  costEstimateAvailable: true,
 }
 
 function mountSettings(settings: GroceryListSettings | null, error: string | null = null) {
