@@ -165,4 +165,5 @@ and I want the email to state something like `[grocery app] new registration det
 
 You must implement a new app feature that adds a button to the app called `Estimate Cost`. When the button is clicked, all list items are serialized into a prompt that asks the AI
 to estimate the cost of the grocery list in U.S. dollars. The prompt should ask for the average cost across all of America so as to smooth out regional fluctuations in grocery prices.
+The app will read the response and display the answer to the user. The prompt should include a schema that defines the structure of the response object, so that it can be parsed by the app.
 The app should allow 500 clicks per day to prevent model API abuse. The app should use the Gemini 3.1 Flash Lite model to evaluate prompts.
