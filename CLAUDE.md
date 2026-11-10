@@ -46,6 +46,8 @@ independent instance of the same image runs at https://grocery.biffkittz.com, wi
 - GitHub Actions signs in to Azure with OIDC only, one identity per GitHub environment (`infra-pr`, `demo-plan`,
   `demo`, `registry`); never add stored credentials or repository-level secrets. Pin actions to full commit SHAs and
   downloaded tools to checksums; pass untrusted values to scripts through `env`, never `${{ }}` inside `run`.
+  Workflows run repository scripts as `bash .github/scripts/<name>.sh`, so a lost executable bit can't break CI
+  (a file written by a tool or edited on Windows is committed as 644).
 - The repository is public, so are its logs: never print Terraform plan values, outputs or secrets.
 - Releases are a pull request that sets `app_image_tag` (opened by the app workflow); applies only run from `main`
   after approval in `demo`. Don't add a path that deploys around Terraform.
