@@ -28,6 +28,17 @@ variable "administrator_principal_id" {
   type        = string
 }
 
+variable "additional_administrator_principal_ids" {
+  description = "More principals that get the same roles as administrator_principal_id, by a stable label (the map key), e.g. { github_deploy = \"<object ID>\" }: everyone who runs Terraform against this vault."
+  type        = map(string)
+  default     = {}
+
+  validation {
+    condition     = !contains([for id in values(var.additional_administrator_principal_ids) : lower(id)], lower(var.administrator_principal_id))
+    error_message = "additional_administrator_principal_ids must not repeat administrator_principal_id: Azure refuses a second identical role assignment."
+  }
+}
+
 variable "purge_protection_enabled" {
   description = "Whether deleted vaults and objects can't be purged before the retention period ends. Can't be turned off once on."
   type        = bool

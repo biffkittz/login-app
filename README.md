@@ -69,6 +69,7 @@ cd app/frontend && npm run dev                                   # SPA on http:/
 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Setting up WSL, VS Code, extensions and tooling; running, debugging and testing locally; conventions; troubleshooting |
 | [docs/BUILD_AND_DEPLOY.md](docs/BUILD_AND_DEPLOY.md) | `buildAndRunSite.sh`, the container image, and deployment to Azure Container Apps with Key Vault and PostgreSQL |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | How the pieces fit together: authentication, the grocery list and its realtime updates, and the security decisions behind them |
+| [docs/CI_CD.md](docs/CI_CD.md) | GitHub Actions: checks on every pull request, approval-gated image publishing and Terraform applies, the security model, and how to set it up (identities, environments, secrets) |
 | [infra/README.md](infra/README.md) | The Terraform project for Azure and Cloudflare, with its own docs: [architecture](infra/docs/ARCHITECTURE.md), [authentication](infra/docs/AUTHENTICATION.md), [deployment](infra/docs/DEPLOYMENT.md), [development setup](infra/docs/DEVELOPMENT.md) |
 
 ## Repository layout
@@ -91,7 +92,7 @@ login-app/
 │   ├── backend.tests/            xUnit v3 unit and in-memory integration tests
 │   └── frontend/                 Vue 3 + TypeScript SPA
 ├── infra/                        Terraform: network, Container Apps, PostgreSQL, Key Vault, Cloudflare DNS
-├── .github/workflows/infra.yml   CI for infra/: fmt, validate, mocked tests, lint, docs
+├── .github/                      CI/CD: workflows (app, infra, workflow linting), their scripts and actions, Dependabot
 └── .pre-commit-config.yaml       Git hooks for infra/ (fmt, validate, lint, docs, ShellCheck)
 ```
 

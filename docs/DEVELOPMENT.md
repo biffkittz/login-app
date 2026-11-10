@@ -254,8 +254,9 @@ Vite dev server also exposes Vue DevTools in-page (`vite-plugin-vue-devtools`): 
 
 ## 8. Tests and quality checks
 
-Run these before pushing. Only `infra/` has CI so far, so nothing else runs them for you. Run `dotnet` commands
-from inside the repository so the SDK picks up `global.json`.
+Run these before pushing; the app workflow (`.github/workflows/app.yml`, see [CI_CD.md](CI_CD.md)) runs the same
+checks on every pull request, plus an image build and Trivy scan. Run `dotnet` commands from inside the repository so
+the SDK picks up `global.json`.
 
 ```bash
 # Backend

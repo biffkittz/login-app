@@ -71,8 +71,9 @@ The `key-vault` module grants the identity running Terraform two roles:
 The identity is found with `data.azurerm_client_config.current.object_id`. The module then waits 90 seconds for the
 assignment to propagate before creating secrets.
 
-If someone else runs a later apply, Terraform adds the same roles for them. It also replaces the previous runner's
-assignments, because the principal ID changed. For teams, prefer one CI identity that does all applies.
+If someone else runs a later apply, Terraform gives the roles to them instead, because the principal ID changed. Once
+more than one principal runs Terraform (you and CI), name them: `key_vault_administrator_object_id` for the main
+one and `key_vault_additional_administrators` for the rest, so every one keeps the roles ([docs/CI_CD.md](../../docs/CI_CD.md#2-let-the-deploy-identity-manage-key-vaults-contents)).
 
 ### Remote state
 
@@ -121,32 +122,18 @@ who may hold that password.
 
 ### CI/CD with OpenID Connect
 
-The included workflow (`.github/workflows/infra.yml`) runs only credential-free checks: formatting, validation,
-linting and mocked tests. To plan or apply from GitHub Actions, use **OIDC workload identity federation**, so GitHub
-never stores an Azure secret.
+GitHub Actions plans and applies with **OIDC workload identity federation**: no Azure secret is stored in GitHub. Three
+user-assigned managed identities in `rg-terraform-state`, created by
+[`scripts/setup-github-oidc.sh`](../scripts/setup-github-oidc.sh), each trust one or two GitHub environments:
 
-1. Create an identity for the pipeline and trust GitHub's token issuer for this repository's `demo` environment:
+| Identity | Environments | Roles |
+| --- | --- | --- |
+| `id-loginapp-github-plan` | `infra-pr` | Reader on the subscription; Storage Blob Data Reader on the state container |
+| `id-loginapp-github-deploy` | `demo-plan`, `demo` | Contributor and constrained Role Based Access Control Administrator on the subscription; Storage Blob Data Contributor on the state container; Key Vault administrator through `key_vault_additional_administrators` |
+| `id-loginapp-github-push` | `registry` | AcrPush and Reader on the registry |
 
-   ```bash
-   az identity create --name id-loginapp-github --resource-group rg-terraform-state --location eastus
-   az identity federated-credential create --name github-demo \
-     --identity-name id-loginapp-github --resource-group rg-terraform-state \
-     --issuer https://token.actions.githubusercontent.com \
-     --subject repo:biffkittz/login-app:environment:demo \
-     --audiences api://AzureADTokenExchange
-   ```
-
-2. Give it the same permissions a person needs: Owner (or Contributor + Role Based Access Control Administrator) on
-   the subscription, and Storage Blob Data Contributor on the state container.
-3. In the GitHub repository, create an environment `demo` (add required reviewers for applies). Add these variables:
-   - `AZURE_CLIENT_ID`: the identity's client ID;
-   - `AZURE_TENANT_ID`;
-   - `AZURE_SUBSCRIPTION_ID`.
-
-   Add these secrets: `CLOUDFLARE_API_TOKEN`, `TLS_CERTIFICATE_PFX_BASE64` and `TLS_CERTIFICATE_PFX_PASSWORD`.
-4. In the job, request `permissions: id-token: write` and set `ARM_USE_OIDC=true`, `ARM_CLIENT_ID`, `ARM_TENANT_ID`
-   and `ARM_SUBSCRIPTION_ID`. Add `use_oidc = true` and `use_azuread_auth = true` to the backend (or pass them with
-   `-backend-config`). Write the PFX to a temporary file and point `TF_VAR_tls_certificate_pfx_path` at it.
+CI passes `use_azuread_auth` and `use_oidc` to the backend with `-backend-config`, so `backend.tf` stays as it is for
+local runs. The setup, the GitHub environments and their secrets are in [docs/CI_CD.md](../../docs/CI_CD.md).
 
 ## Cloudflare
 

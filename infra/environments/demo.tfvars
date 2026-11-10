@@ -46,3 +46,10 @@ registration_notification_recipients = ["benjamin.e.burner@gmail.com"]
 
 # Smallest PostgreSQL size available.
 postgresql_sku_name = "B_Standard_B1ms"
+
+# CI/CD (docs/CI_CD.md): you and GitHub Actions both run Terraform, and both need to read the vault's contents back.
+# Fill these in from what infra/scripts/setup-github-oidc.sh prints, uncomment them and apply once from your machine
+# before CI's first plan. Object IDs aren't secrets. Without them, each plan moves the vault's administrator role to
+# whoever runs it.
+key_vault_administrator_object_id   = "e01611a8-1e53-4313-9ca1-8c1dd450ff8f"
+key_vault_additional_administrators = { github_deploy = "a81d64db-6f59-44c4-be91-a7c50764d9db" }

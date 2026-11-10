@@ -1,0 +1,47 @@
+# Builds the app's container image from app/Dockerfile into the runner's local Docker, then scans that very image
+# with Trivy, failing on HIGH or CRITICAL vulnerabilities that have a fix, and on secrets baked into a layer. Pushing,
+# if any, happens afterwards in the calling job, so what reaches the registry is exactly what was scanned.
+name: build and scan the app image
+description: Build app/Dockerfile for linux/amd64 and scan the result with Trivy.
+
+inputs:
+  image:
+    description: Full reference to tag the image with, e.g. myregistry.azurecr.io/login-app:0123456789ab.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Build the image
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+        REVISION: ${{ github.sha }}
+        SOURCE: ${{ github.server_url }}/${{ github.repository }}
+      # --pull: always start from the newest patch of the base images, so security fixes arrive with every build.
+      run: |
+        docker build --pull --platform linux/amd64 \
+          --label "org.opencontainers.image.source=$SOURCE" \
+          --label "org.opencontainers.image.revision=$REVISION" \
+          --label "org.opencontainers.image.created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+          --tag "$IMAGE" app
+
+    - name: Install Trivy (checksum-verified)
+      shell: bash
+      run: |
+        curl -sSfLo "$RUNNER_TEMP/trivy.tgz" \
+          https://github.com/aquasecurity/trivy/releases/download/v0.76.1/trivy_0.76.1_Linux-64bit.tar.gz
+        echo "c7cbe3137fb8a48a17574bede3dd6beb16742d1e9772929940fc90082c39d9c0  $RUNNER_TEMP/trivy.tgz" | sha256sum --check --strict
+        tar -xzf "$RUNNER_TEMP/trivy.tgz" -C "$RUNNER_TEMP" trivy
+
+    - name: Scan the image
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+      # Unfixed vulnerabilities are reported by Dependabot and the base image's own updates; failing on them would
+      # block every release without anything to do about it.
+      run: |
+        "$RUNNER_TEMP/trivy" image --no-progress --scanners vuln,secret \
+          --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 \
+          --db-repository ghcr.io/aquasecurity/trivy-db:2,public.ecr.aws/aquasecurity/trivy-db:2 \
+          "$IMAGE"

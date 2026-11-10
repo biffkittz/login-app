@@ -167,3 +167,8 @@ You must implement a new app feature that adds a button to the app called `Estim
 to estimate the cost of the grocery list in U.S. dollars. The prompt should ask for the average cost across all of America so as to smooth out regional fluctuations in grocery prices.
 The app will read the response and display the answer to the user. The prompt should include a schema that defines the structure of the response object, so that it can be parsed by the app.
 The app should allow 500 clicks per day to prevent model API abuse. The app should use the Gemini 3.1 Flash Lite model to evaluate prompts.
+
+You must now prepare this repo for GitHub CI/CD. You are an expert DevOps Engineer with experience in Site Reliability Engineering as well.
+You will provide detailed instructions on how to set up CI/CD in GitHub for this repo, including any needed GitHub secrets. When app code changes, GitHub should present options
+to build and tag the new app image, add the new image to Azure Container Registry, and deploy the updated image via terraform apply. When infra code changes,
+GitHub will present options to run a terraform plan and a terraform apply. You must follow industry best practices. Security is, as always, of utmost concern.

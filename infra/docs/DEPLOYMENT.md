@@ -234,7 +234,7 @@ The old token is deleted in the same apply, so an email sent between the apply a
 
 | Task | How |
 | --- | --- |
-| **Release a new version** | Phase 2 with the new commit's tag, then set `app_image_tag` to it and plan/apply. The single revision is replaced; readiness probes keep traffic on the old replica until the new one is ready |
+| **Release a new version** | Through CI: merge the app change, approve `registry`, merge the deployment pull request, approve `demo` ([docs/CI_CD.md](../../docs/CI_CD.md)). By hand: phase 2 with the new commit's tag, then set `app_image_tag` to it and plan/apply. The single revision is replaced; readiness probes keep traffic on the old replica until the new one is ready |
 | **Roll back** | Set `app_image_tag` back to the previous tag and apply. Schema changes only move forward (see the app's [BUILD_AND_DEPLOY.md](../../docs/BUILD_AND_DEPLOY.md#4-database-migrations-in-azure)) |
 | **Rotate the app's database password** | See [Rotating the app's database password](#rotating-the-apps-database-password) |
 | **Rotate the PostgreSQL administrator password** | `terraform apply -var-file=environments/demo.tfvars -replace=random_password.postgresql_admin`. Terraform updates the server and Key Vault together |

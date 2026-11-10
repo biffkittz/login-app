@@ -7,8 +7,8 @@ PostgreSQL with a database per instance, Key Vault, the container registry, logg
 Origin Rules and Authenticated Origin Pulls. It also sets up Cloudflare Email Service, so that every registration
 emails the people in `registration_notification_recipients` from notifications@biffkittz.com. The instances share the
 image, the Key Vault and its secrets. The app terminates TLS itself with the Cloudflare origin certificate, so there
-is no Application Gateway. The variable default is `eastus`; the demo deploys to `centralus` (`environments/demo.tfvars`).
-Every Azure resource is tagged `project:loginapp`.
+is no Application Gateway. The variable default is `eastus`; the demo deploys to `centralus`
+(`environments/demo.tfvars`). Every Azure resource is tagged `project:loginapp`.
 
 ```mermaid
 flowchart LR
@@ -92,7 +92,8 @@ infra/
 
 ## Checks
 
-Run these before every pull request. CI (`.github/workflows/infra.yml`) and the pre-commit hooks run the same set.
+Run these before every pull request. CI (`.github/workflows/infra.yml`) and the pre-commit hooks run the same set;
+CI also plans every pull request and applies `main` after approval ([docs/CI_CD.md](../docs/CI_CD.md)).
 
 ```bash
 terraform fmt -recursive -check

@@ -288,8 +288,11 @@ module "key_vault" {
   location                   = azurerm_resource_group.this.location
   resource_group_name        = azurerm_resource_group.this.name
   tenant_id                  = data.azurerm_client_config.current.tenant_id
-  administrator_principal_id = data.azurerm_client_config.current.object_id
-  purge_protection_enabled   = var.key_vault_purge_protection_enabled
+  administrator_principal_id = coalesce(var.key_vault_administrator_object_id, data.azurerm_client_config.current.object_id)
+  # You and the GitHub deploy identity both run Terraform once CI/CD is set up (docs/CI_CD.md). Both need to read the
+  # vault's contents back, so the second gets the same roles here instead of the role moving with whoever ran last.
+  additional_administrator_principal_ids = var.key_vault_additional_administrators
+  purge_protection_enabled               = var.key_vault_purge_protection_enabled
 
   firewall_enabled   = var.key_vault_firewall_enabled
   allowed_ip_ranges  = var.key_vault_allowed_ip_ranges

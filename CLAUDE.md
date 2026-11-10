@@ -29,7 +29,7 @@ independent instance of the same image runs at https://grocery.biffkittz.com, wi
 - HTTPS for every request; validate all input; log errors without sensitive data; follow OWASP guidance.
 - In Azure, Kestrel serves HTTPS on 443 with the Cloudflare origin certificate and accepts only requests carrying
   Cloudflare's Authenticated Origin Pulls client certificate (health endpoints excepted). Locally it serves HTTP.
-- SignalR runs in-process, never Azure SignalR Service (a requirement), so the app is exactly one instance. Writes go
+- SignalR runs in-process, never Azure SignalR Service (a requirement), so each instance runs exactly one replica. Writes go
   through the REST API; the hub only pushes.
 - AI pictures of items come from the Gemini API (`ImageGeneration:ApiKey`; a secret like the others). Only item names
   are sent, and pictures are stored as small WebPs (a few KB). The Estimate Cost button uses the same key with Gemini
@@ -40,6 +40,15 @@ independent instance of the same image runs at https://grocery.biffkittz.com, wi
   from Key Vault (`Email:ApiToken`). The email names the site, time and display name, never the registrant's email
   address.
   Registering never waits for or fails because of it. Tests never send email; don't add ones that do.
+
+## CI/CD (`.github/`, `docs/CI_CD.md`)
+
+- GitHub Actions signs in to Azure with OIDC only, one identity per GitHub environment (`infra-pr`, `demo-plan`,
+  `demo`, `registry`); never add stored credentials or repository-level secrets. Pin actions to full commit SHAs and
+  downloaded tools to checksums; pass untrusted values to scripts through `env`, never `${{ }}` inside `run`.
+- The repository is public, so are its logs: never print Terraform plan values, outputs or secrets.
+- Releases are a pull request that sets `app_image_tag` (opened by the app workflow); applies only run from `main`
+  after approval in `demo`. Don't add a path that deploys around Terraform.
 
 ## Documentation
 

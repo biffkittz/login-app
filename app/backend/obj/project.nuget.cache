@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "dgSpecHash": "iBCpzOgo9F4=",
+  "dgSpecHash": "9+eLrhT4eVE=",
   "success": true,
   "projectFilePath": "/home/biffkittz/login-app/app/backend/LoginApp.Api.csproj",
   "expectedPackageFiles": [
@@ -56,8 +56,7 @@
     "/home/biffkittz/.nuget/packages/system.composition.typedparts/9.0.0/system.composition.typedparts.9.0.0.nupkg.sha512",
     "/home/biffkittz/.nuget/packages/system.identitymodel.tokens.jwt/8.19.2/system.identitymodel.tokens.jwt.8.19.2.nupkg.sha512",
     "/home/biffkittz/.nuget/packages/system.memory.data/10.0.9/system.memory.data.10.0.9.nupkg.sha512",
-    "/home/biffkittz/.nuget/packages/system.security.cryptography.protecteddata/4.5.0/system.security.cryptography.protecteddata.4.5.0.nupkg.sha512",
-    "/home/biffkittz/.nuget/packages/microsoft.netcore.app.host.linux-x64/10.0.14/microsoft.netcore.app.host.linux-x64.10.0.14.nupkg.sha512"
+    "/home/biffkittz/.nuget/packages/system.security.cryptography.protecteddata/4.5.0/system.security.cryptography.protecteddata.4.5.0.nupkg.sha512"
   ],
   "logs": []
 }

@@ -257,6 +257,66 @@ run "key_vault_uses_rbac_with_per_secret_access" {
     condition     = toset(keys(azurerm_role_assignment.administrator)) == toset(["Key Vault Secrets Officer", "Key Vault Certificates Officer"])
     error_message = "The deployer must be able to manage secrets and certificates (but not keys)."
   }
+
+  assert {
+    condition     = length(azurerm_role_assignment.additional_administrator) == 0
+    error_message = "Without additional administrators, only the deployer manages the vault's contents."
+  }
+}
+
+run "key_vault_additional_administrators_get_the_same_roles" {
+  command = apply
+
+  module {
+    source = "./modules/key-vault"
+  }
+
+  variables {
+    name                                   = "kv-loginapptest-abc123"
+    tenant_id                              = "11111111-1111-1111-1111-111111111111"
+    administrator_principal_id             = "22222222-2222-2222-2222-222222222222"
+    additional_administrator_principal_ids = { github_deploy = "66666666-6666-6666-6666-666666666666" }
+    secret_names                           = { connection = "ConnectionStrings--DefaultConnection" }
+    secret_values                          = { connection = "Host=example" }
+    certificate_name                       = "app-origin"
+    certificate_pfx_base64                 = "cGxhY2Vob2xkZXI="
+    log_analytics_workspace_id             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.OperationalInsights/workspaces/log-test"
+  }
+
+  assert {
+    condition = (
+      toset(keys(azurerm_role_assignment.additional_administrator)) == toset(["github_deploy: Key Vault Secrets Officer", "github_deploy: Key Vault Certificates Officer"]) &&
+      alltrue([for assignment in azurerm_role_assignment.additional_administrator : assignment.principal_id == "66666666-6666-6666-6666-666666666666" && assignment.scope == azurerm_key_vault.this.id])
+    )
+    error_message = "Each additional administrator must get both administrator roles on the vault."
+  }
+
+  assert {
+    condition     = toset(keys(azurerm_role_assignment.administrator)) == toset(["Key Vault Secrets Officer", "Key Vault Certificates Officer"])
+    error_message = "The deployer's own assignments must keep their addresses."
+  }
+}
+
+run "key_vault_rejects_the_deployer_listed_again_as_an_additional_administrator" {
+  command = plan
+
+  module {
+    source = "./modules/key-vault"
+  }
+
+  variables {
+    name                                   = "kv-loginapptest-abc123"
+    tenant_id                              = "11111111-1111-1111-1111-111111111111"
+    administrator_principal_id             = "22222222-2222-2222-2222-222222222222"
+    additional_administrator_principal_ids = { me = "22222222-2222-2222-2222-222222222222" }
+    secret_names                           = {}
+    secret_values                          = {}
+    certificate_name                       = "app-origin"
+    certificate_pfx_base64                 = "cGxhY2Vob2xkZXI="
+    log_analytics_workspace_id             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.OperationalInsights/workspaces/log-test"
+  }
+
+  expect_failures = [var.additional_administrator_principal_ids]
 }
 
 run "key_vault_firewall_denies_by_default_when_enabled" {

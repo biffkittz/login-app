@@ -79,6 +79,9 @@ Content-Type: application/json
   "imageGenerationEnabled": false
 }
 
+### Estimate what the whole list costs at average U.S. prices (asks Gemini; counts against the daily allowance)
+POST {{baseUrl}}/api/grocery-list/cost-estimate
+
 ### Liveness probe (no dependencies)
 GET {{baseUrl}}/health/live
 

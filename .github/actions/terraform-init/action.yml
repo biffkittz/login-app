@@ -1,0 +1,29 @@
+# Installs the pinned Terraform and initializes infra/ against the remote state, signing in with the job's GitHub
+# OIDC token (Microsoft Entra ID): no storage account key or client secret exists anywhere in CI. backend.tf stays as
+# it is for people running Terraform locally; CI passes the Entra ID settings as backend configuration.
+#
+# The calling job sets ARM_CLIENT_ID, ARM_TENANT_ID, ARM_SUBSCRIPTION_ID and ARM_USE_OIDC=true (which the provider
+# reads too) and has `permissions: id-token: write`.
+name: terraform init
+description: Install Terraform and initialize infra/ with the remote state, authenticating through OIDC.
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Terraform
+      uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+      with:
+        terraform_version: 1.17.1
+        terraform_wrapper: false
+
+    - name: terraform init
+      shell: bash
+      working-directory: infra
+      env:
+        TF_IN_AUTOMATION: "true"
+      # -lockfile=readonly: CI installs exactly the providers .terraform.lock.hcl names, with the checksums it
+      # records, and fails rather than update the lock file.
+      run: >-
+        terraform init -input=false -no-color -lockfile=readonly
+        -backend-config=use_azuread_auth=true
+        -backend-config=use_oidc=true

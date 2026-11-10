@@ -1,7 +1,7 @@
 # infra/: Terraform for Azure and Cloudflare
 
-Provisions Nibbles, the realtime grocery list built on the Login App: Cloudflare (proxied DNS, Authenticated Origin Pulls) → public IP of an external Container
-Apps environment → TCP ingress on 8443 (TLS passed through) → Kestrel terminates TLS with the origin certificate from
+Provisions Nibbles, the realtime grocery list built on the Login App: Cloudflare (proxied DNS, Authenticated Origin
+Pulls) → public IP of an external Container Apps environment → TCP ingress on 8443 (TLS passed through) → Kestrel terminates TLS with the origin certificate from
 Key Vault → PostgreSQL flexible server (private access). There is no Application Gateway (removed for cost). Two
 instances run side by side: `main` (app.biffkittz.com, 8443, database `loginapp`) and `grocery`
 (grocery.biffkittz.com, 8444, database `grocery`), from `additional_app_instances` in `environments/demo.tfvars`.
@@ -18,8 +18,11 @@ terraform-docs .                  # regenerates README reference sections
 shellcheck modules/container-app/scripts/db-bootstrap.sh
 ```
 
-Pre-commit (`../.pre-commit-config.yaml`) and CI (`../.github/workflows/infra.yml`) run the same checks; CI never
-touches Azure. Run all of them before calling a change done.
+Pre-commit (`../.pre-commit-config.yaml`) and CI (`../.github/workflows/infra.yml`) run the same checks. Run all of
+them before calling a change done. CI also plans pull requests and applies `main` after approval (`../docs/CI_CD.md`):
+its scripts (`../.github/scripts/terraform-*`) must never print plan values or outputs (the repository is public),
+and the saved plan only travels encrypted. You and CI's deploy identity both administer Key Vault
+(`key_vault_administrator_object_id`, `key_vault_additional_administrators`); keep both set.
 
 ## Rules
 

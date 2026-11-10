@@ -453,6 +453,39 @@ variable "key_vault_allowed_ip_ranges" {
   }
 }
 
+variable "key_vault_administrator_object_id" {
+  description = "Object ID of the principal that manages the vault's contents (Key Vault Secrets Officer and Certificates Officer). Null means whoever runs Terraform, which suits one person running it. Set it once several principals run Terraform, such as you and GitHub Actions (docs/CI_CD.md): otherwise every plan moves the role to whoever runs it."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.key_vault_administrator_object_id == null || can(regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", var.key_vault_administrator_object_id))
+    error_message = "key_vault_administrator_object_id must be an object ID (a GUID), or null."
+  }
+}
+
+variable "key_vault_additional_administrators" {
+  description = "More principals that manage the vault's contents, by a label of your choosing, e.g. { github_deploy = \"<object ID>\" }. Every principal that runs a refreshing plan or an apply needs this access: Terraform reads the secrets back."
+  type        = map(string)
+  default     = {}
+
+  validation {
+    condition = alltrue([
+      for label, object_id in var.key_vault_additional_administrators :
+      can(regex("^[a-z0-9_-]{1,40}$", label)) && can(regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", object_id))
+    ])
+    error_message = "key_vault_additional_administrators maps labels (lower case letters, digits, _ and -) to object IDs (GUIDs)."
+  }
+
+  validation {
+    condition = var.key_vault_administrator_object_id == null || !contains(
+      [for object_id in values(var.key_vault_additional_administrators) : lower(object_id)],
+      lower(coalesce(var.key_vault_administrator_object_id, "-"))
+    )
+    error_message = "key_vault_additional_administrators must not list key_vault_administrator_object_id again: Azure refuses a second identical role assignment."
+  }
+}
+
 # ---------------------------------------------------------------------------------------------------------------------
 # Monitoring and timing
 # ---------------------------------------------------------------------------------------------------------------------

@@ -150,19 +150,22 @@ hook; run it yourself (it takes seconds), and CI runs it on every pull request.
 
 ## 6. Continuous integration
 
-`.github/workflows/infra.yml` runs on pull requests and on pushes to `main` that change `infra/`. It uses pinned
-action versions, read-only permissions and no cloud credentials. In order, it runs:
+`.github/workflows/infra.yml` runs on every pull request (the work is skipped when `infra/` is untouched, so the
+required **infra checks passed** status always reports) and on pushes to `main` that change `infra/`. The checks need
+no credentials:
 
 - `terraform fmt -check`;
-- `init -backend=false`;
+- `init -backend=false` with the lock file read-only;
 - `validate`;
 - `terraform test`;
 - TFLint;
 - a terraform-docs freshness check;
 - ShellCheck.
 
-It never plans against Azure. To add plan and apply jobs, follow
-[AUTHENTICATION.md](AUTHENTICATION.md#cicd-with-openid-connect).
+After them, a pull request gets a speculative plan as a comment, and `main` gets a saved plan and an apply that waits
+for approval. A weekly run checks for drift. How that is set up and kept safe, including the GitHub environments,
+identities and secrets, is in [docs/CI_CD.md](../../docs/CI_CD.md). The plan and apply scripts are in
+`.github/scripts/`; they must never print plan values, because the repository's logs are public.
 
 ## 7. Conventions
 

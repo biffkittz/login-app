@@ -171,6 +171,10 @@ ones the app serves without Cloudflare's certificate. They reveal only whether t
 
 ### Releasing a new version
 
+GitHub Actions does this ([CI_CD.md](CI_CD.md)): merging an app change builds, scans and pushes
+`login-app:<12-character commit>` after approval, then opens a pull request that sets `app_image_tag`; merging that
+plans, and the apply waits for approval. By hand, for setup or an emergency:
+
 ```bash
 TAG="$(git rev-parse --short HEAD)"
 az acr build --registry "$(terraform -chdir=infra output -raw container_registry_name)" \

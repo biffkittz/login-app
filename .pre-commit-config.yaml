@@ -39,4 +39,4 @@ repos:
         entry: shellcheck
         language: system
         types: [shell]
-        files: ^infra/
+        files: ^(infra/|\.github/scripts/)

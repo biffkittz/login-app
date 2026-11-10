@@ -132,7 +132,8 @@ Container App or job first needs them. A system-assigned identity only exists on
 | `id-loginapp-demo-app` (the app) | AcrPull | the registry | Pull the app image |
 | | Key Vault Secrets User | secrets `ConnectionStrings--DefaultConnection`, `grocery-db-connection-string`, `Jwt--SigningKey`, `ImageGeneration--ApiKey` (with a Gemini key), `Email--ApiToken` (with registration emails), and the certificate's secret | Its secrets and its TLS certificate, nothing else. Both instances run as this identity |
 | `id-loginapp-demo-dbinit` (bootstrap job) | Key Vault Secrets User | secrets `postgresql-admin-password` and `postgresql-app-password` | The only identity that can read the administrator password |
-| Whoever runs Terraform | Key Vault Secrets Officer, Key Vault Certificates Officer | the vault | Create and update secrets and import the certificate; Terraform grants these itself |
+| Whoever runs Terraform (`key_vault_administrator_object_id`), and `key_vault_additional_administrators` | Key Vault Secrets Officer, Key Vault Certificates Officer | the vault | Create, update and read back secrets and import the certificate; Terraform grants these itself |
+| GitHub Actions: `id-loginapp-github-plan`, `-deploy`, `-push` | see [AUTHENTICATION.md](AUTHENTICATION.md#cicd-with-openid-connect) | | Pull request plans, plans and applies on main, image pushes; signed in with OIDC, created outside Terraform ([docs/CI_CD.md](../../docs/CI_CD.md)) |
 
 Running Terraform requires **Owner**, or **Contributor** plus **Role Based Access Control Administrator**, on the
 subscription. [AUTHENTICATION.md](AUTHENTICATION.md) explains why and covers CI identities.

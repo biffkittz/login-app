@@ -27,14 +27,31 @@ resource "azurerm_key_vault" "this" {
   tags = var.tags
 }
 
+locals {
+  administrator_roles = toset(["Key Vault Secrets Officer", "Key Vault Certificates Officer"])
+}
+
 # The principal running Terraform manages the vault's contents. RBAC-mode vaults grant no data-plane access to
 # Owners or Contributors by default, so this assignment is what lets the next resources create secrets.
 resource "azurerm_role_assignment" "administrator" {
-  for_each = toset(["Key Vault Secrets Officer", "Key Vault Certificates Officer"])
+  for_each = local.administrator_roles
 
   scope                = azurerm_key_vault.this.id
   role_definition_name = each.key
   principal_id         = var.administrator_principal_id
+}
+
+# Everyone else who runs Terraform against the vault (a CI identity next to you, say) gets the same roles, keyed by a
+# stable label so adding or removing one principal doesn't touch the others' assignments.
+resource "azurerm_role_assignment" "additional_administrator" {
+  for_each = {
+    for pair in setproduct(keys(var.additional_administrator_principal_ids), local.administrator_roles) :
+    "${pair[0]}: ${pair[1]}" => { principal_id = var.additional_administrator_principal_ids[pair[0]], role = pair[1] }
+  }
+
+  scope                = azurerm_key_vault.this.id
+  role_definition_name = each.value.role
+  principal_id         = each.value.principal_id
 }
 
 # New role assignments take a minute or two to take effect. Creating secrets right away would fail with 403.
@@ -42,7 +59,10 @@ resource "time_sleep" "administrator_rbac" {
   create_duration = var.rbac_propagation_wait
 
   triggers = {
-    role_assignment_ids = join(",", [for assignment in azurerm_role_assignment.administrator : assignment.id])
+    role_assignment_ids = join(",", concat(
+      [for assignment in azurerm_role_assignment.administrator : assignment.id],
+      [for assignment in azurerm_role_assignment.additional_administrator : assignment.id],
+    ))
   }
 }
 

@@ -1,0 +1,294 @@
+# The app (app/): tests on every pull request and push; on main, a gated release.
+#
+#   pull request  backend and frontend checks, and the image built and scanned (never pushed). No secrets.
+#   push to main  the same checks, then two decisions for a person (docs/CI_CD.md):
+#                   1. "registry" environment: approve building, scanning and pushing login-app:<commit> to ACR;
+#                   2. the pull request that publishing opens: merge it to deploy the image (the infra workflow then
+#                      plans and waits for approval in the "demo" environment before terraform apply).
+#   manual run    on main: like a push (rebuilds and proposes the current commit); on any other branch: checks only.
+#
+# Security: no long-lived cloud credentials exist. Publishing signs in to Azure with a GitHub OIDC token that only the
+# "registry" environment can obtain, as an identity that can push images and nothing else. Every action is pinned to
+# a commit SHA, checkouts keep no credentials, and each job gets only the permissions it uses.
+name: app
+
+on:
+  # Every pull request, so the "app checks passed" status always reports; the changes job skips the work when the
+  # pull request doesn't touch the app.
+  pull_request:
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - "global.json"
+      - "dotnet-tools.json"
+      - ".github/workflows/app.yml"
+      - ".github/actions/build-and-scan-image/**"
+      - ".github/scripts/propose-deploy.sh"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: app-${{ github.ref }}
+  # Pull requests: only the newest commit matters. main: never cancel a release half way.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    # Explicit bash runs every step with -eo pipefail, so a failure inside a pipeline fails the step.
+    shell: bash
+
+env:
+  DOTNET_NOLOGO: "true"
+  DOTNET_CLI_TELEMETRY_OPTOUT: "true"
+  NUGET_XMLDOC_MODE: skip
+
+jobs:
+  changes:
+    name: Does this touch the app?
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      app: ${{ steps.diff.outputs.app }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Compare with the base branch
+        id: diff
+        run: >-
+          .github/scripts/changed-areas.sh app
+          '^(app/|global\.json$|dotnet-tools\.json$|\.github/workflows/app\.yml$|\.github/actions/build-and-scan-image/|\.github/scripts/propose-deploy\.sh$)'
+
+  backend:
+    name: Backend (build, tests, vulnerable packages)
+    needs: changes
+    if: needs.changes.outputs.app == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up .NET (the SDK global.json pins)
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore app/LoginApp.slnx
+
+      # Release turns analyzer and code-style warnings into errors (Directory.Build.props).
+      - name: Build (Release)
+        run: dotnet build app/LoginApp.slnx --configuration Release --no-restore
+
+      - name: Formatting matches .editorconfig
+        run: dotnet format app/LoginApp.slnx --verify-no-changes --no-restore
+
+      - name: Test
+        run: dotnet test --solution app/LoginApp.slnx --configuration Release --no-build
+
+      - name: No known-vulnerable packages
+        run: |
+          dotnet list app/LoginApp.slnx package --vulnerable --include-transitive | tee "$RUNNER_TEMP/vulnerable.txt"
+          if grep -q "has the following vulnerable packages" "$RUNNER_TEMP/vulnerable.txt"; then
+            echo "::error::Vulnerable NuGet packages; see the list above. Update them in app/Directory.Packages.props."
+            exit 1
+          fi
+
+  frontend:
+    name: Frontend (lint, types, tests, audit)
+    needs: changes
+    if: needs.changes.outputs.app == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+        working-directory: app/frontend
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js 24
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          # No dependency cache: the image is built from a clean `npm ci` anyway, and a cache shared with pull
+          # requests is a way to poison what main builds.
+          package-manager-cache: false
+
+      - name: Install (exactly package-lock.json)
+        run: npm ci --no-fund
+
+      # The npm scripts fix what they can; CI only checks.
+      - name: oxlint
+        run: npx --no-install oxlint .
+      - name: ESLint
+        run: npx --no-install eslint . --max-warnings=0
+      - name: Prettier
+        run: npx --no-install prettier --check src/
+      - name: Type-check
+        run: npm run type-check
+      - name: Test
+        run: npm test
+      - name: No known-vulnerable runtime dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+  image:
+    name: Image (build and scan, not pushed)
+    needs: changes
+    # Everywhere but main, where the publish job builds, scans and pushes instead.
+    if: needs.changes.outputs.app == 'true' && github.ref != 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build and scan
+        uses: ./.github/actions/build-and-scan-image
+        with:
+          image: login-app:check
+
+      - name: ShellCheck buildAndRunSite.sh
+        run: shellcheck app/buildAndRunSite.sh
+
+  publish:
+    name: Publish login-app:<commit> to the registry
+    needs: [backend, frontend]
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # Required reviewers on this environment are the "build and push?" decision. Its federated credential is the only
+    # way to the push identity.
+    environment: registry
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      tag: ${{ steps.ref.outputs.tag }}
+      digest: ${{ steps.digest.outputs.digest }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Image reference
+        id: ref
+        env:
+          ACR_NAME: ${{ vars.ACR_NAME }}
+        run: |
+          if [[ ! "$ACR_NAME" =~ ^[a-z0-9]{5,50}$ ]]; then
+            echo "::error::Set the repository variable ACR_NAME to the registry's name (terraform output -raw container_registry_name)."
+            exit 1
+          fi
+          # Immutable, traceable tags: the first 12 characters of the commit, never "latest".
+          tag="${GITHUB_SHA::12}"
+          {
+            echo "tag=$tag"
+            echo "image=$ACR_NAME.azurecr.io/login-app:$tag"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Sign in to Azure (OIDC, push identity)
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Sign in to the registry
+        env:
+          ACR_NAME: ${{ vars.ACR_NAME }}
+        run: az acr login --name "$ACR_NAME"
+
+      # A tag names one build forever. Re-running a release (say, after a failed step further on) reuses the image.
+      - name: Is this commit already published?
+        id: exists
+        env:
+          IMAGE: ${{ steps.ref.outputs.image }}
+        run: |
+          if docker manifest inspect "$IMAGE" > /dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::$IMAGE is already in the registry; not rebuilding it."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build and scan
+        if: steps.exists.outputs.exists != 'true'
+        uses: ./.github/actions/build-and-scan-image
+        with:
+          image: ${{ steps.ref.outputs.image }}
+
+      - name: Push
+        if: steps.exists.outputs.exists != 'true'
+        env:
+          IMAGE: ${{ steps.ref.outputs.image }}
+        run: docker push "$IMAGE"
+
+      - name: Record the digest
+        id: digest
+        env:
+          IMAGE: ${{ steps.ref.outputs.image }}
+        run: |
+          digest="$(docker buildx imagetools inspect "$IMAGE" --format '{{json .Manifest}}' | jq -r .digest)"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "Published \`$IMAGE\` (\`$digest\`)." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Sign out of the registry
+        if: always()
+        env:
+          ACR_NAME: ${{ vars.ACR_NAME }}
+        run: docker logout "$ACR_NAME.azurecr.io" || true
+
+  propose-deploy:
+    name: Propose deploying it
+    needs: publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write # the deploy branch and its one commit, through the API
+      pull-requests: write # the pull request
+      actions: write # starting the checks on it (workflow_dispatch)
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Open the deployment pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE_TAG: ${{ needs.publish.outputs.tag }}
+          IMAGE_DIGEST: ${{ needs.publish.outputs.digest }}
+        run: .github/scripts/propose-deploy.sh
+
+  # The single status a branch ruleset requires for the app: passes when every check passed or was skipped.
+  checks-passed:
+    name: app checks passed
+    if: always()
+    needs: [changes, backend, frontend, image]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: All checks passed or were skipped
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "Results: $RESULTS"
+          if [[ " $RESULTS " == *" failure "* || " $RESULTS " == *" cancelled "* ]]; then
+            exit 1
+          fi

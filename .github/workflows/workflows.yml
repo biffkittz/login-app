@@ -1,0 +1,65 @@
+# Lints the CI/CD definitions themselves: actionlint (syntax, expressions, and ShellCheck on every run: block) and
+# zizmor (security: script injection, over-broad permissions, credentials left in checkouts, unpinned actions, ...),
+# plus ShellCheck on the scripts the workflows call. Both tools are downloaded with pinned checksums.
+name: workflows
+
+on:
+  pull_request:
+    paths:
+      - ".github/**"
+      - "infra/scripts/**"
+  push:
+    branches: [main]
+    paths:
+      - ".github/**"
+      - "infra/scripts/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: workflows-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    # Explicit bash runs every step with -eo pipefail, so a failure inside a pipeline fails the step.
+    shell: bash
+
+jobs:
+  lint:
+    name: actionlint, zizmor, ShellCheck
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install actionlint and zizmor (checksum-verified)
+        run: |
+          curl -sSfLo "$RUNNER_TEMP/actionlint.tgz" \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  $RUNNER_TEMP/actionlint.tgz" | sha256sum --check --strict
+          tar -xzf "$RUNNER_TEMP/actionlint.tgz" -C "$RUNNER_TEMP" actionlint
+
+          curl -sSfLo "$RUNNER_TEMP/zizmor.tgz" \
+            https://github.com/zizmorcore/zizmor/releases/download/v1.31.1/zizmor-x86_64-unknown-linux-gnu.tar.gz
+          echo "d185f726bdaf92df78273217dfdd24ebcd6b0ef48cf3ce776ff5762b6e138c99  $RUNNER_TEMP/zizmor.tgz" | sha256sum --check --strict
+          tar -xzf "$RUNNER_TEMP/zizmor.tgz" -C "$RUNNER_TEMP" zizmor
+
+      - name: actionlint
+        run: '"$RUNNER_TEMP/actionlint" -color'
+
+      # High-severity findings fail the job; the rest show as annotations to consider.
+      - name: zizmor
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          "$RUNNER_TEMP/zizmor" --format github .github || true
+          "$RUNNER_TEMP/zizmor" --min-severity high .github
+
+      - name: ShellCheck
+        run: shellcheck .github/scripts/*.sh infra/scripts/*.sh

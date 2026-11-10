@@ -494,5 +494,5 @@ app/frontend/src/
   authentication for PostgreSQL (managed identity tokens via Npgsql) would remove that secret altogether.
 - **Single signing key.** Rotating the key signs everyone out. Supporting a list of validation keys would allow
   seamless rotation.
-- **End-to-end tests.** The unit and in-memory integration tests cover the logic; browser tests (Playwright) with
+- **End-to-end tests in CI.** The unit and in-memory integration tests cover the logic; browser tests (Playwright) with
   axe-core accessibility checks would cover the full user journey.

@@ -658,3 +658,34 @@ run "rejects_a_reserved_postgresql_admin_login" {
 
   expect_failures = [var.postgresql_admin_login]
 }
+
+run "rejects_a_key_vault_administrator_that_is_not_an_object_id" {
+  command = plan
+
+  variables {
+    key_vault_administrator_object_id = "me@example.com"
+  }
+
+  expect_failures = [var.key_vault_administrator_object_id]
+}
+
+run "rejects_an_additional_key_vault_administrator_that_is_not_an_object_id" {
+  command = plan
+
+  variables {
+    key_vault_additional_administrators = { github_deploy = "id-loginapp-github-deploy" }
+  }
+
+  expect_failures = [var.key_vault_additional_administrators]
+}
+
+run "rejects_the_key_vault_administrator_listed_again_as_an_additional_one" {
+  command = plan
+
+  variables {
+    key_vault_administrator_object_id   = "22222222-2222-2222-2222-222222222222"
+    key_vault_additional_administrators = { me = "22222222-2222-2222-2222-222222222222" }
+  }
+
+  expect_failures = [var.key_vault_additional_administrators]
+}

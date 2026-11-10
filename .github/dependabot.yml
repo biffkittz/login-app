@@ -1,0 +1,52 @@
+# Dependency updates as pull requests, which then go through the same checks as any other change (docs/CI_CD.md).
+#
+# A cooldown leaves each new release a week before it is proposed: most malicious or broken releases are found and
+# pulled within days. Security updates (Dependabot alerts) ignore the cooldown and arrive at once.
+#
+# The Dockerfile's base images aren't listed: their tags come from build arguments, which Dependabot can't update, and
+# every image build pulls the newest patch of them anyway (docker build --pull). Moving to a new major .NET or Node.js
+# version is a deliberate change to app/Dockerfile.
+version: 2
+
+updates:
+  - package-ecosystem: github-actions
+    directories: ["/", "/.github/actions/*"]
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      github-actions:
+        patterns: ["*"]
+
+  - package-ecosystem: nuget
+    directory: /app
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      nuget-minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /app/frontend
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      npm-minor-and-patch:
+        update-types: [minor, patch]
+
+  # Provider updates change .terraform.lock.hcl; the infra checks run on them, and a plan can be started by hand
+  # (Dependabot's pull requests get no secrets).
+  - package-ecosystem: terraform
+    directories: ["/infra", "/infra/modules/*"]
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      terraform-providers:
+        patterns: ["*"]
