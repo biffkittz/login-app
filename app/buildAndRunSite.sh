@@ -24,7 +24,8 @@
 
 set -Eeuo pipefail
 
-readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly SCRIPT_DIR
 readonly FRONTEND_DIR="${SCRIPT_DIR}/frontend"
 readonly BACKEND_DIR="${SCRIPT_DIR}/backend"
 readonly BACKEND_PROJECT="${BACKEND_DIR}/LoginApp.Api.csproj"
