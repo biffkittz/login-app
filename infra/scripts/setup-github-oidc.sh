@@ -7,7 +7,9 @@
 #   id-loginapp-github-push    pushing app images ("registry"): AcrPush on the registry, nothing else
 #
 # Each identity trusts tokens for one repository and specific GitHub environments only, and the environments decide
-# which branches and reviewers may use them. The identities live in the state's resource group, outside the
+# which branches and reviewers may use them. The repository is named the way GitHub writes it into the tokens it
+# issues: with the numeric IDs of the owner and the repository ("repo:owner@123/name@456:environment:demo"), so
+# someone who later registers a name this repository gave up can't get tokens that Azure would accept. The identities live in the state's resource group, outside the
 # Terraform-managed one, so `terraform destroy` can't remove the pipeline that runs it.
 #
 # Run it once from infra/, signed in with `az login` as an Owner of the subscription, after the platform exists (it
@@ -15,7 +17,9 @@
 #
 #   ./scripts/setup-github-oidc.sh
 #
-# Overrides: GITHUB_REPOSITORY (owner/name), AZURE_SUBSCRIPTION_ID, LOCATION, IDENTITY_RESOURCE_GROUP, ACR_NAME.
+# Overrides: GITHUB_REPOSITORY (owner/name), AZURE_SUBSCRIPTION_ID, LOCATION, IDENTITY_RESOURCE_GROUP, ACR_NAME,
+# and GITHUB_OWNER_ID with GITHUB_REPOSITORY_ID (otherwise read from GitHub's public API; a private repository needs
+# them). Run it again after renaming or transferring the repository: the names are part of the subject.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -43,6 +47,28 @@ if [[ ! "$repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
   exit 1
 fi
 
+# GitHub's subject for repositories created after 2026-07-15 (and for renamed or transferred ones) is
+# repo:OWNER@OWNER_ID/NAME@REPOSITORY_ID:environment:ENV, with the names exactly as GitHub spells them. Azure compares
+# the subject character by character, so take the canonical spelling and the IDs from the API.
+if [[ -z "${GITHUB_OWNER_ID:-}" || -z "${GITHUB_REPOSITORY_ID:-}" ]]; then
+  repository_json="$(curl -fsS --max-time 20 "https://api.github.com/repos/$repository")" || {
+    echo "Couldn't read $repository from api.github.com; set GITHUB_OWNER_ID and GITHUB_REPOSITORY_ID." >&2
+    exit 1
+  }
+  repository_facts="$(python3 -c 'import json, sys; d = json.load(sys.stdin); print(d["owner"]["login"], d["owner"]["id"], d["name"], d["id"])' <<< "$repository_json")"
+  read -r owner_name owner_id repository_name repository_id <<< "$repository_facts"
+else
+  owner_name="${repository%%/*}"
+  repository_name="${repository#*/}"
+  owner_id="$GITHUB_OWNER_ID"
+  repository_id="$GITHUB_REPOSITORY_ID"
+fi
+if [[ ! "$owner_id" =~ ^[0-9]+$ || ! "$repository_id" =~ ^[0-9]+$ ]]; then
+  echo "The owner and repository IDs must be numbers, not '$owner_id' and '$repository_id'." >&2
+  exit 1
+fi
+subject_prefix="repo:$owner_name@$owner_id/$repository_name@$repository_id"
+
 az account set --subscription "$subscription_id"
 tenant_id="$(az account show --query tenantId -o tsv)"
 registry="${ACR_NAME:-$(terraform output -raw container_registry_name)}"
@@ -51,7 +77,7 @@ subscription_scope="/subscriptions/$subscription_id"
 state_scope="$(az storage account show --name "$state_account" --resource-group "$state_group" --query id -o tsv)/blobServices/default/containers/$state_container"
 registry_scope="$(az acr show --name "$registry" --query id -o tsv)"
 
-echo "Repository:   $repository"
+echo "Repository:   $repository (owner ID $owner_id, repository ID $repository_id)"
 echo "Subscription: $subscription_id (tenant $tenant_id)"
 echo "Identities:   $identity_group ($location)"
 echo "State:        $state_scope"
@@ -69,16 +95,22 @@ ensure_identity() {
   az identity show --resource-group "$identity_group" --name "$name" --query principalId -o tsv
 }
 
-# Trusts GitHub's tokens for one environment of this repository (create-or-update, so it is safe to repeat).
+# Trusts GitHub's tokens for one environment of this repository. An existing credential of the same name is updated
+# in place, so re-running replaces an old subject (a renamed repository, or the format without IDs) instead of
+# leaving it trusted next to the new one.
 ensure_federation() {
-  local identity="$1" environment="$2"
-  az identity federated-credential create --resource-group "$identity_group" --identity-name "$identity" \
+  local identity="$1" environment="$2" verb=create
+  if az identity federated-credential show --resource-group "$identity_group" --identity-name "$identity" \
+    --name "github-$environment" --output none 2> /dev/null; then
+    verb=update
+  fi
+  az identity federated-credential "$verb" --resource-group "$identity_group" --identity-name "$identity" \
     --name "github-$environment" \
     --issuer "https://token.actions.githubusercontent.com" \
-    --subject "repo:$repository:environment:$environment" \
+    --subject "$subject_prefix:environment:$environment" \
     --audiences "api://AzureADTokenExchange" \
     --output none
-  echo "  trusts repo:$repository:environment:$environment"
+  echo "  trusts $subject_prefix:environment:$environment"
 }
 
 # One attempt at a role assignment: skips it if the same one exists, and prints what it did. An optional condition
