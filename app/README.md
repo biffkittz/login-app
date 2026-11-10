@@ -34,3 +34,5 @@ ACCOUNT_KEY=$(az storage account keys list --resource-group rg-terraform-state  
 export ARM_ACCESS_KEY=$ACCOUNT_KEY
 terraform init
 ```
+
+TODO: REMOVE ME
