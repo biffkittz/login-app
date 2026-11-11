@@ -1,9 +1,13 @@
+using System.Diagnostics.Metrics;
 using System.Net;
 using System.Net.Http.Json;
 using LoginApp.Api.Features.GroceryList.Contracts;
 using LoginApp.Api.Features.GroceryList.CostEstimates;
+using LoginApp.Api.Infrastructure.Telemetry;
 using LoginApp.Api.Tests.Infrastructure;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Diagnostics.Metrics.Testing;
 
 namespace LoginApp.Api.Tests.Features.GroceryList.CostEstimates;
 
@@ -137,6 +141,36 @@ public sealed class CostEstimatesTests(CostEstimateApiFactory factory) : IClassF
         {
             factory.Estimator.Answer = FakeCostEstimator.PriceAsync;
         }
+    }
+
+    [Fact]
+    public async Task Estimate_IsCountedByOutcome_AndTheModelIsTimed()
+    {
+        // Arrange
+        IMeterFactory meterFactory = factory.Services.GetRequiredService<IMeterFactory>();
+        using MetricCollector<long> estimates = new(meterFactory, ApplicationMeter.Name, "nibbles.cost_estimates");
+        using MetricCollector<double> durations = new(meterFactory, ApplicationMeter.Name, "nibbles.cost_estimates.duration");
+        using Shopper shopper = await Shopper.SignUpAsync(factory);
+        await shopper.AddItemAsync($"Rice {Guid.NewGuid():N}");
+
+        // Act
+        await EstimateAsync(shopper);
+
+        // Assert
+        CollectedMeasurement<long> estimate = Assert.Single(estimates.GetMeasurementSnapshot());
+        Assert.Equal("succeeded", estimate.Tags[CostEstimateMetrics.StatusTag]);
+        Assert.Single(durations.GetMeasurementSnapshot());
+    }
+
+    [Fact]
+    public void EveryOutcome_HasAMetricValueOfItsOwn()
+    {
+        // Act
+        string[] values = [.. Enum.GetValues<CostEstimateStatus>().Select(CostEstimateMetrics.ToTagValue)];
+
+        // Assert
+        Assert.Equal(values.Length, values.Distinct(StringComparer.Ordinal).Count());
+        Assert.DoesNotContain("unknown", values);
     }
 
     [Fact]

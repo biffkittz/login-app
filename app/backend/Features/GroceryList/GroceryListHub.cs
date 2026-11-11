@@ -23,12 +23,18 @@ namespace LoginApp.Api.Features.GroceryList;
 /// </para>
 /// </remarks>
 /// <param name="dbContext">The application database.</param>
+/// <param name="metrics">Counts accepted and refused connections.</param>
 /// <param name="logger">The logger.</param>
 [Authorize]
-internal sealed class GroceryListHub(ApplicationDbContext dbContext, ILogger<GroceryListHub> logger) : Hub<IGroceryListClient>
+internal sealed class GroceryListHub(ApplicationDbContext dbContext, GroceryListMetrics metrics, ILogger<GroceryListHub> logger)
+    : Hub<IGroceryListClient>
 {
     /// <summary>The URL path of the hub.</summary>
     public const string Path = "/api/grocery-list/hub";
+
+    // Marks a connection that OnConnectedAsync accepted, so that only those are counted out again. A hub object lives
+    // for one call; Context.Items lives as long as the connection.
+    private static readonly object s_countedConnection = new();
 
     /// <summary>
     /// Accepts the connection only from this site's own pages and only for an account that still exists.
@@ -40,6 +46,7 @@ internal sealed class GroceryListHub(ApplicationDbContext dbContext, ILogger<Gro
         if (httpContext is not null && IsCrossOrigin(httpContext.Request))
         {
             GroceryListLog.ConnectionRefusedCrossOrigin(logger, httpContext.Request.Headers.Origin.ToString());
+            metrics.ConnectionRefused(GroceryListMetrics.RefusedCrossOrigin);
             Context.Abort();
             return;
         }
@@ -50,12 +57,30 @@ internal sealed class GroceryListHub(ApplicationDbContext dbContext, ILogger<Gro
             || !await dbContext.Users.AnyAsync(user => user.Id == userId, Context.ConnectionAborted))
         {
             GroceryListLog.ConnectionRefusedUnknownUser(logger);
+            metrics.ConnectionRefused(GroceryListMetrics.RefusedUnknownUser);
             Context.Abort();
             return;
         }
 
         GroceryListLog.ClientConnected(logger, userId, Context.ConnectionId);
+        Context.Items[s_countedConnection] = null;
+        metrics.ConnectionAccepted();
         await base.OnConnectedAsync();
+    }
+
+    /// <summary>
+    /// Counts an accepted connection out again when it closes.
+    /// </summary>
+    /// <param name="exception">The error that closed the connection, if any.</param>
+    /// <returns>A task that completes when the connection has been accounted for.</returns>
+    public override Task OnDisconnectedAsync(Exception? exception)
+    {
+        if (Context.Items.Remove(s_countedConnection))
+        {
+            metrics.ConnectionClosed();
+        }
+
+        return base.OnDisconnectedAsync(exception);
     }
 
     /// <summary>

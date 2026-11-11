@@ -6,6 +6,7 @@ using LoginApp.Api.Features.GroceryList.CostEstimates;
 using LoginApp.Api.Features.GroceryList.Images;
 using LoginApp.Api.Infrastructure.Email;
 using LoginApp.Api.Infrastructure.Networking;
+using LoginApp.Api.Infrastructure.Telemetry;
 
 namespace LoginApp.Api.Tests.Infrastructure;
 
@@ -394,6 +395,129 @@ public sealed class OptionsValidationTests
             ApiToken = "test-email-token",
             SenderAddress = "notifications@example.com",
         };
+
+    [Fact]
+    public void TelemetryOptions_Defaults_PassValidationButExportNothing()
+    {
+        // Arrange
+        TelemetryOptions options = new();
+
+        // Act
+        List<ValidationResult> errors = Validate(options);
+
+        // Assert
+        Assert.Empty(errors);
+        Assert.False(options.IsExporting);
+    }
+
+    [Theory]
+    [InlineData("https://prometheus.internal.example.azurecontainerapps.io/api/v1/otlp/v1/metrics")]
+    [InlineData("http://localhost:9090/api/v1/otlp/v1/metrics")]
+    [InlineData("http://127.0.0.1:9090/api/v1/otlp/v1/metrics")]
+    public void TelemetryOptions_WithAnHttpsOrLocalEndpointAndCredentials_PassValidation(string endpoint)
+    {
+        // Arrange
+        TelemetryOptions options = new()
+        {
+            OtlpEndpoint = new Uri(endpoint),
+            OtlpUsername = "app",
+            OtlpPassword = "a-long-random-password",
+            Site = "app.biffkittz.com",
+        };
+
+        // Act
+        List<ValidationResult> errors = Validate(options);
+
+        // Assert
+        Assert.Empty(errors);
+        Assert.True(options.IsExporting);
+    }
+
+    [Theory]
+    [InlineData("http://prometheus.internal.example.azurecontainerapps.io/api/v1/otlp/v1/metrics")] // password in the clear
+    [InlineData("ftp://localhost/api/v1/otlp/v1/metrics")]
+    public void TelemetryOptions_WithAnEndpointThatIsNotHttps_FailValidation(string endpoint)
+    {
+        // Arrange
+        TelemetryOptions options = new() { OtlpEndpoint = new Uri(endpoint), OtlpUsername = "app", OtlpPassword = "secret" };
+
+        // Act
+        List<ValidationResult> errors = Validate(options);
+
+        // Assert
+        Assert.Contains(errors, error => error.MemberNames.Contains(nameof(TelemetryOptions.OtlpEndpoint)));
+    }
+
+    [Theory]
+    [InlineData("https://prometheus.example/api/v1/otlp/v1/metrics", "app", null)]
+    [InlineData("https://prometheus.example/api/v1/otlp/v1/metrics", null, "secret")]
+    [InlineData(null, "app", "secret")] // credentials for nowhere
+    public void TelemetryOptions_WithHalfTheCredentials_FailValidation(string? endpoint, string? username, string? password)
+    {
+        // Arrange
+        TelemetryOptions options = new()
+        {
+            OtlpEndpoint = endpoint is null ? null : new Uri(endpoint),
+            OtlpUsername = username,
+            OtlpPassword = password,
+        };
+
+        // Act
+        List<ValidationResult> errors = Validate(options);
+
+        // Assert
+        Assert.Contains(errors, error => error.MemberNames.Contains(nameof(TelemetryOptions.OtlpUsername)));
+    }
+
+    [Theory]
+    [InlineData("app:admin")] // a colon would split "user:password" in the Basic credentials
+    [InlineData("app\r\nX-Injected: 1")]
+    public void TelemetryOptions_WithAUserNameThatBreaksBasicAuthentication_FailValidation(string username)
+    {
+        // Arrange
+        TelemetryOptions options = new()
+        {
+            OtlpEndpoint = new Uri("https://prometheus.example/api/v1/otlp/v1/metrics"),
+            OtlpUsername = username,
+            OtlpPassword = "secret",
+        };
+
+        // Act
+        List<ValidationResult> errors = Validate(options);
+
+        // Assert
+        Assert.Contains(errors, error => error.MemberNames.Contains(nameof(TelemetryOptions.OtlpUsername)));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(TelemetryOptions.MaxExportIntervalSeconds + 1)]
+    public void TelemetryOptions_WithAnExportIntervalOutOfRange_FailValidation(int seconds)
+    {
+        // Arrange
+        TelemetryOptions options = new() { ExportIntervalSeconds = seconds };
+
+        // Act
+        List<ValidationResult> errors = Validate(options);
+
+        // Assert
+        Assert.Contains(errors, error => error.MemberNames.Contains(nameof(TelemetryOptions.ExportIntervalSeconds)));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("app.biffkittz.com\n")]
+    public void TelemetryOptions_WithAnEmptyOrMultilineSite_FailValidation(string site)
+    {
+        // Arrange
+        TelemetryOptions options = new() { Site = site };
+
+        // Act
+        List<ValidationResult> errors = Validate(options);
+
+        // Assert
+        Assert.Contains(errors, error => error.MemberNames.Contains(nameof(TelemetryOptions.Site)));
+    }
 
     private static List<ValidationResult> Validate(object options)
     {

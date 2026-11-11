@@ -75,7 +75,7 @@ run "networking_restricts_every_subnet" {
 
   assert {
     condition = (
-      [for endpoint in azurerm_subnet.container_apps.service_endpoint : endpoint.service] == ["Microsoft.KeyVault"] &&
+      [for endpoint in azurerm_subnet.container_apps.service_endpoint : endpoint.service] == ["Microsoft.KeyVault", "Microsoft.Storage"] &&
       [for endpoint in azurerm_subnet.postgresql.service_endpoint : endpoint.service] == ["Microsoft.Storage"]
     )
     error_message = "Unexpected service endpoints."
@@ -581,4 +581,356 @@ run "container_app_waits_for_an_image" {
     condition     = length(azurerm_container_app.this) == 0 && length(output.app_ids) == 0
     error_message = "No Container App may be created before its image exists."
   }
+}
+
+# ---------------------------------------------------------------------------------------------------------------------
+# observability (Prometheus and Grafana)
+# ---------------------------------------------------------------------------------------------------------------------
+
+run "observability_keeps_its_data_on_a_private_nfs_share" {
+  command = apply
+
+  module {
+    source = "./modules/observability"
+  }
+
+  variables {
+    subscription_id                          = "00000000-0000-0000-0000-000000000000"
+    container_app_environment_id             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.App/managedEnvironments/cae-test"
+    container_app_environment_default_domain = "mockdomain-1a2b3c4d.eastus.azurecontainerapps.io"
+    container_apps_subnet_id                 = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.Network/virtualNetworks/vnet/subnets/snet-aca"
+    storage_account_name                     = "stloginapptestabc123"
+    images = {
+      prometheus             = "quay.io/prometheus/prometheus@sha256:fa3302279710be2f21a8301ec17a8b4f2301fd829bd113839b3b6b02b6f191a2"
+      azure_metrics_exporter = "quay.io/webdevops/azure-metrics-exporter@sha256:0f26a275e593538983a13c9ebb9d229e296524a3f292e684666667f24eae2b76"
+      grafana                = "docker.io/grafana/grafana@sha256:0615ec4fbd4072004b7d86b46ded63013a74b7d6eb1119273dd89e8fa25c13cf"
+      init                   = "mcr.microsoft.com/azurelinux/base/core@sha256:88fc2b4a425801b3b4d8fe5342e24fb6134669fb718ec970340bdd36dee50c35"
+    }
+    prometheus_app_name = "ca-loginapp-test-prometheus"
+    prometheus_identity = {
+      id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-prometheus"
+      principal_id = "44444444-4444-4444-4444-444444444444"
+      client_id    = "55555555-5555-5555-5555-555555555555"
+    }
+    prometheus_secret_ids = {
+      web_config           = "https://kv-test.vault.azure.net/secrets/prometheus-web-config"
+      self_scrape_password = "https://kv-test.vault.azure.net/secrets/prometheus-self-scrape-password"
+    }
+    monitored_resource_group_id    = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test"
+    monitored_container_app_ids    = ["/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.App/containerApps/ca-loginapp-test"]
+    monitored_postgresql_server_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.DBforPostgreSQL/flexibleServers/psql-test"
+    grafana_app_name               = "ca-loginapp-test-grafana"
+    grafana_identity_id            = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-grafana"
+    grafana_hostname               = "grafana.example.com"
+    grafana_exposed_port           = 8445
+    grafana_ingress_allowed_cidrs  = { cloudflare-0 = "173.245.48.0/20", cloudflare-1 = "103.21.244.0/22" }
+    grafana_github_client_id       = "Ov23liAbCdEfGhIjKlMn"
+    grafana_github_admins          = ["octocat"]
+    grafana_github_viewers         = ["hubot"]
+    grafana_secret_ids = {
+      github_client_secret = "https://kv-test.vault.azure.net/secrets/grafana-github-client-secret"
+      secret_key           = "https://kv-test.vault.azure.net/secrets/grafana-secret-key"
+      prometheus_password  = "https://kv-test.vault.azure.net/secrets/prometheus-grafana-password"
+      origin_certificate   = "https://kv-test.vault.azure.net/secrets/app-example-com-origin"
+    }
+  }
+
+  assert {
+    condition = (
+      azurerm_storage_account.this.account_kind == "FileStorage" &&
+      azurerm_storage_account.this.account_tier == "Premium" &&
+      azurerm_storage_share.this.enabled_protocol == "NFS" &&
+      azurerm_storage_share.this.quota == 100
+    )
+    error_message = "Prometheus' data must live on an NFS share (a POSIX file system) of a Premium FileStorage account."
+  }
+
+  assert {
+    condition = (
+      !azurerm_storage_account.this.shared_access_key_enabled &&
+      azurerm_storage_account.this.network_rules[0].default_action == "Deny" &&
+      azurerm_storage_account.this.network_rules[0].virtual_network_subnet_ids == toset([var.container_apps_subnet_id]) &&
+      azurerm_storage_account.this.min_tls_version == "TLS1_2"
+    )
+    error_message = "The storage account must take no keys and admit only the Container Apps subnet."
+  }
+
+  assert {
+    condition = (
+      azurerm_container_app_environment_storage.this.nfs_server_url == "stloginapptestabc123.file.core.windows.net" &&
+      azurerm_container_app_environment_storage.this.share_name == "/stloginapptestabc123/observability" &&
+      azurerm_container_app_environment_storage.this.access_mode == "ReadWrite"
+    )
+    error_message = "Container Apps mounts an NFS share as /<account>/<share> from <account>.file.core.windows.net."
+  }
+
+  assert {
+    condition = (
+      azurerm_role_assignment.metrics_reader.role_definition_name == "Monitoring Reader" &&
+      azurerm_role_assignment.metrics_reader.scope == var.monitored_resource_group_id
+    )
+    error_message = "The Azure Monitor exporter may read the resource group's metrics, and nothing more."
+  }
+}
+
+run "prometheus_is_internal_single_writer_and_receives_otlp" {
+  command = apply
+
+  module {
+    source = "./modules/observability"
+  }
+
+  variables {
+    subscription_id                          = "00000000-0000-0000-0000-000000000000"
+    container_app_environment_id             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.App/managedEnvironments/cae-test"
+    container_app_environment_default_domain = "mockdomain-1a2b3c4d.eastus.azurecontainerapps.io"
+    container_apps_subnet_id                 = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.Network/virtualNetworks/vnet/subnets/snet-aca"
+    storage_account_name                     = "stloginapptestabc123"
+    images = {
+      prometheus             = "quay.io/prometheus/prometheus@sha256:fa3302279710be2f21a8301ec17a8b4f2301fd829bd113839b3b6b02b6f191a2"
+      azure_metrics_exporter = "quay.io/webdevops/azure-metrics-exporter@sha256:0f26a275e593538983a13c9ebb9d229e296524a3f292e684666667f24eae2b76"
+      grafana                = "docker.io/grafana/grafana@sha256:0615ec4fbd4072004b7d86b46ded63013a74b7d6eb1119273dd89e8fa25c13cf"
+      init                   = "mcr.microsoft.com/azurelinux/base/core@sha256:88fc2b4a425801b3b4d8fe5342e24fb6134669fb718ec970340bdd36dee50c35"
+    }
+    prometheus_app_name = "ca-loginapp-test-prometheus"
+    prometheus_identity = {
+      id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-prometheus"
+      principal_id = "44444444-4444-4444-4444-444444444444"
+      client_id    = "55555555-5555-5555-5555-555555555555"
+    }
+    prometheus_secret_ids = {
+      web_config           = "https://kv-test.vault.azure.net/secrets/prometheus-web-config"
+      self_scrape_password = "https://kv-test.vault.azure.net/secrets/prometheus-self-scrape-password"
+    }
+    monitored_resource_group_id    = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test"
+    monitored_container_app_ids    = ["/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.App/containerApps/ca-loginapp-test"]
+    monitored_postgresql_server_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.DBforPostgreSQL/flexibleServers/psql-test"
+    grafana_app_name               = "ca-loginapp-test-grafana"
+    grafana_identity_id            = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-grafana"
+    grafana_hostname               = "grafana.example.com"
+    grafana_exposed_port           = 8445
+    grafana_github_client_id       = "Ov23liAbCdEfGhIjKlMn"
+    grafana_github_admins          = ["octocat"]
+    grafana_secret_ids = {
+      github_client_secret = "https://kv-test.vault.azure.net/secrets/grafana-github-client-secret"
+      secret_key           = "https://kv-test.vault.azure.net/secrets/grafana-secret-key"
+      prometheus_password  = "https://kv-test.vault.azure.net/secrets/prometheus-grafana-password"
+      origin_certificate   = "https://kv-test.vault.azure.net/secrets/app-example-com-origin"
+    }
+  }
+
+  assert {
+    condition = (
+      !azurerm_container_app.prometheus.ingress[0].external_enabled &&
+      azurerm_container_app.prometheus.ingress[0].target_port == 9090 &&
+      !azurerm_container_app.prometheus.ingress[0].allow_insecure_connections
+    )
+    error_message = "Prometheus must be reachable from inside the environment only, over HTTPS."
+  }
+
+  assert {
+    condition     = azurerm_container_app.prometheus.template[0].min_replicas == 1 && azurerm_container_app.prometheus.template[0].max_replicas == 1
+    error_message = "Prometheus' database takes exactly one writer."
+  }
+
+  assert {
+    condition = (
+      contains(azurerm_container_app.prometheus.template[0].container[0].args, "--web.enable-otlp-receiver") &&
+      contains(azurerm_container_app.prometheus.template[0].container[0].args, "--web.config.file=/etc/prometheus/config/web.yml") &&
+      strcontains(azurerm_container_app.prometheus.template[0].container[0].args[0], "flock -n /prometheus/lock")
+    )
+    error_message = "Prometheus must accept OTLP pushes, require its users, and wait for the previous replica's lock."
+  }
+
+  assert {
+    condition = alltrue([
+      for probe in concat(
+        azurerm_container_app.prometheus.template[0].container[0].startup_probe,
+        azurerm_container_app.prometheus.template[0].container[0].liveness_probe,
+        azurerm_container_app.prometheus.template[0].container[0].readiness_probe,
+      ) : probe.port == 8080 && probe.transport == "TCP"
+    ])
+    error_message = "Prometheus' probes must watch the exporter's port, so a replica waiting for the database lock counts as ready."
+  }
+
+  assert {
+    condition = one([
+      for volume in azurerm_container_app.prometheus.template[0].volume : volume.storage_type if volume.name == "data"
+    ]) == "NfsAzureFile"
+    error_message = "Prometheus' database must be on the NFS share."
+  }
+
+  assert {
+    condition = (
+      yamldecode(one([for env in azurerm_container_app.prometheus.template[0].init_container[0].env : env.value if env.name == "PROMETHEUS_CONFIG"])).otlp.promote_resource_attributes == ["site"] &&
+      yamldecode(one([for env in azurerm_container_app.prometheus.template[0].init_container[0].env : env.value if env.name == "PROMETHEUS_CONFIG"])).storage.tsdb.out_of_order_time_window == "30m"
+    )
+    error_message = "Pushed metrics must keep their site label, and slightly late samples must be accepted."
+  }
+
+  assert {
+    condition = contains(
+      flatten([
+        for job in yamldecode(one([for env in azurerm_container_app.prometheus.template[0].init_container[0].env : env.value if env.name == "PROMETHEUS_CONFIG"])).scrape_configs :
+        try(job.params.target, []) if job.job_name == "azure-containerapp"
+      ]),
+      "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.App/containerApps/ca-loginapp-test-grafana",
+    )
+    error_message = "Prometheus must collect the platform metrics of every Container App, Grafana's included."
+  }
+
+  assert {
+    condition     = output.otlp_metrics_endpoint == "https://ca-loginapp-test-prometheus.internal.mockdomain-1a2b3c4d.eastus.azurecontainerapps.io/api/v1/otlp/v1/metrics"
+    error_message = "The app pushes to Prometheus' OTLP receiver at its internal address."
+  }
+}
+
+run "grafana_is_behind_cloudflare_and_signs_in_with_github_only" {
+  command = apply
+
+  module {
+    source = "./modules/observability"
+  }
+
+  variables {
+    subscription_id                          = "00000000-0000-0000-0000-000000000000"
+    container_app_environment_id             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.App/managedEnvironments/cae-test"
+    container_app_environment_default_domain = "mockdomain-1a2b3c4d.eastus.azurecontainerapps.io"
+    container_apps_subnet_id                 = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.Network/virtualNetworks/vnet/subnets/snet-aca"
+    storage_account_name                     = "stloginapptestabc123"
+    images = {
+      prometheus             = "quay.io/prometheus/prometheus@sha256:fa3302279710be2f21a8301ec17a8b4f2301fd829bd113839b3b6b02b6f191a2"
+      azure_metrics_exporter = "quay.io/webdevops/azure-metrics-exporter@sha256:0f26a275e593538983a13c9ebb9d229e296524a3f292e684666667f24eae2b76"
+      grafana                = "docker.io/grafana/grafana@sha256:0615ec4fbd4072004b7d86b46ded63013a74b7d6eb1119273dd89e8fa25c13cf"
+      init                   = "mcr.microsoft.com/azurelinux/base/core@sha256:88fc2b4a425801b3b4d8fe5342e24fb6134669fb718ec970340bdd36dee50c35"
+    }
+    prometheus_app_name = "ca-loginapp-test-prometheus"
+    prometheus_identity = {
+      id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-prometheus"
+      principal_id = "44444444-4444-4444-4444-444444444444"
+      client_id    = "55555555-5555-5555-5555-555555555555"
+    }
+    prometheus_secret_ids = {
+      web_config           = "https://kv-test.vault.azure.net/secrets/prometheus-web-config"
+      self_scrape_password = "https://kv-test.vault.azure.net/secrets/prometheus-self-scrape-password"
+    }
+    monitored_resource_group_id    = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test"
+    monitored_postgresql_server_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.DBforPostgreSQL/flexibleServers/psql-test"
+    grafana_app_name               = "ca-loginapp-test-grafana"
+    grafana_identity_id            = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-grafana"
+    grafana_hostname               = "grafana.example.com"
+    grafana_exposed_port           = 8445
+    grafana_ingress_allowed_cidrs  = { cloudflare-0 = "173.245.48.0/20", cloudflare-1 = "103.21.244.0/22" }
+    grafana_github_client_id       = "Ov23liAbCdEfGhIjKlMn"
+    grafana_github_admins          = ["octocat"]
+    grafana_github_viewers         = ["hubot"]
+    grafana_secret_ids = {
+      github_client_secret = "https://kv-test.vault.azure.net/secrets/grafana-github-client-secret"
+      secret_key           = "https://kv-test.vault.azure.net/secrets/grafana-secret-key"
+      prometheus_password  = "https://kv-test.vault.azure.net/secrets/prometheus-grafana-password"
+      origin_certificate   = "https://kv-test.vault.azure.net/secrets/app-example-com-origin"
+    }
+  }
+
+  assert {
+    condition = (
+      azurerm_container_app.grafana.ingress[0].external_enabled &&
+      azurerm_container_app.grafana.ingress[0].transport == "tcp" &&
+      azurerm_container_app.grafana.ingress[0].exposed_port == 8445 &&
+      azurerm_container_app.grafana.ingress[0].target_port == 3000 &&
+      length(azurerm_container_app.grafana.ingress[0].ip_security_restriction) == 2 &&
+      alltrue([for rule in azurerm_container_app.grafana.ingress[0].ip_security_restriction : rule.action == "Allow"])
+    )
+    error_message = "Grafana must be a TCP app on its own port, admitting only the allowed (Cloudflare) ranges."
+  }
+
+  assert {
+    condition = (
+      local.grafana_environment["GF_SERVER_PROTOCOL"] == "https" &&
+      local.grafana_environment["GF_SERVER_ROOT_URL"] == "https://grafana.example.com/" &&
+      local.grafana_environment["GF_AUTH_DISABLE_LOGIN_FORM"] == "true" &&
+      local.grafana_environment["GF_AUTH_BASIC_ENABLED"] == "false" &&
+      local.grafana_environment["GF_SECURITY_DISABLE_INITIAL_ADMIN_CREATION"] == "true" &&
+      local.grafana_environment["GF_AUTH_GITHUB_ROLE_ATTRIBUTE_STRICT"] == "true" &&
+      !contains(keys(local.grafana_environment), "GF_AUTH_ANONYMOUS_ENABLED")
+    )
+    error_message = "Grafana must serve HTTPS, and GitHub must be its only way in: no login form, no basic authentication, no admin password."
+  }
+
+  assert {
+    condition     = local.grafana_role_expression == "contains(`[\"octocat\"]`, login) && 'GrafanaAdmin' || contains(`[\"hubot\"]`, login) && 'Viewer' || ''"
+    error_message = "Listed admins must become Grafana administrators, listed viewers viewers, and everyone else no role (refused)."
+  }
+
+  assert {
+    condition = (
+      length(local.grafana_dashboards) == length(fileset("./modules/observability/dashboards", "*.json")) &&
+      alltrue([for name in keys(local.grafana_dashboards) : startswith(name, "GRAFANA_DASHBOARD_JSON_")])
+    )
+    error_message = "Every dashboard in modules/observability/dashboards must reach Grafana."
+  }
+
+  assert {
+    condition = one([
+      for env in azurerm_container_app.grafana.template[0].init_container[0].env : env.secret_name if env.name == "ORIGIN_CERTIFICATE_PFX_BASE64"
+      ]) == "origin-certificate" && !contains([
+      for env in azurerm_container_app.grafana.template[0].container[0].env : env.name
+    ], "ORIGIN_CERTIFICATE_PFX_BASE64")
+    error_message = "Only the init container may see the certificate's private key in its PFX form."
+  }
+
+  assert {
+    condition = one([
+      for volume in azurerm_container_app.grafana.template[0].volume : volume.storage_type if volume.name == "data"
+    ]) == "NfsAzureFile"
+    error_message = "Grafana's database must be on the NFS share."
+  }
+}
+
+run "observability_refuses_an_image_without_a_digest" {
+  command = plan
+
+  module {
+    source = "./modules/observability"
+  }
+
+  variables {
+    subscription_id                          = "00000000-0000-0000-0000-000000000000"
+    container_app_environment_id             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.App/managedEnvironments/cae-test"
+    container_app_environment_default_domain = "mockdomain-1a2b3c4d.eastus.azurecontainerapps.io"
+    container_apps_subnet_id                 = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.Network/virtualNetworks/vnet/subnets/snet-aca"
+    storage_account_name                     = "stloginapptestabc123"
+    images = {
+      prometheus             = "quay.io/prometheus/prometheus:latest"
+      azure_metrics_exporter = "quay.io/webdevops/azure-metrics-exporter@sha256:0f26a275e593538983a13c9ebb9d229e296524a3f292e684666667f24eae2b76"
+      grafana                = "docker.io/grafana/grafana@sha256:0615ec4fbd4072004b7d86b46ded63013a74b7d6eb1119273dd89e8fa25c13cf"
+      init                   = "mcr.microsoft.com/azurelinux/base/core@sha256:88fc2b4a425801b3b4d8fe5342e24fb6134669fb718ec970340bdd36dee50c35"
+    }
+    prometheus_app_name = "ca-loginapp-test-prometheus"
+    prometheus_identity = {
+      id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-prometheus"
+      principal_id = "44444444-4444-4444-4444-444444444444"
+      client_id    = "55555555-5555-5555-5555-555555555555"
+    }
+    prometheus_secret_ids = {
+      web_config           = "https://kv-test.vault.azure.net/secrets/prometheus-web-config"
+      self_scrape_password = "https://kv-test.vault.azure.net/secrets/prometheus-self-scrape-password"
+    }
+    monitored_resource_group_id    = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test"
+    monitored_postgresql_server_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.DBforPostgreSQL/flexibleServers/psql-test"
+    grafana_app_name               = "ca-loginapp-test-grafana"
+    grafana_identity_id            = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-grafana"
+    grafana_hostname               = "grafana.example.com"
+    grafana_exposed_port           = 8445
+    grafana_github_client_id       = "Ov23liAbCdEfGhIjKlMn"
+    grafana_github_admins          = []
+    grafana_secret_ids = {
+      github_client_secret = "https://kv-test.vault.azure.net/secrets/grafana-github-client-secret"
+      secret_key           = "https://kv-test.vault.azure.net/secrets/grafana-secret-key"
+      prometheus_password  = "https://kv-test.vault.azure.net/secrets/prometheus-grafana-password"
+      origin_certificate   = "https://kv-test.vault.azure.net/secrets/app-example-com-origin"
+    }
+  }
+
+  expect_failures = [var.images, var.grafana_github_admins]
 }

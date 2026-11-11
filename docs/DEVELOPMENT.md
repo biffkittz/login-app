@@ -252,6 +252,18 @@ API in Release mode and starts it at **<http://localhost:8080>**. It is the same
 The [Vue.js devtools](https://devtools.vuejs.org/) browser extension shows component state and the Pinia store. The
 Vite dev server also exposes Vue DevTools in-page (`vite-plugin-vue-devtools`): press Alt+Shift+D.
 
+**Metrics.** `dotnet-counters` shows the app's metrics live while you click around, without Prometheus:
+
+```bash
+dotnet tool install --global dotnet-counters
+dotnet-counters monitor -n LoginApp.Api --counters Nibbles,Microsoft.AspNetCore.Http.Connections,Microsoft.AspNetCore.Hosting
+```
+
+To try the whole pipeline, run a Prometheus with its OTLP receiver on your machine (for example
+`docker run -p 9090:9090 quay.io/prometheus/prometheus --web.enable-otlp-receiver`) and start the API with
+`Telemetry__OtlpEndpoint=http://localhost:9090/api/v1/otlp/v1/metrics`. The app's metrics and their labels are listed
+in [ARCHITECTURE.md](ARCHITECTURE.md#metrics).
+
 ## 8. Tests and quality checks
 
 Run these before pushing; the app workflow (`.github/workflows/app.yml`, see [CI_CD.md](CI_CD.md)) runs the same
@@ -368,6 +380,10 @@ for example `Jwt--SigningKey`.
 | `RegistrationNotifications:Subject` | `[grocery app] new registration detected` | The subject line; no control characters |
 | `RegistrationNotifications:SiteUrl` | none | This instance's address, which the email names (Terraform sets each instance's) |
 | `RegistrationNotifications:MaxPerDay` | `50` | Registration emails in any 24 hours, at most (counted in memory); the last says so. `0` sends none |
+| `Telemetry:OtlpEndpoint` | none (no export) | Full URL that receives OTLP metrics, e.g. Prometheus' `https://<host>/api/v1/otlp/v1/metrics`; `https://`, or `http://` to localhost only. Terraform sets it in Azure when the observability stack exists |
+| `Telemetry:OtlpUsername`, `Telemetry:OtlpPassword` | none | HTTP Basic credentials at that endpoint, both or neither (the password is a secret: Key Vault `Telemetry--OtlpPassword` in Azure) |
+| `Telemetry:ExportIntervalSeconds` | `15` | How often metrics are sent (1-300) |
+| `Telemetry:Site` | none | The `site` label on every metric (Terraform sets each instance's host name) |
 | `Network:RestrictToInternalNetworks` | `false` (appsettings.json; the class default is `true`) | Refuse (403) TCP peers outside `Network:InternalNetworks`. Off in the shipped settings, in Azure too; turn it on only where the immediate peer is always internal |
 | `Network:InternalNetworks` | RFC 1918, 100.64/10, link-local, loopback, IPv6 ULA | CIDR list: the proxies trusted for `X-Forwarded-*` (always) and the peers allowed in (when `RestrictToInternalNetworks` is on) |
 | `KeyVault:Uri` | empty (off) | e.g. `https://kv-login-app.vault.azure.net/`; loads all vault secrets at startup |

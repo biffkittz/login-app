@@ -48,6 +48,13 @@ locals {
     db_bootstrap_job           = "caj-${local.name}-dbinit"
     identity_app               = "id-${local.name}-app"
     identity_db_bootstrap      = "id-${local.name}-dbinit"
+    # Observability (observability_enabled). The apps are named like additional instances, whose keys can't be
+    # "prometheus" or "grafana" (validated).
+    storage_account_observability = "st${local.compact_name}${local.suffix}"
+    prometheus_app                = "ca-${local.name}-prometheus"
+    grafana_app                   = "ca-${local.name}-grafana"
+    identity_prometheus           = "id-${local.name}-prometheus"
+    identity_grafana              = "id-${local.name}-grafana"
   }
 
   cloudflare_ipv4_cidrs = data.cloudflare_ip_ranges.this.ipv4_cidrs
@@ -120,6 +127,7 @@ locals {
       },
       local.image_generation_configured ? { gemini-api-key = module.key_vault.secret_ids["gemini_api_key"] } : {},
       local.registration_notifications_enabled ? { email-api-token = module.key_vault.secret_ids["email_api_token"] } : {},
+      local.observability_enabled ? { telemetry-otlp-password = module.key_vault.secret_ids["prometheus_app_password"] } : {},
     )
   }
   app_secret_environment_variables = merge(
@@ -130,6 +138,7 @@ locals {
     },
     local.image_generation_configured ? { ImageGeneration__ApiKey = "gemini-api-key" } : {},
     local.registration_notifications_enabled ? { Email__ApiToken = "email-api-token" } : {},
+    local.observability_enabled ? { Telemetry__OtlpPassword = "telemetry-otlp-password" } : {},
   )
 
   # Settings of each instance's own. The instances share the JWT signing key, so each additional one names itself as
@@ -140,6 +149,8 @@ locals {
     for key, instance in local.app_instances : key => merge(
       key == "main" ? {} : { Jwt__Audience = instance.hostname },
       local.registration_notifications_enabled ? { RegistrationNotifications__SiteUrl = "https://${instance.hostname}" } : {},
+      # The site label on every metric, which keeps the instances' series apart in Prometheus.
+      local.observability_enabled ? { Telemetry__Site = instance.hostname } : {},
     )
   }
 
@@ -166,6 +177,16 @@ locals {
   app_trusted_proxy_settings = {
     for index, cidr in local.cloudflare_ipv4_cidrs : "Network__InternalNetworks__${100 + index}" => cidr
   }
+
+  # Prometheus and Grafana (modules/observability). The app pushes its metrics to Prometheus' OTLP receiver at its
+  # internal address, signing in as Prometheus' user "app"; Prometheus' users and their passwords are generated here
+  # (Grafana's "grafana", Prometheus' own "prometheus" for scraping itself).
+  observability_enabled = var.observability_enabled
+  prometheus_users      = local.observability_enabled ? toset(["app", "grafana", "prometheus"]) : toset([])
+  app_telemetry_settings = local.observability_enabled ? {
+    Telemetry__OtlpEndpoint = "https://${local.names.prometheus_app}.internal.${module.container_apps.default_domain}/api/v1/otlp/v1/metrics"
+    Telemetry__OtlpUsername = "app"
+  } : {}
 }
 
 resource "azurerm_resource_group" "this" {
@@ -206,6 +227,27 @@ resource "azurerm_user_assigned_identity" "db_bootstrap" {
   tags                = local.tags
 }
 
+# Prometheus (observability_enabled): reads its Key Vault secrets and, for the Azure Monitor exporter, the platform
+# metrics of the resource group.
+resource "azurerm_user_assigned_identity" "prometheus" {
+  count = local.observability_enabled ? 1 : 0
+
+  name                = local.names.identity_prometheus
+  location            = azurerm_resource_group.this.location
+  resource_group_name = azurerm_resource_group.this.name
+  tags                = local.tags
+}
+
+# Grafana (observability_enabled): reads its Key Vault secrets and the TLS certificate.
+resource "azurerm_user_assigned_identity" "grafana" {
+  count = local.observability_enabled ? 1 : 0
+
+  name                = local.names.identity_grafana
+  location            = azurerm_resource_group.this.location
+  resource_group_name = azurerm_resource_group.this.name
+  tags                = local.tags
+}
+
 # ---------------------------------------------------------------------------------------------------------------------
 # Generated secrets. They are kept (marked sensitive) in the remote state and written to Key Vault, the only place
 # workloads read them from. Rotate one with: terraform apply -replace=<address> (see docs/DEPLOYMENT.md).
@@ -232,6 +274,24 @@ resource "random_bytes" "jwt_signing_key" {
   length = 64
 }
 
+# Passwords of Prometheus' users (observability_enabled). Prometheus stores only their bcrypt hashes (bcrypt_hash
+# is computed once, so plans stay stable); each user gets its password from Key Vault. Alphanumeric, because HTTP
+# Basic authentication joins user and password with a colon.
+resource "random_password" "prometheus_users" {
+  for_each = local.prometheus_users
+
+  length  = 40
+  special = false
+}
+
+# Grafana's secret_key (observability_enabled), which encrypts what Grafana stores, such as the data source's password.
+resource "random_password" "grafana_secret_key" {
+  count = local.observability_enabled ? 1 : 0
+
+  length  = 40
+  special = false
+}
+
 # ---------------------------------------------------------------------------------------------------------------------
 # Modules
 # ---------------------------------------------------------------------------------------------------------------------
@@ -244,7 +304,7 @@ module "networking" {
   resource_group_name       = azurerm_resource_group.this.name
   address_space             = var.vnet_address_space
   subnet_address_prefixes   = var.subnet_address_prefixes
-  app_ingress_ports         = [for instance in values(local.app_instances) : instance.exposed_port]
+  app_ingress_ports         = concat([for instance in values(local.app_instances) : instance.exposed_port], local.observability_enabled ? [var.grafana_exposed_port] : [])
   app_ingress_allowed_cidrs = var.restrict_ingress_to_cloudflare ? concat(local.cloudflare_ipv4_cidrs, var.ingress_additional_allowed_cidrs) : []
   tags                      = local.tags
 }
@@ -313,6 +373,16 @@ module "key_vault" {
     { for key in keys(var.additional_app_instances) : "${key}_db_connection_string" => "${key}-db-connection-string" },
     local.image_generation_configured ? { gemini_api_key = "ImageGeneration--ApiKey" } : {},
     local.registration_notifications_enabled ? { email_api_token = "Email--ApiToken" } : {},
+    # Observability: the app's password at Prometheus (configuration key Telemetry:OtlpPassword), Prometheus' web
+    # configuration and self-scrape password, and Grafana's secrets.
+    local.observability_enabled ? {
+      prometheus_app_password         = "Telemetry--OtlpPassword"
+      prometheus_web_config           = "prometheus-web-config"
+      prometheus_self_scrape_password = "prometheus-self-scrape-password"
+      prometheus_grafana_password     = "prometheus-grafana-password"
+      grafana_github_client_secret    = "grafana-github-client-secret"
+      grafana_secret_key              = "grafana-secret-key"
+    } : {},
   )
   secret_values = merge(
     {
@@ -324,6 +394,14 @@ module "key_vault" {
     { for key in keys(var.additional_app_instances) : "${key}_db_connection_string" => local.app_connection_strings[key] },
     local.image_generation_configured ? { gemini_api_key = var.gemini_api_key } : {},
     local.registration_notifications_enabled ? { email_api_token = module.email_sending[0].api_token } : {},
+    local.observability_enabled ? {
+      prometheus_app_password         = random_password.prometheus_users["app"].result
+      prometheus_web_config           = yamlencode({ basic_auth_users = { for user, password in random_password.prometheus_users : user => password.bcrypt_hash } })
+      prometheus_self_scrape_password = random_password.prometheus_users["prometheus"].result
+      prometheus_grafana_password     = random_password.prometheus_users["grafana"].result
+      grafana_github_client_secret    = var.grafana_github_client_secret
+      grafana_secret_key              = random_password.grafana_secret_key[0].result
+    } : {},
   )
   secret_readers = merge(
     {
@@ -338,12 +416,24 @@ module "key_vault" {
     },
     local.image_generation_configured ? { app_gemini_api_key = { secret = "gemini_api_key", principal_id = azurerm_user_assigned_identity.app.principal_id } } : {},
     local.registration_notifications_enabled ? { app_email_api_token = { secret = "email_api_token", principal_id = azurerm_user_assigned_identity.app.principal_id } } : {},
+    local.observability_enabled ? {
+      app_prometheus_password         = { secret = "prometheus_app_password", principal_id = azurerm_user_assigned_identity.app.principal_id }
+      prometheus_web_config           = { secret = "prometheus_web_config", principal_id = azurerm_user_assigned_identity.prometheus[0].principal_id }
+      prometheus_self_scrape_password = { secret = "prometheus_self_scrape_password", principal_id = azurerm_user_assigned_identity.prometheus[0].principal_id }
+      grafana_prometheus_password     = { secret = "prometheus_grafana_password", principal_id = azurerm_user_assigned_identity.grafana[0].principal_id }
+      grafana_github_client_secret    = { secret = "grafana_github_client_secret", principal_id = azurerm_user_assigned_identity.grafana[0].principal_id }
+      grafana_secret_key              = { secret = "grafana_secret_key", principal_id = azurerm_user_assigned_identity.grafana[0].principal_id }
+    } : {},
   )
 
-  certificate_name                 = "${replace(var.app_hostname, ".", "-")}-origin"
-  certificate_pfx_base64           = filebase64(pathexpand(var.tls_certificate_pfx_path))
-  certificate_password             = var.tls_certificate_pfx_password
-  certificate_reader_principal_ids = { app = azurerm_user_assigned_identity.app.principal_id }
+  certificate_name       = "${replace(var.app_hostname, ".", "-")}-origin"
+  certificate_pfx_base64 = filebase64(pathexpand(var.tls_certificate_pfx_path))
+  certificate_password   = var.tls_certificate_pfx_password
+  # Grafana serves HTTPS with the same (wildcard) origin certificate as the app.
+  certificate_reader_principal_ids = merge(
+    { app = azurerm_user_assigned_identity.app.principal_id },
+    local.observability_enabled ? { grafana = azurerm_user_assigned_identity.grafana[0].principal_id } : {},
+  )
 
   log_analytics_workspace_id = azurerm_log_analytics_workspace.this.id
   rbac_propagation_wait      = var.rbac_propagation_wait
@@ -382,7 +472,7 @@ module "container_apps" {
     }
   }
   app_secret_environment_variables = local.app_secret_environment_variables
-  app_environment_variables = merge(local.app_trusted_proxy_settings, local.registration_notification_settings, {
+  app_environment_variables = merge(local.app_trusted_proxy_settings, local.registration_notification_settings, local.app_telemetry_settings, {
     ASPNETCORE_ENVIRONMENT                        = "Production"
     OriginTls__RequireCloudflareClientCertificate = tostring(var.require_cloudflare_client_certificate)
   })
@@ -400,6 +490,64 @@ module "container_apps" {
     administrator_password_id = module.key_vault.secret_ids["postgresql_admin_password"]
     app_role                  = var.postgresql_app_role
     app_password_id           = module.key_vault.secret_ids["postgresql_app_password"]
+  }
+}
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Observability: Prometheus and Grafana in the same environment (observability_enabled). The app pushes its metrics to
+# Prometheus; Prometheus also collects Azure Monitor's platform metrics; Grafana, at grafana_hostname behind
+# Cloudflare, shows them to the GitHub users in grafana_github_admins and grafana_github_viewers.
+# ---------------------------------------------------------------------------------------------------------------------
+
+module "observability" {
+  source = "./modules/observability"
+  count  = local.observability_enabled ? 1 : 0
+
+  location            = azurerm_resource_group.this.location
+  resource_group_name = azurerm_resource_group.this.name
+  tags                = local.tags
+
+  subscription_id                          = data.azurerm_client_config.current.subscription_id
+  container_app_environment_id             = module.container_apps.environment_id
+  container_app_environment_default_domain = module.container_apps.default_domain
+  container_apps_subnet_id                 = module.networking.subnet_ids.container_apps
+  storage_account_name                     = local.names.storage_account_observability
+  images                                   = var.observability_images
+
+  prometheus_app_name = local.names.prometheus_app
+  prometheus_identity = {
+    id           = azurerm_user_assigned_identity.prometheus[0].id
+    principal_id = azurerm_user_assigned_identity.prometheus[0].principal_id
+    client_id    = azurerm_user_assigned_identity.prometheus[0].client_id
+  }
+  prometheus_cpu            = var.prometheus_cpu
+  prometheus_memory         = var.prometheus_memory
+  prometheus_retention_time = var.prometheus_retention_time
+  prometheus_retention_size = var.prometheus_retention_size
+  prometheus_secret_ids = {
+    web_config           = module.key_vault.secret_ids["prometheus_web_config"]
+    self_scrape_password = module.key_vault.secret_ids["prometheus_self_scrape_password"]
+  }
+  monitored_resource_group_id    = azurerm_resource_group.this.id
+  monitored_container_app_ids    = values(module.container_apps.app_ids)
+  monitored_postgresql_server_id = module.database.server_id
+
+  grafana_app_name     = local.names.grafana_app
+  grafana_identity_id  = azurerm_user_assigned_identity.grafana[0].id
+  grafana_cpu          = var.grafana_cpu
+  grafana_memory       = var.grafana_memory
+  grafana_hostname     = var.grafana_hostname
+  grafana_exposed_port = var.grafana_exposed_port
+  # The app's own allow list: Cloudflare's ranges (and the transitional Container Apps ranges, see their variable).
+  grafana_ingress_allowed_cidrs = local.app_ingress_allowed_cidrs
+  grafana_github_client_id      = var.grafana_github_client_id
+  grafana_github_admins         = var.grafana_github_admins
+  grafana_github_viewers        = var.grafana_github_viewers
+  grafana_secret_ids = {
+    github_client_secret = module.key_vault.secret_ids["grafana_github_client_secret"]
+    secret_key           = module.key_vault.secret_ids["grafana_secret_key"]
+    prometheus_password  = module.key_vault.secret_ids["prometheus_grafana_password"]
+    origin_certificate   = module.key_vault.certificate_secret_id
   }
 }
 
@@ -441,19 +589,51 @@ resource "cloudflare_ruleset" "origin_port" {
   kind        = "zone"
   phase       = "http_request_origin"
 
-  rules = [
-    for key in concat(["main"], keys(var.additional_app_instances)) : {
-      ref         = key == "main" ? "${var.project}_${var.environment}_app_origin_port" : "${var.project}_${var.environment}_${key}_origin_port"
-      description = "${local.app_instances[key].hostname}: connect to the Container Apps TCP ingress on ${local.app_instances[key].exposed_port}"
-      expression  = "http.host eq \"${local.app_instances[key].hostname}\""
-      action      = "route"
-      action_parameters = {
-        origin = {
-          port = local.app_instances[key].exposed_port
+  # Grafana's rule, when there is one, comes last, so turning it on or off leaves the instances' rules as they were.
+  rules = concat(
+    [
+      for key in concat(["main"], keys(var.additional_app_instances)) : {
+        ref         = key == "main" ? "${var.project}_${var.environment}_app_origin_port" : "${var.project}_${var.environment}_${key}_origin_port"
+        description = "${local.app_instances[key].hostname}: connect to the Container Apps TCP ingress on ${local.app_instances[key].exposed_port}"
+        expression  = "http.host eq \"${local.app_instances[key].hostname}\""
+        action      = "route"
+        action_parameters = {
+          origin = {
+            port = local.app_instances[key].exposed_port
+          }
         }
       }
-    }
-  ]
+    ],
+    local.observability_enabled ? [
+      {
+        ref         = "${var.project}_${var.environment}_grafana_origin_port"
+        description = "${var.grafana_hostname}: connect to Grafana's TCP ingress on ${var.grafana_exposed_port}"
+        expression  = "http.host eq \"${var.grafana_hostname}\""
+        action      = "route"
+        action_parameters = {
+          origin = {
+            port = var.grafana_exposed_port
+          }
+        }
+      }
+    ] : [],
+  )
+}
+
+# grafana.biffkittz.com, proxied like the app's host names, to the same public IP; the Origin Rule above sends it to
+# Grafana's port.
+resource "cloudflare_dns_record" "grafana" {
+  count = local.observability_enabled ? 1 : 0
+
+  zone_id = data.cloudflare_zone.this.id
+  name    = var.grafana_hostname
+  type    = "A"
+  content = module.container_apps.static_ip_address
+  proxied = true
+  ttl     = 1 # "automatic", required for proxied records
+  comment = "Grafana in Azure Container Apps environment ${local.names.container_apps_environment}; project:${var.project}; managed by Terraform"
+
+  depends_on = [cloudflare_ruleset.origin_port]
 }
 
 # The main instance's Container App and DNS record became the "main" entries of maps when instances were added. These

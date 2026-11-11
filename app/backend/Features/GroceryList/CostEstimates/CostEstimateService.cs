@@ -15,6 +15,7 @@ namespace LoginApp.Api.Features.GroceryList.CostEstimates;
 /// <param name="dbContext">The application database.</param>
 /// <param name="estimator">The model.</param>
 /// <param name="budget">The day's allowance of estimates.</param>
+/// <param name="metrics">Counts the outcomes and times the model.</param>
 /// <param name="options">Whether estimates are turned on.</param>
 /// <param name="geminiOptions">Whether there is a Gemini API key.</param>
 /// <param name="timeProvider">The clock.</param>
@@ -23,6 +24,7 @@ internal sealed class CostEstimateService(
     ApplicationDbContext dbContext,
     ICostEstimator estimator,
     CostEstimateBudget budget,
+    CostEstimateMetrics metrics,
     IOptions<CostEstimateOptions> options,
     IOptions<ImageGenerationOptions> geminiOptions,
     TimeProvider timeProvider,
@@ -45,6 +47,13 @@ internal sealed class CostEstimateService(
     /// <param name="cancellationToken">Cancels the estimate, e.g. when the user leaves.</param>
     /// <returns>The estimate, or why there is none.</returns>
     public async Task<CostEstimateResult> EstimateAsync(string userId, CancellationToken cancellationToken)
+    {
+        CostEstimateResult result = await EstimateCoreAsync(userId, cancellationToken);
+        metrics.EstimateFinished(result.Status);
+        return result;
+    }
+
+    private async Task<CostEstimateResult> EstimateCoreAsync(string userId, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (!options.Value.IsAvailable(geminiOptions.Value))
@@ -92,6 +101,10 @@ internal sealed class CostEstimateService(
             // The HTTP client's timeout, not the user leaving.
             CostEstimateLog.Failed(logger, userId, "Gemini didn't answer in time");
             return CostEstimateResult.Failure(CostEstimateStatus.ModelBusy);
+        }
+        finally
+        {
+            metrics.ModelAnswered(timeProvider.GetElapsedTime(started));
         }
 
         // The first answer for each item number counts; numbers that aren't on the list are ignored.

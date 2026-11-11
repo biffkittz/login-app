@@ -5,8 +5,11 @@ two independent instances of it, <https://app.biffkittz.com> and <https://grocer
 list and accounts. That includes the network, the Container Apps environment and a Container App per instance,
 PostgreSQL with a database per instance, Key Vault, the container registry, logging, and the Cloudflare DNS records,
 Origin Rules and Authenticated Origin Pulls. It also sets up Cloudflare Email Service, so that every registration
-emails the people in `registration_notification_recipients` from notifications@biffkittz.com. The instances share the
-image, the Key Vault and its secrets. The app terminates TLS itself with the Cloudflare origin certificate, so there
+emails the people in `registration_notification_recipients` from notifications@biffkittz.com. With
+`observability_enabled` it adds Prometheus and Grafana to the same environment: the app pushes its metrics to
+Prometheus, which also collects Azure's platform metrics, and Grafana shows them at <https://grafana.biffkittz.com>
+behind GitHub sign-in ([docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#observability)). The instances share the image, the Key
+Vault and its secrets. The app terminates TLS itself with the Cloudflare origin certificate, so there
 is no Application Gateway. The variable default is `eastus`; the demo deploys to `centralus`
 (`environments/demo.tfvars`). Every Azure resource is tagged `project:loginapp`.
 
@@ -66,7 +69,7 @@ operations (including [adding an instance](docs/DEPLOYMENT.md#adding-an-instance
 | --- | --- |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Request path, network and NSG rules, identities and RBAC, secrets, DNS, the reasoning behind each design decision, Well-Architected alignment, cost |
 | [docs/AUTHENTICATION.md](docs/AUTHENTICATION.md) | Signing in to Azure, required permissions, remote state access, CI with OIDC, the Cloudflare API token, and creating the origin certificate PFX |
-| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | First deployment step by step, verification, registration emails, upgrades, secret and certificate rotation, teardown, troubleshooting |
+| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | First deployment step by step, verification, registration emails, observability (Prometheus and Grafana), upgrades, secret and certificate rotation, teardown, troubleshooting |
 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Tools and VS Code setup in WSL, the everyday check loop, tests, pre-commit, CI, conventions, provider upgrades |
 
 ## Layout
@@ -84,7 +87,8 @@ infra/
 │   ├── key-vault/           Key Vault, secrets, TLS certificate, per-secret RBAC
 │   ├── database/            PostgreSQL flexible server (private access), database, private DNS
 │   ├── container-app/       External environment, the app (TCP ingress), the database bootstrap job
-│   └── email-sending/       Cloudflare Email Service: sending domain, recipients, the app's email token
+│   ├── email-sending/       Cloudflare Email Service: sending domain, recipients, the app's email token
+│   └── observability/       Prometheus, Grafana, their NFS share, init scripts and the dashboards (dashboards/*.json)
 ├── tests/                   `terraform test` suites with mocked providers (no credentials needed)
 ├── .tflint.hcl              Lint rules (Terraform "all" preset + azurerm ruleset)
 └── .terraform-docs.yml      Generates the reference below and in each module's README

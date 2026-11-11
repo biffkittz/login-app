@@ -1,6 +1,9 @@
+using System.Diagnostics.Metrics;
 using LoginApp.Api.Features.Auth.Notifications;
 using LoginApp.Api.Infrastructure.Email;
+using LoginApp.Api.Infrastructure.Telemetry;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Diagnostics.Metrics.Testing;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -88,6 +91,28 @@ public sealed class RegistrationNotificationWorkerTests
 
         // Assert: Grace's email is the next attempt, without any retry delay in between.
         Assert.Equal(["Ada", "Grace"], harness.Sender.Sent.Select(NameIn));
+    }
+
+    [Fact]
+    public async Task Worker_CountsEachEmailByOutcome()
+    {
+        // Arrange: Cloudflare refuses Ada's email and takes Grace's.
+        await using Harness harness = await Harness.StartAsync();
+        using MetricCollector<long> emails = new(harness.MeterFactory, ApplicationMeter.Name, "nibbles.registration_emails");
+        harness.Sender.Answer = (message, token) => NameIn(message) == "Ada"
+            ? throw new EmailDeliveryException("Cloudflare answered 403 (10102)", isTransient: false)
+            : FakeEmailSender.DeliverAsync(message, token);
+
+        // Act
+        harness.Queue.NotifyRegistered("Ada");
+        harness.Queue.NotifyRegistered("Grace");
+        await emails.WaitForMeasurementsAsync(2, TimeSpan.FromSeconds(10));
+
+        // Assert: the outcome is all the metric says about an email.
+        Assert.Equal(
+            [RegistrationNotificationMetrics.Failed, RegistrationNotificationMetrics.Sent],
+            emails.GetMeasurementSnapshot().Select(measurement => (string)measurement.Tags[RegistrationNotificationMetrics.OutcomeTag]!));
+        Assert.All(emails.GetMeasurementSnapshot(), measurement => Assert.Single(measurement.Tags));
     }
 
     [Fact]
@@ -220,12 +245,13 @@ public sealed class RegistrationNotificationWorkerTests
                 MaxPerDay = maxPerDay,
             });
             IOptions<EmailOptions> emailOptions = Options.Create(email);
-            _services = new ServiceCollection().AddSingleton<IEmailSender>(Sender).BuildServiceProvider();
+            _services = new ServiceCollection().AddMetrics().AddSingleton<IEmailSender>(Sender).BuildServiceProvider();
             Queue = new RegistrationNotificationQueue(options, emailOptions, Clock, NullLogger<RegistrationNotificationQueue>.Instance);
             Worker = new RegistrationNotificationWorker(
                 Queue,
                 _services.GetRequiredService<IServiceScopeFactory>(),
                 new RegistrationNotificationBudget(Clock, options),
+                new RegistrationNotificationMetrics(MeterFactory),
                 options,
                 emailOptions,
                 Clock,
@@ -235,6 +261,8 @@ public sealed class RegistrationNotificationWorkerTests
         public FakeTimeProvider Clock { get; } = new(new DateTimeOffset(2026, 11, 10, 14, 3, 0, TimeSpan.Zero));
 
         public FakeEmailSender Sender { get; } = new();
+
+        public IMeterFactory MeterFactory => _services.GetRequiredService<IMeterFactory>();
 
         public RegistrationNotificationQueue Queue { get; }
 

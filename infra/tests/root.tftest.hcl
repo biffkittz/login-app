@@ -689,3 +689,169 @@ run "rejects_the_key_vault_administrator_listed_again_as_an_additional_one" {
 
   expect_failures = [var.key_vault_additional_administrators]
 }
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Observability (Prometheus and Grafana)
+# ---------------------------------------------------------------------------------------------------------------------
+
+run "observability_is_off_by_default" {
+  command = plan
+
+  assert {
+    condition = (
+      length(module.observability) == 0 &&
+      length(cloudflare_dns_record.grafana) == 0 &&
+      length(cloudflare_ruleset.origin_port.rules) == 1 &&
+      output.observability == null
+    )
+    error_message = "Without observability_enabled there must be no Prometheus, Grafana, DNS record or Origin Rule for them."
+  }
+
+  assert {
+    condition = (
+      length(local.app_telemetry_settings) == 0 &&
+      !contains(keys(local.app_secret_environment_variables), "Telemetry__OtlpPassword") &&
+      !contains(keys(local.app_secrets["main"]), "telemetry-otlp-password")
+    )
+    error_message = "Without observability_enabled the app must export no metrics."
+  }
+}
+
+run "observability_adds_grafana_behind_cloudflare_and_points_the_app_at_prometheus" {
+  command = apply
+
+  variables {
+    app_image_tag                = "1a2b3c4"
+    observability_enabled        = true
+    grafana_github_client_id     = "Ov23liAbCdEfGhIjKlMn"
+    grafana_github_client_secret = "0123456789abcdef0123456789abcdef01234567"
+    grafana_github_admins        = ["biffkittz"]
+  }
+
+  assert {
+    condition = (
+      cloudflare_dns_record.grafana[0].name == "grafana.biffkittz.com" &&
+      cloudflare_dns_record.grafana[0].proxied == true &&
+      cloudflare_dns_record.grafana[0].content == output.origin_public_ip
+    )
+    error_message = "grafana.biffkittz.com must be a proxied record for the environment's public IP."
+  }
+
+  assert {
+    condition = (
+      length(cloudflare_ruleset.origin_port.rules) == 2 &&
+      cloudflare_ruleset.origin_port.rules[0].ref == "loginapp_demo_app_origin_port" &&
+      cloudflare_ruleset.origin_port.rules[1].ref == "loginapp_demo_grafana_origin_port" &&
+      cloudflare_ruleset.origin_port.rules[1].expression == "http.host eq \"grafana.biffkittz.com\"" &&
+      cloudflare_ruleset.origin_port.rules[1].action_parameters.origin.port == 8445
+    )
+    error_message = "Cloudflare must send grafana.biffkittz.com to Grafana's port, after the app's rules, which stay as they were."
+  }
+
+  assert {
+    condition = (
+      local.app_telemetry_settings["Telemetry__OtlpEndpoint"] == "https://ca-loginapp-demo-prometheus.internal.mockdomain-1a2b3c4d.eastus.azurecontainerapps.io/api/v1/otlp/v1/metrics" &&
+      local.app_telemetry_settings["Telemetry__OtlpUsername"] == "app" &&
+      local.app_secret_environment_variables["Telemetry__OtlpPassword"] == "telemetry-otlp-password" &&
+      local.app_secrets["main"]["telemetry-otlp-password"] == module.key_vault.secret_ids["prometheus_app_password"] &&
+      local.app_instance_environment_variables["main"]["Telemetry__Site"] == "app.biffkittz.com"
+    )
+    error_message = "The app must push to Prometheus' internal OTLP receiver as its user \"app\", with its password from Key Vault and its host name as the site."
+  }
+
+  assert {
+    condition = alltrue([
+      for key in ["prometheus_app_password", "prometheus_web_config", "prometheus_self_scrape_password", "prometheus_grafana_password", "grafana_github_client_secret", "grafana_secret_key"] :
+      contains(keys(module.key_vault.secret_ids), key)
+    ])
+    error_message = "Every observability secret must be kept in Key Vault."
+  }
+
+  assert {
+    condition = (
+      length(random_password.prometheus_users) == 3 &&
+      alltrue([for password in random_password.prometheus_users : password.length == 40 && !password.special])
+    )
+    error_message = "Prometheus' users need long, colon-free generated passwords."
+  }
+
+  assert {
+    condition = (
+      output.observability.grafana_url == "https://grafana.biffkittz.com" &&
+      output.observability.github_callback_url == "https://grafana.biffkittz.com/login/github" &&
+      output.observability.prometheus_app_name == "ca-loginapp-demo-prometheus" &&
+      output.observability.grafana_app_name == "ca-loginapp-demo-grafana" &&
+      can(regex("^stloginappdemo[0-9a-f]{6}$", output.observability.storage_account_name))
+    )
+    error_message = "The outputs must name Grafana's URL, the OAuth callback and the observability resources."
+  }
+}
+
+run "rejects_observability_without_a_github_oauth_app" {
+  command = plan
+
+  variables {
+    observability_enabled = true
+    grafana_github_admins = ["biffkittz"]
+  }
+
+  expect_failures = [var.grafana_github_client_id, var.grafana_github_client_secret]
+}
+
+run "rejects_observability_without_a_grafana_administrator" {
+  command = plan
+
+  variables {
+    observability_enabled        = true
+    grafana_github_client_id     = "Ov23liAbCdEfGhIjKlMn"
+    grafana_github_client_secret = "0123456789abcdef0123456789abcdef01234567"
+  }
+
+  expect_failures = [var.grafana_github_admins]
+}
+
+run "rejects_a_github_username_that_cannot_exist" {
+  command = plan
+
+  variables {
+    grafana_github_viewers = ["-not-a-user-"]
+  }
+
+  expect_failures = [var.grafana_github_viewers]
+}
+
+run "rejects_grafana_on_an_app_instances_port" {
+  command = plan
+
+  variables {
+    grafana_exposed_port = 8443
+  }
+
+  expect_failures = [var.grafana_exposed_port]
+}
+
+run "rejects_grafana_on_an_app_instances_host_name" {
+  command = plan
+
+  variables {
+    grafana_hostname = "app.biffkittz.com"
+  }
+
+  expect_failures = [var.grafana_hostname]
+}
+
+run "rejects_an_instance_named_like_an_observability_app" {
+  command = plan
+
+  variables {
+    additional_app_instances = {
+      grafana = {
+        hostname      = "dashboards.biffkittz.com"
+        exposed_port  = 8446
+        database_name = "dashboards"
+      }
+    }
+  }
+
+  expect_failures = [var.additional_app_instances]
+}

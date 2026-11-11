@@ -33,6 +33,12 @@ resource "azurerm_subnet" "container_apps" {
   service_endpoint {
     service = "Microsoft.KeyVault"
   }
+
+  # The observability stack's NFS share (modules/observability) admits this subnet only, through this endpoint: NFS
+  # has no keys, so the network decides who may mount it.
+  service_endpoint {
+    service = "Microsoft.Storage"
+  }
 }
 
 # PostgreSQL flexible server with private access (VNet integration): the server gets a private IP in this delegated

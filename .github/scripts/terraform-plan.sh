@@ -45,7 +45,12 @@ if [[ -n "${GEMINI_API_KEY:-}" ]]; then
 else
   echo "::warning::GEMINI_API_KEY isn't set in this environment, so the plan removes the Gemini key (no AI pictures or cost estimates)."
 fi
-unset TLS_CERTIFICATE_PFX_BASE64 TLS_CERTIFICATE_PFX_PASSWORD GEMINI_API_KEY
+
+# Grafana's GitHub OAuth App (observability_enabled). Terraform's validation names it if it is needed and missing.
+if [[ -n "${GRAFANA_GITHUB_CLIENT_SECRET:-}" ]]; then
+  export TF_VAR_grafana_github_client_secret="$GRAFANA_GITHUB_CLIENT_SECRET"
+fi
+unset TLS_CERTIFICATE_PFX_BASE64 TLS_CERTIFICATE_PFX_PASSWORD GEMINI_API_KEY GRAFANA_GITHUB_CLIENT_SECRET
 
 args=(-input=false -no-color -detailed-exitcode -var-file=environments/demo.tfvars -out="$out/tfplan")
 if [[ "$mode" == "pr" ]]; then

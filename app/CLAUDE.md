@@ -114,6 +114,18 @@ agreement:
   `FakeTimeProvider`. Source files must stay ASCII: write `\uXXXX` escapes for special characters in C# literals
   (a literal U+2028 breaks a string).
 
+## Metrics (`Infrastructure/Telemetry/`, `*Metrics.cs` in each feature)
+
+- Instruments come from `IMeterFactory` on the `Nibbles` meter (`ApplicationMeter.Name`), named `nibbles.<area>.<what>`,
+  one small `*Metrics` singleton per feature (e.g. `GroceryListMetrics`). Tag values are fixed strings (constants on
+  the class); never a user, name, email or anything a user typed.
+- Export is off unless `Telemetry:OtlpEndpoint` is set (Terraform, in Azure): `AddApplicationTelemetry` reads the
+  section at registration to decide whether to add the OTLP pipeline. New built-in meters go in its list.
+- The dashboards in `infra/modules/observability/dashboards` and the table in `docs/ARCHITECTURE.md` ("Metrics") name
+  the Prometheus forms (`nibbles_signalr_messages_total`, ...): keep them in step with the instruments.
+- Tests read instruments with `MetricCollector<T>` (`Microsoft.Extensions.Diagnostics.Testing`) on the host's
+  `IMeterFactory`; `MetricsExportTests` checks the OTLP export against a local stand-in receiver.
+
 ## Origin TLS (`Infrastructure/Tls/`)
 
 - `OriginTls:CertificatePfxBase64` (passwordless PFX from Key Vault) makes Kestrel serve HTTPS; validated at startup.
@@ -142,6 +154,9 @@ agree:
 - `ASPNETCORE_URLS=https://+:443` overrides the image's `ASPNETCORE_HTTP_PORTS=80`.
 - `Network__InternalNetworks__100+` holds Cloudflare's IP ranges, so `X-Forwarded-For` is trusted and rate
   limiting sees the real client IP. Indices 0-8 come from `appsettings.json`; keep them below 100.
+- Metrics (with `observability_enabled`): `Telemetry__OtlpEndpoint` (Prometheus' internal OTLP URL),
+  `Telemetry__OtlpUsername` (`app`) and each instance's `Telemetry__Site` (its host name) are plain variables;
+  `Telemetry__OtlpPassword` comes from Key Vault (`Telemetry--OtlpPassword`).
 
 ## Container
 

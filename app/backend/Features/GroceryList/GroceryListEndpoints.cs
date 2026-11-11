@@ -87,8 +87,11 @@ internal static class GroceryListEndpoints
 
         // [Authorize] on the hub covers the connection itself. The rate limit applies per connection attempt, which
         // a well-behaved client makes only when it opens the list or reconnects.
+        // A WebSocket request lasts as long as the connection, hours on an open phone, which would swamp the HTTP
+        // request-duration histogram. SignalR's own metrics and GroceryListMetrics cover the hub instead.
         endpoints.MapHub<GroceryListHub>(GroceryListHub.Path, ConfigureHub)
-            .RequireRateLimiting(GroceryListRateLimiting.PolicyName);
+            .RequireRateLimiting(GroceryListRateLimiting.PolicyName)
+            .DisableHttpMetrics();
 
         return endpoints;
     }

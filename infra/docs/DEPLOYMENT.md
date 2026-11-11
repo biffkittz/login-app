@@ -11,6 +11,7 @@ it down. Commands run in WSL from `infra/` unless they say otherwise.
 - [Phase 4: deploy the app](#phase-4-deploy-the-app)
 - [Verify](#verify)
 - [Registration emails](#registration-emails)
+- [Observability](#observability)
 - [Day-2 operations](#day-2-operations)
 - [Teardown](#teardown)
 - [Troubleshooting](#troubleshooting)
@@ -53,6 +54,8 @@ export TF_VAR_tls_certificate_pfx_path=/home/biffkittz/login-app/infra/.secrets/
 read -rsp 'PFX password: ' TF_VAR_tls_certificate_pfx_password && export TF_VAR_tls_certificate_pfx_password && echo
 # Optional: AI pictures of items and cost estimates. Without it the app runs, and both say they aren't set up.
 read -rsp 'Gemini API key: ' TF_VAR_gemini_api_key && export TF_VAR_gemini_api_key && echo
+# With observability_enabled (see "Observability"): the GitHub OAuth App's client secret for Grafana.
+read -rsp 'Grafana GitHub client secret: ' TF_VAR_grafana_github_client_secret && export TF_VAR_grafana_github_client_secret && echo
 ```
 
 Set `TF_VAR_gemini_api_key` in every terminal you apply from once you use it: an apply without it removes the key from
@@ -230,6 +233,71 @@ done
 The old token is deleted in the same apply, so an email sent between the apply and the restart fails and is logged
 (event 1106); registering itself is unaffected.
 
+## Observability
+
+Prometheus collects the app's metrics (which the app pushes every 15 seconds) and Azure's platform metrics, and
+Grafana shows them at https://grafana.biffkittz.com to the GitHub users you list. Design and trade-offs:
+[ARCHITECTURE.md](ARCHITECTURE.md#observability-prometheus-and-grafana). It is off until you turn it on, and adds about
+$63-77 a month ([cost](ARCHITECTURE.md#cost)).
+
+1. **Create a GitHub OAuth App** (GitHub, **Settings → Developer settings → OAuth Apps → New OAuth App**, under your
+   account or an organization):
+   - Application name: `Nibbles Grafana`; Homepage URL: `https://grafana.biffkittz.com`;
+   - Authorization callback URL: `https://grafana.biffkittz.com/login/github`.
+
+   Note the **Client ID**, then **Generate a new client secret** and copy it (GitHub shows it once).
+2. **Set the values.** In `environments/demo.tfvars`, set `grafana_github_client_id` to the client ID, list the GitHub
+   usernames who may sign in in `grafana_github_admins` (and `grafana_github_viewers`, for read-only users), and set
+   `observability_enabled = true`. The client secret never goes in the file:
+   `TF_VAR_grafana_github_client_secret` in your shell ([Prerequisites](#prerequisites)), and the
+   `GRAFANA_GITHUB_CLIENT_SECRET` secret in the `infra-pr` and `demo-plan` environments for CI
+   ([docs/CI_CD.md](../../docs/CI_CD.md)).
+3. **If CI applies:** re-run `infra/scripts/setup-github-oidc.sh` once first, so CI's deploy identity may assign
+   Monitoring Reader (the exporter's role).
+4. **Plan and apply.** It adds the storage account and NFS share, two identities, six Key Vault secrets, the Prometheus
+   and Grafana Container Apps, the `grafana` DNS record and its Origin Rule, the subnet's `Microsoft.Storage`
+   service endpoint, and the app's telemetry settings (a new revision of each instance).
+5. **Sign in** at https://grafana.biffkittz.com: Grafana sends you to GitHub, and back. The dashboards are in the
+   **Nibbles** folder: *Realtime (SignalR)*, *Service health* and *Azure infrastructure*. The app's metrics appear
+   within a minute; Azure's arrive a few minutes late, and the share's used capacity hourly.
+
+Check the parts from the command line:
+
+```bash
+curl -s https://grafana.biffkittz.com/api/health                 # {"database": "ok", ...}
+az containerapp logs show -n ca-loginapp-demo-prometheus -g "$RG" --container prometheus --tail 50
+az containerapp logs show -n ca-loginapp-demo-grafana -g "$RG" --container grafana --tail 50
+az containerapp logs show -n ca-loginapp-demo -g "$RG" --tail 200 | grep '"EventId":6000'
+# 6000: "Metrics are sent to ca-loginapp-demo-prometheus.internal... every 15 s as site app.biffkittz.com."
+```
+
+Prometheus has no public address. To look at it directly, use Grafana's **Explore** (the Prometheus data source).
+
+**Changing a dashboard.** Dashboards are code (`modules/observability/dashboards/*.json`) and can't be saved in
+Grafana's UI. Edit a copy there, **Export → Export as JSON**, replace the file, and apply; Grafana restarts with it.
+
+**Changing Prometheus' configuration** (`modules/observability/main.tf`) restarts Prometheus, with about a minute
+without new samples while the new replica waits for the old one's database lock. A mistake in the configuration
+stops Prometheus from starting: check its logs (above) after such an apply.
+
+**Updating the images.** Dependabot can't see the digests in `observability_images` (variables.tf). Now and then,
+look up the current releases and their digests and update the variable:
+
+```bash
+docker buildx imagetools inspect quay.io/prometheus/prometheus:v3.16.0 | head -3    # "Digest: sha256:..."
+docker buildx imagetools inspect docker.io/grafana/grafana:13.3.1 | head -3
+docker buildx imagetools inspect quay.io/webdevops/azure-metrics-exporter:26.10.0 | head -3
+docker buildx imagetools inspect mcr.microsoft.com/azurelinux/base/core:3.0.20261027 | head -3
+```
+
+Read the release notes first: Grafana's major versions change dashboards' schema, and Prometheus' change flags.
+Security releases (Grafana publishes them across its supported versions at once) are worth taking at once.
+
+**Starting Prometheus' history afresh** (say, after a corrupted database): stop it, then delete `prometheus/` on the
+share from a temporary container in the environment, as the share accepts NFS mounts from the Container Apps subnet
+only. Simpler: set `observability_enabled = false` and apply, which deletes the share (Grafana's users and settings
+too), then set it back to `true` and apply again.
+
 ## Day-2 operations
 
 | Task | How |
@@ -393,5 +461,11 @@ Destroying takes about 15 to 20 minutes.
 | No registration email arrives | Look in spam first. Then the app's log: 1101/1102 at start mean the emails are off (no recipients, or the email settings didn't arrive); 1106 gives Cloudflare's reason. `terraform output registration_notifications` should show the recipient as verified |
 | App log 1106: `Cloudflare answered 403 (10102 ...)` or `(10105 ...)` | The token can't send (10102: wrong permission; rotate it) or the account isn't entitled to send to that address (10105: confirm the recipient, or Workers Paid for other addresses) |
 | App log 1106: `Cloudflare answered 401` | The token was deleted or replaced: apply, then restart the revisions ([Rotating the email token](#rotating-the-email-token)) |
+| Grafana: GitHub says `The redirect_uri is not associated with this application` | The OAuth App's callback URL must be exactly `https://grafana.biffkittz.com/login/github` |
+| Grafana: back from GitHub, the sign-in is refused | Your GitHub username isn't in `grafana_github_admins` or `grafana_github_viewers`, spelled as GitHub spells it. Add it and apply |
+| Grafana's dashboards show **No data** for the app | The app isn't pushing: its log should show event 6000 at start. Prometheus' log shows refused pushes (`401`); after rotating Prometheus' passwords, restart the app's revisions so they re-read `Telemetry--OtlpPassword` |
+| Prometheus' log repeats `Waiting for the previous Prometheus replica to release /prometheus/lock` | An old revision still runs. It goes once the new one is ready (a minute); if not, deactivate it: `az containerapp revision list -n ca-loginapp-demo-prometheus -g "$RG" -o table`, then `az containerapp revision deactivate` |
+| Prometheus or Grafana won't start: `mount.nfs: access denied by server` | The share admits only the Container Apps subnet: check its `Microsoft.Storage` service endpoint and the storage account's network rules, and that secure transfer is off (Terraform sets all three) |
+| The *Azure infrastructure* dashboard is empty | The exporter can't read Azure Monitor yet: its Monitoring Reader role takes a few minutes to take effect after the first apply. Its log (`--container azure-metrics-exporter`) shows `AuthorizationFailed` until then |
 | `Error acquiring the state lock` | Someone else is running Terraform, or a crashed run left the lock. Wait, or `terraform force-unlock <LOCK_ID>` once you're sure |
 | A plan right after an apply isn't empty | Something drifts. Note the attribute and fix it in code (for example a value Azure sets that the configuration should state explicitly). Please don't silence it with `ignore_changes` without a comment explaining why |

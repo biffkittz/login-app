@@ -25,7 +25,7 @@ All commands run in the WSL Ubuntu terminal (the repositories below support Ubun
 | TFLint | 0.65 | Linting (`.tflint.hcl` pins the azurerm ruleset 0.33.0) |
 | terraform-docs | 0.24 | Regenerating the reference sections in the READMEs |
 | pre-commit | latest | Running the checks on every commit |
-| ShellCheck | from apt | Linting `db-bootstrap.sh` |
+| ShellCheck | from apt | Linting `db-bootstrap.sh` and the observability init scripts |
 
 **Terraform** from HashiCorp's apt repository (signed packages, updated by `apt upgrade`):
 
@@ -75,7 +75,7 @@ these extensions (accept the prompt, or install them from the Extensions view):
 | Extension | ID | Why |
 | --- | --- | --- |
 | HashiCorp Terraform | `hashicorp.terraform` | Syntax, validation, completion and docs on hover (terraform-ls); formats on save |
-| ShellCheck | `timonwong.shellcheck` | Lints `modules/container-app/scripts/db-bootstrap.sh` |
+| ShellCheck | `timonwong.shellcheck` | Lints the shell scripts under `modules/*/scripts/` and `scripts/` |
 | EditorConfig | `EditorConfig.EditorConfig` | Two-space indentation, LF line endings and trimmed whitespace from `.editorconfig` |
 | Azure Resources | `ms-azuretools.vscode-azureresourcegroups` | Browse what Terraform created |
 | Azure Container Apps | `ms-azuretools.vscode-azurecontainerapps` | Logs, revisions and jobs of the deployed app |

@@ -376,6 +376,7 @@ app/backend/
     ├── Security/                        Security headers, Kestrel hardening, in-memory Data Protection keys
     ├── Tls/                             HTTPS in Kestrel with the origin certificate; Cloudflare client-certificate check
     ├── Email/                           Sending email with Cloudflare Email Service's REST API (IEmailSender)
+    ├── Telemetry/                       The app's meter, the OTLP metrics exporter, the health check gauge
     └── Hosting/                         SPA static files and fallback; health checks
 ```
 
@@ -405,6 +406,41 @@ weak signing key or a malformed CIDR stops the app immediately with a precise me
 roles) and adds `GroceryItems`. It uses Npgsql with retry-on-failure for transient cloud faults. Migrations run at startup by
 default; EF Core 9+'s migration lock makes this safe with several replicas. See
 [BUILD_AND_DEPLOY.md](BUILD_AND_DEPLOY.md#4-database-migrations-in-azure) for the alternative.
+
+## Metrics
+
+The app records metrics with .NET's `System.Diagnostics.Metrics` and, when `Telemetry:OtlpEndpoint` is set (Terraform
+sets it in Azure when the observability stack exists), pushes them to Prometheus every 15 seconds over OTLP/HTTP,
+signing in with HTTP Basic authentication (`Telemetry:OtlpUsername`, `Telemetry:OtlpPassword`). Pushing, rather than
+letting Prometheus scrape a `/metrics` endpoint, needs no second port and no public endpoint: the app's only port faces
+Cloudflare, which would serve `/metrics` to anyone. Every metric carries `site` (`Telemetry:Site`, the instance's host
+name), and each process is its own `instance` (the replica's host name), so instances and overlapping revisions never
+mix. Prometheus, Grafana and the dashboards are infrastructure: [infra/docs/ARCHITECTURE.md](../infra/docs/ARCHITECTURE.md#observability-prometheus-and-grafana).
+
+The app's own meter, `Nibbles` (`Infrastructure/Telemetry/ApplicationMeter.cs`), has these instruments, shown here as
+Prometheus stores them:
+
+| Metric | Labels | What it counts |
+| --- | --- | --- |
+| `nibbles_signalr_connections` | | Realtime connections the hub accepted that are still open: phones and browsers with the list open |
+| `nibbles_signalr_messages_total` | `event` | Messages the hub sent, one per connected client for each broadcast. `rate()` is the hub's messages per second |
+| `nibbles_signalr_broadcasts_total` | `event` (`list_changed`, `settings_changed`) | Changes pushed to everyone |
+| `nibbles_signalr_connections_refused_total` | `reason` (`cross_origin`, `unknown_user`) | Connections the hub closed at once |
+| `nibbles_grocery_item_changes_total` | `change` (`saved`, `deleted`) | Items in the broadcast changes |
+| `nibbles_pictures_total`, `nibbles_pictures_duration_seconds` | `outcome` (`drawn`, `reused`, `failed`, `daily_limit`) | AI pictures, and how long drawing one took |
+| `nibbles_cost_estimates_total`, `nibbles_cost_estimates_duration_seconds` | `status` (`succeeded`, `model_busy`, `model_failed`, `daily_limit_reached`, `empty_list`, `not_available`) | Estimate Cost presses, and how long Gemini took to answer |
+| `nibbles_registration_emails_total` | `outcome` (`sent`, `failed`, `daily_limit`, `lost_at_shutdown`) | Registration emails |
+| `nibbles_health_status` | `check` (`database`) | The latest health check result: 1 healthy, 0.5 degraded, 0 unhealthy (every 30 seconds) |
+
+The metrics carry no user, item name, email address or other personal data: their labels are the fixed values above.
+
+Next to them the app exports ASP.NET Core's and .NET's own meters: HTTP requests by route and status code (the
+realtime hub's WebSocket requests excluded, since one lasts as long as the connection), Kestrel's connections and TLS
+handshakes, SignalR's connections and their duration, rate limits, exceptions, Identity's sign-ins and registrations,
+EF Core's queries, saves and concurrency conflicts, Npgsql's connection pool and commands, outgoing HTTP (Gemini,
+Cloudflare), and the runtime (CPU, memory, garbage collection, thread pool). The list is in
+`TelemetryServiceCollectionExtensions`; it leaves out meters that cost series without answering a question, such as
+routing match attempts.
 
 ## Frontend
 

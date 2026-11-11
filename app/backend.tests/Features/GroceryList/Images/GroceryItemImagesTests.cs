@@ -1,12 +1,15 @@
+using System.Diagnostics.Metrics;
 using System.Net;
 using System.Net.Http.Headers;
 using LoginApp.Api.Features.GroceryList;
 using LoginApp.Api.Features.GroceryList.Contracts;
 using LoginApp.Api.Features.GroceryList.Images;
 using LoginApp.Api.Infrastructure.Data;
+using LoginApp.Api.Infrastructure.Telemetry;
 using LoginApp.Api.Tests.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Diagnostics.Metrics.Testing;
 using SkiaSharp;
 
 namespace LoginApp.Api.Tests.Features.GroceryList.Images;
@@ -223,6 +226,38 @@ public sealed class GroceryItemImagesTests(PictureApiFactory factory) : IClassFi
         {
             factory.Generator.Answer = FakeImageGenerator.DrawAsync;
         }
+    }
+
+    [Fact]
+    public async Task Pictures_AreCountedByOutcome_AndDrawingIsTimed()
+    {
+        // Arrange
+        IMeterFactory meterFactory = factory.Services.GetRequiredService<IMeterFactory>();
+        using MetricCollector<long> pictures = new(meterFactory, ApplicationMeter.Name, "nibbles.pictures");
+        using MetricCollector<double> durations = new(meterFactory, ApplicationMeter.Name, "nibbles.pictures.duration");
+        using Shopper ada = await Shopper.SignUpAsync(factory, "Ada");
+        await using RealtimeListener phone = await ListenAsync(ada);
+
+        // Act: one picture drawn, one refused.
+        await AddAndWaitForPictureAsync(ada, UniqueName("Quince"), phone);
+        factory.Generator.Answer = (_, _) => throw new ImageGenerationException("Gemini drew no picture (reason IMAGE_SAFETY)", isTransient: false);
+        try
+        {
+            GroceryItemResponse refused = await ada.AddItemAsync(UniqueName("Rambutan"));
+            await phone.WaitForSavedAsync(refused.Id, saved => !saved.ImagePending);
+        }
+        finally
+        {
+            factory.Generator.Answer = FakeImageGenerator.DrawAsync;
+        }
+
+        // Assert: both outcomes counted, the drawing timed. (Another test's picture may finish meanwhile, so the
+        // counts are lower bounds.)
+        string?[] outcomes = [.. pictures.GetMeasurementSnapshot().Select(measurement => measurement.Tags[GroceryImageMetrics.OutcomeTag] as string)];
+        Assert.Contains(GroceryImageMetrics.Drawn, outcomes);
+        Assert.Contains(GroceryImageMetrics.Failed, outcomes);
+        Assert.All(durations.GetMeasurementSnapshot(), measurement => Assert.True(measurement.Value >= 0));
+        Assert.NotEmpty(durations.GetMeasurementSnapshot());
     }
 
     [Fact]

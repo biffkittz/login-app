@@ -100,6 +100,18 @@ output "registration_notifications" {
   } : null
 }
 
+output "observability" {
+  description = "Grafana's URL and the GitHub OAuth App's callback URL, Prometheus' internal URL, and the Container Apps and storage account behind them, or null while observability_enabled is false."
+  value = local.observability_enabled ? {
+    grafana_url          = module.observability[0].grafana_url
+    github_callback_url  = module.observability[0].github_callback_url
+    grafana_app_name     = module.observability[0].grafana_app_name
+    prometheus_url       = module.observability[0].prometheus_url
+    prometheus_app_name  = module.observability[0].prometheus_app_name
+    storage_account_name = module.observability[0].storage_account_name
+  } : null
+}
+
 output "next_steps" {
   description = "Commands for the steps that follow an apply (run them from the repository root)."
   value = merge(
@@ -110,6 +122,9 @@ output "next_steps" {
     },
     local.registration_notifications_enabled ? {
       confirm_recipients = "Each of ${join(", ", local.registration_notification_recipients)} gets an email from Cloudflare asking to verify the address: follow its link once. terraform output registration_notifications shows who has."
+    } : {},
+    local.observability_enabled ? {
+      open_grafana = "Open https://${var.grafana_hostname} and sign in with GitHub as one of ${join(", ", var.grafana_github_admins)}. The dashboards are in the Nibbles folder."
     } : {},
   )
 }

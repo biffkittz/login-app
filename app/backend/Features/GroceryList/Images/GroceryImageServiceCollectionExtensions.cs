@@ -43,6 +43,7 @@ internal static class GroceryImageServiceCollectionExtensions
         services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton<GroceryImageSignal>();
         services.AddSingleton<GroceryImageBudget>();
+        services.AddSingleton<GroceryImageMetrics>();
         services.AddHostedService<GroceryImageWorker>();
         return services;
     }

@@ -32,6 +32,7 @@ internal static class GroceryListServiceCollectionExtensions
 
         services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton<GroceryListWriteLock>();
+        services.AddSingleton<GroceryListMetrics>();
         services.AddSingleton<IGroceryListNotifier, GroceryListHubNotifier>();
         services.AddScoped<IGroceryListService, GroceryListService>();
         services.AddGroceryListRateLimiting();

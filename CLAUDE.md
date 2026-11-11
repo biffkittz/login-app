@@ -41,6 +41,17 @@ independent instance of the same image runs at https://grocery.biffkittz.com, wi
   address.
   Registering never waits for or fails because of it. Tests never send email; don't add ones that do.
 
+## Observability (`infra/modules/observability`, `app/backend/Infrastructure/Telemetry`)
+
+- The app pushes metrics to Prometheus over OTLP (Basic auth, password from Key Vault); there is no `/metrics`
+  endpoint, and the app's one port stays Cloudflare's. Prometheus has internal ingress only; Grafana is public at
+  grafana.biffkittz.com (Cloudflare, TCP ingress on 8445) with GitHub sign-in only, for usernames listed in Terraform.
+- Metric labels carry fixed values only: never a user, item name, email address or other personal data.
+- The dashboards (`infra/modules/observability/dashboards/*.json`) query the metric names in docs/ARCHITECTURE.md
+  ("Metrics"): rename an instrument and its queries together.
+- Prometheus and Grafana keep their data on an NFS share (Container Apps can't mount disks); exactly one Prometheus
+  writes it. Images are pinned by digest; Dependabot can't update them.
+
 ## CI/CD (`.github/`, `docs/CI_CD.md`)
 
 - GitHub Actions signs in to Azure with OIDC only, one identity per GitHub environment (`infra-pr`, `demo-plan`,

@@ -32,6 +32,8 @@ flowchart LR
   acr[Azure Container Registry] -.->|image pull| app
   app -->|"HTTPS: item names (and quantities, brands)"| gemini[Gemini API<br/>item pictures, cost estimates]
   app -->|"HTTPS: new registrations"| mail[Cloudflare Email Service<br/>notifications@biffkittz.com]
+  app -->|"OTLP: metrics"| prom[Prometheus<br/>internal only]
+  grafana[Grafana<br/>grafana.biffkittz.com] -->|PromQL| prom
 ```
 
 The Azure side is built with Terraform in [`infra/`](infra/README.md).
@@ -136,6 +138,10 @@ login-app/
   - The realtime hub refuses connections opened by pages on other sites, and accounts that no longer exist.
 - **Operations:**
   - Liveness and readiness health endpoints.
+  - Metrics pushed to Prometheus over OTLP: realtime connections and SignalR messages per second, HTTP rates, errors
+    and latency, sign-ins, AI pictures and cost estimates, the database pool and the .NET runtime, plus Azure's
+    platform metrics (replicas, restarts, CPU, memory, PostgreSQL). Grafana dashboards at grafana.biffkittz.com, behind
+    GitHub sign-in for the people listed in Terraform ([infra/docs/DEPLOYMENT.md](infra/docs/DEPLOYMENT.md#observability)).
   - Structured JSON logs that never contain item contents, emails or tokens.
   - EF Core migrations applied at startup.
   - Validated configuration that fails fast.
