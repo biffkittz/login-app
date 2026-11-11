@@ -738,6 +738,14 @@ run "observability_adds_grafana_behind_cloudflare_and_points_the_app_at_promethe
   }
 
   assert {
+    condition = alltrue([
+      for comment in concat([for record in cloudflare_dns_record.app : record.comment], [cloudflare_dns_record.grafana[0].comment]) :
+      length(comment) <= 100
+    ])
+    error_message = "Cloudflare refuses DNS record comments over 100 characters (error 9313)."
+  }
+
+  assert {
     condition = (
       length(cloudflare_ruleset.origin_port.rules) == 2 &&
       cloudflare_ruleset.origin_port.rules[0].ref == "loginapp_demo_app_origin_port" &&

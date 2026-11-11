@@ -243,13 +243,15 @@ locals {
     GF_AUTH_LOGIN_MAXIMUM_LIFETIME_DURATION          = "7d"
     GF_AUTH_GITHUB_ENABLED                           = "true"
     GF_AUTH_GITHUB_CLIENT_ID                         = var.grafana_github_client_id
-    GF_AUTH_GITHUB_SCOPES                            = "user:email"
-    GF_AUTH_GITHUB_ALLOW_SIGN_UP                     = "true"
-    GF_AUTH_GITHUB_ROLE_ATTRIBUTE_PATH               = local.grafana_role_expression
-    GF_AUTH_GITHUB_ROLE_ATTRIBUTE_STRICT             = "true"
-    GF_AUTH_GITHUB_ALLOW_ASSIGN_GRAFANA_ADMIN        = "true"
-    GF_USERS_ALLOW_SIGN_UP                           = "false"
-    GF_USERS_ALLOW_ORG_CREATE                        = "false"
+    # Grafana reads the user's teams at every sign-in and refuses it if it can't (GET /user/teams), and GitHub lets an
+    # OAuth App token do that only with read:org (or broader scopes). user:email reads a private email address.
+    GF_AUTH_GITHUB_SCOPES                     = "user:email,read:org"
+    GF_AUTH_GITHUB_ALLOW_SIGN_UP              = "true"
+    GF_AUTH_GITHUB_ROLE_ATTRIBUTE_PATH        = local.grafana_role_expression
+    GF_AUTH_GITHUB_ROLE_ATTRIBUTE_STRICT      = "true"
+    GF_AUTH_GITHUB_ALLOW_ASSIGN_GRAFANA_ADMIN = "true"
+    GF_USERS_ALLOW_SIGN_UP                    = "false"
+    GF_USERS_ALLOW_ORG_CREATE                 = "false"
 
     GF_SECURITY_COOKIE_SECURE             = "true"
     GF_SECURITY_COOKIE_SAMESITE           = "lax" # the OAuth redirect back from GitHub needs lax, not strict

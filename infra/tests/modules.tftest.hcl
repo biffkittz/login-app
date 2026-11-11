@@ -858,6 +858,11 @@ run "grafana_is_behind_cloudflare_and_signs_in_with_github_only" {
   }
 
   assert {
+    condition     = local.grafana_environment["GF_AUTH_GITHUB_SCOPES"] == "user:email,read:org"
+    error_message = "Grafana lists the user's GitHub teams at every sign-in, which an OAuth App token can only do with read:org."
+  }
+
+  assert {
     condition     = local.grafana_role_expression == "contains(`[\"octocat\"]`, login) && 'GrafanaAdmin' || contains(`[\"hubot\"]`, login) && 'Viewer' || ''"
     error_message = "Listed admins must become Grafana administrators, listed viewers viewers, and everyone else no role (refused)."
   }

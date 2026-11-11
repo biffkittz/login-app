@@ -256,8 +256,9 @@ anyway.
 ## Grafana's GitHub sign-in
 
 With `observability_enabled`, Grafana at https://grafana.biffkittz.com signs people in with GitHub and nothing else:
-it has no login form, no basic authentication and no admin password. A GitHub **OAuth App** (not a GitHub App) does
-the sign-in:
+it has no login form, no basic authentication and no admin password. A GitHub **OAuth App** does the sign-in. Its
+client ID starts with `Ov23li`; one starting with `Iv` belongs to a **GitHub App**, a different kind, whose tokens
+take permissions instead of scopes and may not be allowed to list your teams, which Grafana does at every sign-in.
 
 1. GitHub: **Settings → Developer settings → OAuth Apps → New OAuth App**. Homepage URL
    `https://grafana.biffkittz.com`; Authorization callback URL `https://grafana.biffkittz.com/login/github`.
@@ -267,7 +268,9 @@ the sign-in:
    `TF_VAR_grafana_github_client_secret`, and in CI as the `GRAFANA_GITHUB_CLIENT_SECRET` environment secret; Terraform
    keeps it in Key Vault (`grafana-github-client-secret`), where only Grafana's identity can read it.
 
-Grafana asks GitHub only for the `user:email` scope. Who gets in is decided by username, not by organization:
+Grafana asks GitHub for the `user:email` scope (to read a private email address) and `read:org` (Grafana lists your
+teams at every sign-in, and GitHub allows that only with this scope); it can't write anything. Who gets in is decided
+by username, not by organization:
 `grafana_github_admins` become Grafana administrators, `grafana_github_viewers` may look, and everyone else is
 refused after GitHub (Grafana's `role_attribute_strict`). Roles are re-read at every sign-in, so removing a username
 and applying takes effect at that person's next sign-in; sessions last at most 7 days (2 without activity).

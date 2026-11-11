@@ -22,7 +22,7 @@ app_hostname  = "app.biffkittz.com"
 
 # Image tag of the app to run, e.g. the short commit SHA pushed with `az acr build`. Leave it commented out for the
 # first apply (no image exists yet). Once set, keep it set: removing it again would delete the Container App.
-app_image_tag = "v8"
+app_image_tag = "v9"
 
 # One replica: this is a demonstration environment.
 app_min_replicas = 1
@@ -60,6 +60,6 @@ key_vault_additional_administrators = { github_deploy = "a81d64db-6f59-44c4-be91
 # with the callback URL https://grafana.biffkittz.com/login/github, put its client ID below (it isn't a secret) and its
 # client secret in TF_VAR_grafana_github_client_secret (GRAFANA_GITHUB_CLIENT_SECRET in CI), then set
 # observability_enabled = true.
-observability_enabled = true
-grafana_github_client_id = "Iv23litFDWSoXnviQrnn"
-grafana_github_admins = ["biffkittz"]
+observability_enabled    = true
+grafana_github_client_id = "Ov23lijK4onubMdrjg93"
+grafana_github_admins    = ["biffkittz"]

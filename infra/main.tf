@@ -631,7 +631,9 @@ resource "cloudflare_dns_record" "grafana" {
   content = module.container_apps.static_ip_address
   proxied = true
   ttl     = 1 # "automatic", required for proxied records
-  comment = "Grafana in Azure Container Apps environment ${local.names.container_apps_environment}; project:${var.project}; managed by Terraform"
+  # Cloudflare refuses comments over 100 characters (error 9313); with the longest project and environment names
+  # this one stays under 100.
+  comment = "Grafana (Azure Container Apps ${local.names.container_apps_environment}); project:${var.project}; managed by Terraform"
 
   depends_on = [cloudflare_ruleset.origin_port]
 }

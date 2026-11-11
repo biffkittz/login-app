@@ -245,7 +245,8 @@ $63-77 a month ([cost](ARCHITECTURE.md#cost)).
    - Application name: `Nibbles Grafana`; Homepage URL: `https://grafana.biffkittz.com`;
    - Authorization callback URL: `https://grafana.biffkittz.com/login/github`.
 
-   Note the **Client ID**, then **Generate a new client secret** and copy it (GitHub shows it once).
+   Note the **Client ID** (an OAuth App's starts with `Ov23li`; `Iv...` is a GitHub App, which isn't what this
+   needs), then **Generate a new client secret** and copy it (GitHub shows it once).
 2. **Set the values.** In `environments/demo.tfvars`, set `grafana_github_client_id` to the client ID, list the GitHub
    usernames who may sign in in `grafana_github_admins` (and `grafana_github_viewers`, for read-only users), and set
    `observability_enabled = true`. The client secret never goes in the file:
@@ -463,6 +464,8 @@ Destroying takes about 15 to 20 minutes.
 | App log 1106: `Cloudflare answered 401` | The token was deleted or replaced: apply, then restart the revisions ([Rotating the email token](#rotating-the-email-token)) |
 | Grafana: GitHub says `The redirect_uri is not associated with this application` | The OAuth App's callback URL must be exactly `https://grafana.biffkittz.com/login/github` |
 | Grafana: back from GitHub, the sign-in is refused | Your GitHub username isn't in `grafana_github_admins` or `grafana_github_viewers`, spelled as GitHub spells it. Add it and apply |
+| Grafana's log: `error getting user teams` | GitHub refused to list your teams: the client ID is a GitHub App's (`Iv...`) rather than an OAuth App's (`Ov23li...`). Create an OAuth App ([AUTHENTICATION.md](AUTHENTICATION.md#grafanas-github-sign-in)) and use its ID and secret |
+| Apply fails on `cloudflare_dns_record.*`: `DNS record comment exceeds the maximum length of 100 characters` (9313) | Cloudflare limits comments to 100 characters below Enterprise; shorten the record's `comment` (the tests check the ones in `main.tf`) |
 | Grafana's dashboards show **No data** for the app | The app isn't pushing: its log should show event 6000 at start. Prometheus' log shows refused pushes (`401`); after rotating Prometheus' passwords, restart the app's revisions so they re-read `Telemetry--OtlpPassword` |
 | Prometheus' log repeats `Waiting for the previous Prometheus replica to release /prometheus/lock` | An old revision still runs. It goes once the new one is ready (a minute); if not, deactivate it: `az containerapp revision list -n ca-loginapp-demo-prometheus -g "$RG" -o table`, then `az containerapp revision deactivate` |
 | Prometheus or Grafana won't start: `mount.nfs: access denied by server` | The share admits only the Container Apps subnet: check its `Microsoft.Storage` service endpoint and the storage account's network rules, and that secure transfer is off (Terraform sets all three) |
