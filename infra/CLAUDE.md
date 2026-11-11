@@ -102,7 +102,8 @@ generated secrets and the Cloudflare records. Modules: `networking`, `registry`,
   certificate; don't claim it does. Their data lives on a Premium NFS share: Container Apps can't mount disks, and
   NFS forces `https_traffic_only_enabled = false` (the account takes no keys and admits only the Container Apps
   subnet). A new Prometheus revision waits for the old one's database lock, which is why its probes watch the exporter's
-  port (8080): don't point them at 9090. Config reaches the containers as environment variables that init containers
+  port (8080): don't point them at 9090. On NFS, flock() is an fcntl lock: busybox's flock opens files read-only, so
+  only `flock -s` works there (an exclusive attempt fails with EBADF). Config reaches the containers as environment variables that init containers
   write to disk; dashboards are `modules/observability/dashboards/*.json` (gzip+Base64, one variable each). Images
   are pinned by digest (`observability_images`); keep the digest form. The CI deploy identity may assign Monitoring
   Reader only because `scripts/setup-github-oidc.sh` lists it: a new role Terraform assigns needs adding there too.

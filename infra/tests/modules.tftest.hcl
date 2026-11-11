@@ -737,9 +737,9 @@ run "prometheus_is_internal_single_writer_and_receives_otlp" {
     condition = (
       contains(azurerm_container_app.prometheus.template[0].container[0].args, "--web.enable-otlp-receiver") &&
       contains(azurerm_container_app.prometheus.template[0].container[0].args, "--web.config.file=/etc/prometheus/config/web.yml") &&
-      strcontains(azurerm_container_app.prometheus.template[0].container[0].args[0], "flock -n /prometheus/lock")
+      strcontains(azurerm_container_app.prometheus.template[0].container[0].args[0], "flock -s -n /prometheus/lock")
     )
-    error_message = "Prometheus must accept OTLP pushes, require its users, and wait for the previous replica's lock."
+    error_message = "Prometheus must accept OTLP pushes, require its users, and wait for the previous replica's lock (testing it with a shared lock, which busybox can take on NFS)."
   }
 
   assert {

@@ -133,11 +133,21 @@ locals {
 
   # Container Apps starts a new revision's replica before it stops the old one, so for a minute two Prometheus
   # processes would open the same database on the share, which corrupts it. Prometheus locks its data directory
-  # (<data>/lock); this waits for the old replica to let go before starting. The probes therefore watch the exporter's
-  # port, not Prometheus': a new replica waiting for the lock must count as ready, or the platform would keep the old
-  # one running and the two would wait on each other forever.
+  # (<data>/lock, exclusively); this waits for the old replica to let go before starting. The probes therefore watch the
+  # exporter's port, not Prometheus': a new replica waiting for the lock must count as ready, or the platform would keep
+  # the old one running and the two would wait on each other forever.
+  #
+  # The test takes a *shared* lock: on NFS the kernel turns flock() into an fcntl lock, and an exclusive one needs a
+  # writable descriptor, while busybox's flock opens the file read-only (an exclusive attempt fails with "Bad file
+  # descriptor" every time). A shared lock still conflicts with Prometheus' exclusive one. After ten minutes the script
+  # starts Prometheus anyway, which refuses to start if the lock really is held, so no other error can hold it forever.
   prometheus_start_script = <<-EOT
-    until flock -n /prometheus/lock true; do
+    deadline=$(($(date +%s) + 600))
+    until flock -s -n /prometheus/lock true; do
+      if [ "$(date +%s)" -ge "$deadline" ]; then
+        echo "/prometheus/lock still unavailable after 10 minutes; starting Prometheus, which checks the lock itself"
+        break
+      fi
       echo "Waiting for the previous Prometheus replica to release /prometheus/lock"
       sleep 5
     done
