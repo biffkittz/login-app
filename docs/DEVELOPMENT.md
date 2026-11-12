@@ -95,6 +95,16 @@ sudo apt install -y postgresql-client shellcheck      # psql/pg_isready; linting
 curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash  # Azure CLI, for deployments
 ```
 
+**The Temporal CLI** runs a local Temporal server, for trying grocery runs (section 6C) and for the workflow tests,
+which are skipped without it (section 8). CI uses version 1.10.0; install the same, checking its hash as CI does:
+
+```bash
+curl -sSfLo /tmp/temporal.tgz https://github.com/temporalio/cli/releases/download/v1.10.0/temporal_cli_1.10.0_linux_amd64.tar.gz
+echo "521f461f3d108902763bb71e85cd0fd382dc9357b59604ae03da6ae734d16890  /tmp/temporal.tgz" | sha256sum --check --strict
+sudo tar -xzf /tmp/temporal.tgz -C /usr/local/bin temporal && rm /tmp/temporal.tgz
+temporal --version
+```
+
 ## 4. Local database
 
 The API expects PostgreSQL on `localhost:5432` with database `loginapp`, user `loginapp` and password
@@ -240,6 +250,31 @@ The script installs dependencies, runs every test, builds the SPA, copies it int
 API in Release mode and starts it at **<http://localhost:8080>**. It is the same flow the Dockerfile uses; see
 [BUILD_AND_DEPLOY.md](BUILD_AND_DEPLOY.md#1-buildandrunsitesh).
 
+### C. Grocery runs (Temporal)
+
+Grocery runs need a Temporal server. Locally that is the Temporal CLI's development server (section 3), in memory, with
+its web UI on http://localhost:8233:
+
+```bash
+# Terminal 3
+temporal server start-dev
+```
+
+Then point the API at it before starting it (6A). Without an API key the app connects in plain text, which it allows
+for this machine only:
+
+```bash
+export Temporal__Address=localhost:7233 Temporal__Namespace=default
+dotnet watch run --project app/backend --launch-profile http
+```
+
+The API log says `Temporal worker polling task queue nibbles`, and **Start grocery run** appears under the list. Sign
+in with a second account in another browser (or a private window) to be the one asked. In the Temporal UI, each run is
+a `GroceryRun` workflow (ID `nibbles/grocery-run`) whose history reads like the run: `OpenLastCall`, a timer, the
+`ImGood` signals, `StartShopping`, and so on. Its `State` query shows where it is.
+
+Without these settings grocery runs are off (the log says so once at startup), and the rest of the app is unaffected.
+
 ## 7. Debugging
 
 | Launch configuration | What it does |
@@ -251,6 +286,18 @@ API in Release mode and starts it at **<http://localhost:8080>**. It is the same
 
 The [Vue.js devtools](https://devtools.vuejs.org/) browser extension shows component state and the Pinia store. The
 Vite dev server also exposes Vue DevTools in-page (`vite-plugin-vue-devtools`): press Alt+Shift+D.
+
+**Metrics.** `dotnet-counters` shows the app's metrics live while you click around, without Prometheus:
+
+```bash
+dotnet tool install --global dotnet-counters
+dotnet-counters monitor -n LoginApp.Api --counters Nibbles,Microsoft.AspNetCore.Http.Connections,Microsoft.AspNetCore.Hosting
+```
+
+To try the whole pipeline, run a Prometheus with its OTLP receiver on your machine (for example
+`docker run -p 9090:9090 quay.io/prometheus/prometheus --web.enable-otlp-receiver`) and start the API with
+`Telemetry__OtlpEndpoint=http://localhost:9090/api/v1/otlp/v1/metrics`. The app's metrics and their labels are listed
+in [ARCHITECTURE.md](ARCHITECTURE.md#metrics).
 
 ## 8. Tests and quality checks
 
@@ -289,6 +336,13 @@ npm audit --omit=dev  # vulnerabilities in what ships to browsers
   - Cost estimates, with a stand-in for Gemini (`CostEstimateApiFactory`; no test calls the real API): every item in
     order with the server's own total, only name, quantity and brand sent, answers that skip or misprice items,
     Gemini's failures, the empty list, the daily limit (`TwoEstimatesADayApiFactory`) and a server without a key.
+  - Grocery runs, in layers. The workflow runs on the Temporal CLI's development server with stand-in activities
+    (`GroceryRunWorkflowTests`): last call ending early, on time, or when the shopper goes; calling it off; signals that
+    don't apply; an operator's cancellation. The API's rules use a stand-in for Temporal (`GroceryRunApiFactory`):
+    who may start a run or tap which button, and last call's lock on removing and moving. `GroceryRunEndToEndTests`
+    run the app's own in-process worker against the development server, from start to finish over real WebSockets;
+    `TemporalOutageTests` check that an unreachable Temporal leaves the list working. `GroceryRunReplayTests` replay
+    recorded workflow histories, as a deployment would (no server needed).
   - Registration emails, with a stand-in for Cloudflare (`NotificationApiFactory`; no test sends real email): who is
     emailed and what it says (never the person's address), nothing for a rejected registration, and registering
     neither waits for the email nor fails with it. The worker's retries, daily limit, full queue and shutdown run on
@@ -299,20 +353,36 @@ npm audit --omit=dev  # vulnerabilities in what ships to browsers
     text, the estimate allowance, the picture shrinking, the Cloudflare email client (the request, and how it reads
     deliveries, refusals and timeouts) and the registration email's text.
   - The SQLite database is a temporary file, so the hub and HTTP requests can use the database at the same time.
+  - The tests that need Temporal find the CLI at `TEMPORAL_CLI_PATH` or on the `PATH`, and start one development server
+    for the whole run. Without it they are skipped; CI sets `TEMPORAL_TESTS_REQUIRED=true` to make them fail instead.
 - **Frontend (`src/**/__tests__`):**
   - Validation rules and error normalization.
   - The composables (form validation, async actions, redirect safety).
   - The router guard and the auth store, including session expiry.
   - The grocery list store: ordering, versions and deletions applied in any order, optimistic writes and their
     rollback, reloads that don't lose changes, the offline fallback, and the shared settings and picture placeholders.
+    Grocery runs: the newest copy wins, messages during a reload, "I'm good" shown at once and taken back on failure.
   - The SignalR wrapper's retry, restart and stop behavior (with SignalR mocked).
   - The field components' `v-model` and accessibility wiring; the add form, item list (the arrow keys, drop markers
     and pictures), store sections (dragging with pointer events within a section, into another one or an empty
-    store's drop zone, and not into a store no longer offered), item editor and list settings.
+    store's drop zone, and not into a store no longer offered), item editor and list settings, and the grocery run's
+    banner (for the shopper, someone asked, and someone not asked) and start sheet.
   - The login view and the grocery list view end to end, with the API mocked.
 
 The real EF Core migrations target PostgreSQL. They are exercised whenever the API starts against a real database,
 either locally or by `buildAndRunSite.sh`.
+
+**Recording workflow histories.** `GroceryRunReplayTests` replays the histories in
+`app/backend.tests/Features/GroceryList/Runs/Histories/v1`, recorded from the workflow tests, so that a change to
+`GroceryRunWorkflow` that would break the runs in flight during a deployment fails a test first. After an intentional
+change, guarded with `Workflow.Patched`, record the new behavior into a new folder and keep the old ones:
+
+```bash
+GROCERY_RUN_HISTORY_DIR="$PWD/app/backend.tests/Features/GroceryList/Runs/Histories/v2" \
+  dotnet test --project app/backend.tests --filter-class "*GroceryRunWorkflowTests"
+```
+
+The recorder replaces the worker's identity (process ID and host name) before saving, since the files are committed.
 
 ## 9. Database migrations
 
@@ -368,6 +438,16 @@ for example `Jwt--SigningKey`.
 | `RegistrationNotifications:Subject` | `[grocery app] new registration detected` | The subject line; no control characters |
 | `RegistrationNotifications:SiteUrl` | none | This instance's address, which the email names (Terraform sets each instance's) |
 | `RegistrationNotifications:MaxPerDay` | `50` | Registration emails in any 24 hours, at most (counted in memory); the last says so. `0` sends none |
+| `Telemetry:OtlpEndpoint` | none (no export) | Full URL that receives OTLP metrics, e.g. Prometheus' `https://<host>/api/v1/otlp/v1/metrics`; `https://`, or `http://` to localhost only. Terraform sets it in Azure when the observability stack exists |
+| `Telemetry:OtlpUsername`, `Telemetry:OtlpPassword` | none | HTTP Basic credentials at that endpoint, both or neither (the password is a secret: Key Vault `Telemetry--OtlpPassword` in Azure) |
+| `Telemetry:ExportIntervalSeconds` | `15` | How often metrics are sent (1-300) |
+| `Telemetry:Site` | none | The `site` label on every metric (Terraform sets each instance's host name) |
+| `Temporal:Address` | none (grocery runs off) | Temporal's gRPC address, `host:port`: Temporal Cloud's namespace endpoint (`<namespace>.<account>.tmprl.cloud:7233`) in Azure, `localhost:7233` for the development server |
+| `Temporal:Namespace` | none | The namespace (`<namespace>.<account>` on Temporal Cloud, `default` locally). Required with the address |
+| `Temporal:ApiKey` | none | A Temporal Cloud API key (a secret: Key Vault `Temporal--ApiKey` in Azure). With a key the connection uses TLS; without one the address must be on this machine |
+| `Temporal:TaskQueue` | `nibbles` | The task queue this instance's worker polls, and part of its runs' workflow ID. Unique per instance (Terraform sets `nibbles-<instance>`) |
+| `GroceryRuns:LastCallMinutes` | `15`, `30`, `60`, `120` | The lengths of last call a shopper can choose (an array, 1-240 each, no duplicates); the server accepts no others |
+| `GroceryRuns:ShoppingTimeLimitMinutes` | `240` | How long the shopping may last before the run ends by itself (10-1440) |
 | `Network:RestrictToInternalNetworks` | `false` (appsettings.json; the class default is `true`) | Refuse (403) TCP peers outside `Network:InternalNetworks`. Off in the shipped settings, in Azure too; turn it on only where the immediate peer is always internal |
 | `Network:InternalNetworks` | RFC 1918, 100.64/10, link-local, loopback, IPv6 ULA | CIDR list: the proxies trusted for `X-Forwarded-*` (always) and the peers allowed in (when `RestrictToInternalNetworks` is on) |
 | `KeyVault:Uri` | empty (off) | e.g. `https://kv-login-app.vault.azure.net/`; loads all vault secrets at startup |
@@ -448,6 +528,10 @@ such as treating EF migrations as generated code, live in an `.editorconfig` und
 | The list's status pill stays on "Offline" or "Connecting…" in development | The API isn't running, or the Vite dev server was started before `vite.config.ts` gained `ws: true` for `/api`: restart `npm run dev` |
 | Items never get pictures; the list settings say "AI pictures aren't set up" | No Gemini API key: set `ImageGeneration:ApiKey` with `dotnet user-secrets` (section 5). With a key, the API log names the reason for each missing picture (event IDs 5020–5027): a refused key (`403 PERMISSION_DENIED`), no billing on the key's project, the daily limit, or Gemini declining to draw a name |
 | Estimate Cost says "Cost estimates aren't set up on this server" | No Gemini API key (`ImageGeneration:ApiKey`), or `CostEstimates:MaxEstimatesPerDay` is `0`. With a key, the API log gives the reason for each failed estimate (event IDs 5031-5033): a refused key (`403 PERMISSION_DENIED`), Gemini overloaded (`503`), an answer that wasn't the JSON asked for (with its finish reason), or the daily limit |
+| No **Start grocery run** button; the start sheet says "Grocery runs aren't set up on this server" | Temporal isn't configured: start `temporal server start-dev` and set `Temporal__Address` and `Temporal__Namespace` (section 6C) |
+| Starting a run says "Grocery runs aren't available right now" | The API can't reach Temporal. Locally, start `temporal server start-dev`; the API log has event 5046 with the reason, and 7001 while the worker retries |
+| The workflow tests are skipped | The Temporal CLI isn't installed, or isn't on the `PATH`: install it (section 3) or set `TEMPORAL_CLI_PATH` |
+| `GroceryRunReplayTests` fails with `Nondeterminism` | A change to `GroceryRunWorkflow` makes it decide differently for runs already in flight: guard it with `Workflow.Patched` (see the class's remarks), then record new histories (section 8) |
 | Startup error: `Email:AccountId, Email:ApiToken and Email:SenderAddress go together` | Only some of the email settings are set. Set all three to send email, or remove them |
 | No registration email (with email configured) | The API log says why, by event ID: 1101/1102 at start (no recipients, or no email settings), 1106 (Cloudflare's refusal, e.g. `403 (10102 ...)` for a token that can't send), 1108 (daily limit), 1109 (queue full) |
 | `Address already in use` on port 5082, 5173 or 8080 | Find the process with `ss -ltnp \| grep :5082` and stop it, or pass `--port` to `buildAndRunSite.sh` |

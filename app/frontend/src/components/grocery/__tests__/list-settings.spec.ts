@@ -11,6 +11,7 @@ const PICTURES_ON: GroceryListSettings = {
   imageGenerationEnabled: true,
   imageGenerationAvailable: true,
   costEstimateAvailable: true,
+  groceryRunsAvailable: false,
 }
 
 function mountSettings(settings: GroceryListSettings | null, error: string | null = null) {

@@ -15,7 +15,7 @@ terraform fmt -recursive && terraform validate
 terraform test                    # mocked providers, a few seconds
 tflint --init && tflint --recursive
 terraform-docs .                  # regenerates README reference sections
-shellcheck modules/container-app/scripts/db-bootstrap.sh
+shellcheck modules/container-app/scripts/*.sh modules/observability/scripts/*.sh
 ```
 
 Pre-commit (`../.pre-commit-config.yaml`) and CI (`../.github/workflows/infra.yml`) run the same checks. Run all of
@@ -46,7 +46,8 @@ and the saved plan only travels encrypted. You and CI's deploy identity both adm
 Root (`main.tf`, `variables.tf`, `outputs.tf`, `providers.tf`, `backend.tf`) holds naming, tags, identities,
 generated secrets and the Cloudflare records. Modules: `networking`, `registry`, `key-vault`, `database`,
 `container-app` (environment, app, DB bootstrap job), `email-sending` (Cloudflare Email Service, only while
-`registration_notification_recipients` lists anyone). Environment values: `environments/demo.tfvars`.
+`registration_notification_recipients` lists anyone), `observability` (Prometheus, Grafana, their NFS share; only with
+`observability_enabled`). Environment values: `environments/demo.tfvars`.
 
 ## Things that will bite
 
@@ -94,3 +95,21 @@ generated secrets and the Cloudflare records. Modules: `networking`, `registry`,
 - **The exposed port can't be 80 or 443:** the environment's HTTP ingress holds them ("exposedPort already in use").
   `cloudflare_ruleset.origin_port` (an Origin Rule) sends Cloudflare to 8443; the container still listens on 443.
   The Cloudflare token needs DNS, Zone Settings and Origin Rules edit.
+- **Observability** (`module.observability`, `observability_enabled`): Prometheus (internal ingress, Basic auth users
+  `app`, `grafana`, `prometheus` with generated passwords; `web.yml` holds bcrypt hashes) and Grafana (TCP ingress on
+  `grafana_exposed_port` 8445, its own Origin Rule after the instances', the app's IP restrictions, TLS with the origin
+  certificate converted to PEM by an init container, GitHub sign-in only). Grafana can't check Cloudflare's client
+  certificate; don't claim it does. Their data lives on a Premium NFS share: Container Apps can't mount disks, and
+  NFS forces `https_traffic_only_enabled = false` (the account takes no keys and admits only the Container Apps
+  subnet). A new Prometheus revision waits for the old one's database lock, which is why its probes watch the exporter's
+  port (8080): don't point them at 9090. On NFS, flock() is an fcntl lock: busybox's flock opens files read-only, so
+  only `flock -s` works there (an exclusive attempt fails with EBADF). Config reaches the containers as environment variables that init containers
+  write to disk; dashboards are `modules/observability/dashboards/*.json` (gzip+Base64, one variable each). Images
+  are pinned by digest (`observability_images`); keep the digest form. The CI deploy identity may assign Monitoring
+  Reader only because `scripts/setup-github-oidc.sh` lists it: a new role Terraform assigns needs adding there too.
+- **Grocery runs** (`temporal_namespace`, `temporal_api_key`, optional `temporal_address`): Temporal Cloud is created by
+  hand (no `temporalcloud` provider, by the user's choice), so Terraform only delivers the namespace, the endpoint
+  (default `<namespace>.tmprl.cloud:7233`) and the key (Key Vault `Temporal--ApiKey`) to the apps, plus each instance's
+  task queue `nibbles-<instance>`. Namespace and key go together (cross-variable validation). Changing an instance's
+  task queue strands its runs in flight. Nothing in Azure changes: the worker runs inside the apps.
+

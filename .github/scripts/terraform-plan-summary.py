@@ -166,7 +166,7 @@ def summarize(plan: dict[str, Any], mode: str) -> tuple[str, int]:
         lines += ["", "> [!WARNING]", "> This plan destroys or replaces resources. Check each one below before approving."]
 
     if image_changes:
-        lines += ["", "**App image**", ""]
+        lines += ["", "**Container images**", ""]
         for address, before, after in image_changes:
             lines.append(f"- `{address}`: `{before}` → `{after}`")
 

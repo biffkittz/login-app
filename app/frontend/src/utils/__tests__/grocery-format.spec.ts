@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
-import { describeEditor, formatRelativeTime, formatUsd } from '../grocery-format'
+import {
+  describeEditor,
+  formatCountdown,
+  formatLastCallLength,
+  formatRelativeTime,
+  formatUsd,
+} from '../grocery-format'
 
 const NOW = Date.parse('2026-11-09T12:00:00.000Z')
 
@@ -52,5 +58,29 @@ describe('formatUsd', () => {
     [19.999, '$20.00'],
   ])('formats %s as %s', (amount, expected) => {
     expect(formatUsd(amount)).toBe(expected)
+  })
+})
+
+describe('formatCountdown', () => {
+  it.each([
+    [0, '0:00'],
+    [5, '0:05'],
+    [65, '1:05'],
+    [30 * 60, '30:00'],
+    [3_600 + 4 * 60 + 5, '1:04:05'],
+    [-3, '0:00'],
+  ])('shows %i seconds as "%s"', (seconds, expected) => {
+    expect(formatCountdown(seconds)).toBe(expected)
+  })
+})
+
+describe('formatLastCallLength', () => {
+  it.each([
+    [15, '15 minutes'],
+    [60, '1 hour'],
+    [120, '2 hours'],
+    [90, '90 minutes'],
+  ])('says %i minutes as "%s"', (minutes, expected) => {
+    expect(formatLastCallLength(minutes)).toBe(expected)
   })
 })

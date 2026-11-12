@@ -36,6 +36,8 @@ export interface GroceryListSettings {
   imageGenerationAvailable: boolean
   /** The server can estimate the list's cost: it has a Gemini API key, and estimates aren't turned off. */
   costEstimateAvailable: boolean
+  /** The server can hold grocery runs: it is connected to Temporal. */
+  groceryRunsAvailable: boolean
 }
 
 /** The body of `PATCH /api/grocery-list/settings`: only the settings to change. */
@@ -72,12 +74,61 @@ export interface CostEstimate {
   estimatedAt: string
 }
 
+/**
+ * Where a grocery run is (`GroceryRunStatus` in the backend). Last call comes first, then shopping; a run ends as
+ * finished (the shopper said so), expired (nobody did, within the time limit) or cancelled.
+ */
+export type GroceryRunStatus = 'lastCall' | 'shopping' | 'finished' | 'expired' | 'cancelled'
+
+/** Why last call ended (`LastCallOutcome` in the backend). */
+export type LastCallOutcome = 'everyoneReady' | 'timeUp' | 'shopperWentEarly'
+
+/** Someone asked during a run's last call: everyone else who had the list open when it started. */
+export interface GroceryRunParticipant {
+  userId: string
+  displayName: string
+  /** They said "I'm good". */
+  ready: boolean
+}
+
+/**
+ * A grocery run (`GroceryRunResponse` in the backend): "speak now or forever hold your peace". During last call
+ * everyone can add items but nobody can remove or move them; it ends when everyone asked is ready, when the time is up,
+ * or when the shopper goes early. Then the list is final and open again while the shopper shops.
+ */
+export interface GroceryRun {
+  id: string
+  /** Increases with every change to the run. The copy with the highest sequence is the newest. */
+  sequence: number
+  status: GroceryRunStatus
+  /** Who is going shopping; `null` once that account no longer exists. */
+  shopperId: string | null
+  shopperName: string | null
+  /** ISO 8601 instant the run (and last call) started. */
+  startedAt: string
+  /** ISO 8601 instant last call ends, unless everyone is ready sooner. */
+  lastCallEndsAt: string
+  /** ISO 8601 instant the shopping began, once it has. */
+  shoppingStartedAt: string | null
+  /** ISO 8601 instant the run ended, once it has. */
+  endedAt: string | null
+  lastCallOutcome: LastCallOutcome | null
+  participants: GroceryRunParticipant[]
+}
+
+/** What a run's banner can ask of the server (`POST /api/grocery-list/run/{id}/{action}`). */
+export type GroceryRunAction = 'ready' | 'start-shopping' | 'cancel' | 'finish'
+
 /** The body of `GET /api/grocery-list`. */
 export interface GroceryList {
   items: GroceryItem[]
   /** The stores an item's `store` may name, in the order the list is grouped by. Configured on the server. */
   stores: string[]
   settings: GroceryListSettings
+  /** The grocery run under way, or `null`. */
+  run: GroceryRun | null
+  /** The lengths of last call a new run can have, in minutes, in the order to offer them. */
+  lastCallMinutes: number[]
 }
 
 /**

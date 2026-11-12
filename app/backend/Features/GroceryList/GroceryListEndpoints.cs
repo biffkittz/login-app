@@ -3,6 +3,7 @@ using LoginApp.Api.Features.Auth;
 using LoginApp.Api.Features.GroceryList.Contracts;
 using LoginApp.Api.Features.GroceryList.CostEstimates;
 using LoginApp.Api.Features.GroceryList.Images;
+using LoginApp.Api.Features.GroceryList.Runs;
 using Microsoft.AspNetCore.Http.Connections;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.Extensions.Options;
@@ -67,6 +68,8 @@ internal static class GroceryListEndpoints
             .WithName("EstimateGroceryListCost")
             .WithSummary("Asks Gemini what the whole list costs at average U.S. prices. Limited to CostEstimates:MaxEstimatesPerDay a day.");
 
+        list.MapGroceryRunEndpoints();
+
         RouteGroupBuilder items = list.MapGroup("/items").RequireRateLimiting(GroceryListRateLimiting.PolicyName);
 
         items.MapPost(string.Empty, CreateItemAsync)
@@ -87,8 +90,11 @@ internal static class GroceryListEndpoints
 
         // [Authorize] on the hub covers the connection itself. The rate limit applies per connection attempt, which
         // a well-behaved client makes only when it opens the list or reconnects.
+        // A WebSocket request lasts as long as the connection, hours on an open phone, which would swamp the HTTP
+        // request-duration histogram. SignalR's own metrics and GroceryListMetrics cover the hub instead.
         endpoints.MapHub<GroceryListHub>(GroceryListHub.Path, ConfigureHub)
-            .RequireRateLimiting(GroceryListRateLimiting.PolicyName);
+            .RequireRateLimiting(GroceryListRateLimiting.PolicyName)
+            .DisableHttpMetrics();
 
         return endpoints;
     }
@@ -281,8 +287,11 @@ internal static class GroceryListEndpoints
             },
             title: "We couldn't save that item.");
 
-    // The bearer handler keeps the registered claim names (MapInboundClaims = false), so the ID is in "sub".
-    private static string? UserIdOf(ClaimsPrincipal principal) =>
+    /// <summary>Returns the signed-in user's ID, or <see langword="null"/> when the token has none.</summary>
+    /// <param name="principal">The signed-in user.</param>
+    /// <returns>The ID.</returns>
+    /// <remarks>The bearer handler keeps the registered claim names (MapInboundClaims = false), so the ID is in "sub".</remarks>
+    internal static string? UserIdOf(ClaimsPrincipal principal) =>
         principal.FindFirstValue(JwtRegisteredClaimNames.Sub) is { Length: > 0 } userId ? userId : null;
 
     private static ProblemHttpResult ToProblem(GroceryListWriteStatus status, AuthCookieManager authCookie, HttpResponse response) =>
@@ -304,17 +313,29 @@ internal static class GroceryListEndpoints
             GroceryListWriteStatus.ListFull => Problem(
                 StatusCodes.Status409Conflict,
                 "The list is full. Remove a few items before adding more."),
+            GroceryListWriteStatus.LockedForLastCall => Problem(
+                StatusCodes.Status409Conflict,
+                "It's last call for a grocery run: items can be added and changed, but not removed or moved until the shopping starts."),
             _ => throw new ArgumentOutOfRangeException(nameof(status), status, "Not a failure status."),
         };
 
-    // The token is genuine but its account is gone (or the token has no subject): drop the useless cookie, as
-    // /api/auth/me does, so the SPA returns to the login page.
-    private static ProblemHttpResult SessionEnded(AuthCookieManager authCookie, HttpResponse response)
+    /// <summary>
+    /// Answers 401 for a token that is genuine but whose account is gone (or that has no subject), and drops the useless
+    /// cookie, as <c>/api/auth/me</c> does, so the SPA returns to the login page.
+    /// </summary>
+    /// <param name="authCookie">Manages the auth cookie.</param>
+    /// <param name="response">The response to drop the cookie from.</param>
+    /// <returns>The 401 problem.</returns>
+    internal static ProblemHttpResult SessionEnded(AuthCookieManager authCookie, HttpResponse response)
     {
         authCookie.Delete(response);
         return Problem(StatusCodes.Status401Unauthorized, "Your session has ended. Please sign in again.");
     }
 
-    private static ProblemHttpResult Problem(int statusCode, string title) =>
+    /// <summary>Creates a problem response with a title for the user.</summary>
+    /// <param name="statusCode">The HTTP status code.</param>
+    /// <param name="title">What went wrong, for the user.</param>
+    /// <returns>The problem.</returns>
+    internal static ProblemHttpResult Problem(int statusCode, string title) =>
         TypedResults.Problem(title: title, statusCode: statusCode);
 }

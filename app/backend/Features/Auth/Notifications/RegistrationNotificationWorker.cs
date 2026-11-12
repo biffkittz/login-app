@@ -14,6 +14,7 @@ namespace LoginApp.Api.Features.Auth.Notifications;
 /// <param name="queue">The waiting emails.</param>
 /// <param name="scopeFactory">Resolves the email sender per email, as typed HTTP clients are meant to be used.</param>
 /// <param name="budget">The daily limit.</param>
+/// <param name="metrics">Counts the emails by outcome.</param>
 /// <param name="options">The recipients, subject and limit.</param>
 /// <param name="emailOptions">Whether email is set up, to explain why emails are off.</param>
 /// <param name="timeProvider">The clock, for delays.</param>
@@ -22,6 +23,7 @@ internal sealed class RegistrationNotificationWorker(
     RegistrationNotificationQueue queue,
     IServiceScopeFactory scopeFactory,
     RegistrationNotificationBudget budget,
+    RegistrationNotificationMetrics metrics,
     IOptions<RegistrationNotificationOptions> options,
     IOptions<EmailOptions> emailOptions,
     TimeProvider timeProvider,
@@ -86,6 +88,7 @@ internal sealed class RegistrationNotificationWorker(
         if (queue.Reader.Count > 0)
         {
             RegistrationNotificationLog.LostAtShutdown(logger, queue.Reader.Count);
+            metrics.Emails(RegistrationNotificationMetrics.LostAtShutdown, queue.Reader.Count);
         }
     }
 
@@ -95,6 +98,7 @@ internal sealed class RegistrationNotificationWorker(
         if (!budget.TryTake(out int sentInWindow))
         {
             RegistrationNotificationLog.DailyLimitReached(logger, settings.MaxPerDay);
+            metrics.Emails(RegistrationNotificationMetrics.DailyLimit);
             return;
         }
 
@@ -107,6 +111,7 @@ internal sealed class RegistrationNotificationWorker(
                 IEmailSender sender = scope.ServiceProvider.GetRequiredService<IEmailSender>();
                 EmailDelivery delivery = await sender.SendAsync(message, cancellationToken);
                 RegistrationNotificationLog.Sent(logger, message.To.Count, delivery.Delivered, delivery.Queued);
+                metrics.Emails(RegistrationNotificationMetrics.Sent);
                 if (delivery.Undeliverable > 0)
                 {
                     RegistrationNotificationLog.Undeliverable(logger, delivery.Undeliverable);
@@ -123,6 +128,7 @@ internal sealed class RegistrationNotificationWorker(
             catch (EmailDeliveryException exception)
             {
                 RegistrationNotificationLog.Failed(logger, exception.Message);
+                metrics.Emails(RegistrationNotificationMetrics.Failed);
                 return;
             }
             catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
@@ -130,6 +136,7 @@ internal sealed class RegistrationNotificationWorker(
                 // Anything else (an unreadable answer, a bug) costs this one email, not the worker: an exception escaping
                 // a BackgroundService stops the whole app, list and all.
                 RegistrationNotificationLog.FailedUnexpectedly(logger, exception);
+                metrics.Emails(RegistrationNotificationMetrics.Failed);
                 return;
             }
         }

@@ -18,6 +18,7 @@ internal sealed class RealtimeListener : IAsyncDisposable
 
     private readonly Channel<GroceryListChange> _changes = Channel.CreateUnbounded<GroceryListChange>();
     private readonly Channel<GroceryListSettingsResponse> _settings = Channel.CreateUnbounded<GroceryListSettingsResponse>();
+    private readonly Channel<GroceryRunResponse> _runs = Channel.CreateUnbounded<GroceryRunResponse>();
     private readonly List<GroceryListChange> _history = [];
     private readonly Lock _historyLock = new();
     private readonly TaskCompletionSource _closed = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -67,6 +68,7 @@ internal sealed class RealtimeListener : IAsyncDisposable
         Connection.On<GroceryListSettingsResponse>(
             nameof(IGroceryListClient.SettingsChanged),
             settings => _settings.Writer.TryWrite(settings));
+        Connection.On<GroceryRunResponse>(nameof(IGroceryListClient.RunChanged), run => _runs.Writer.TryWrite(run));
         Connection.Closed += _ =>
         {
             _closed.TrySetResult();
@@ -119,6 +121,26 @@ internal sealed class RealtimeListener : IAsyncDisposable
     /// <returns>The settings.</returns>
     public async Task<GroceryListSettingsResponse> NextSettingsAsync() =>
         await _settings.Reader.ReadAsync(TestContext.Current.CancellationToken).AsTask().WaitAsync(s_receiveTimeout);
+
+    /// <summary>
+    /// Waits for a grocery run message that <paramref name="matches"/> accepts, skipping others; fails the test after a
+    /// timeout.
+    /// </summary>
+    /// <param name="matches">Recognizes the awaited state of the run.</param>
+    /// <returns>The run.</returns>
+    public async Task<GroceryRunResponse> NextRunAsync(Func<GroceryRunResponse, bool> matches)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        timeout.CancelAfter(s_receiveTimeout);
+        while (true)
+        {
+            GroceryRunResponse run = await _runs.Reader.ReadAsync(timeout.Token);
+            if (matches(run))
+            {
+                return run;
+            }
+        }
+    }
 
     /// <summary>Waits for the server to close the connection, failing the test after a timeout.</summary>
     /// <returns>A task that completes once the connection has closed.</returns>

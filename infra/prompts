@@ -172,3 +172,92 @@ You must now prepare this repo for GitHub CI/CD. You are an expert DevOps Engine
 You will provide detailed instructions on how to set up CI/CD in GitHub for this repo, including any needed GitHub secrets. When app code changes, GitHub should present options
 to build and tag the new app image, add the new image to Azure Container Registry, and deploy the updated image via terraform apply. When infra code changes,
 GitHub will present options to run a terraform plan and a terraform apply. You must follow industry best practices. Security is, as always, of utmost concern.
+
+`setup-github-oidc.sh` outputted the following:
+Repository:   biffkittz/login-app
+)ubscription: 3c3f379f-8161-4631-a30c-a3af82622a6a (tenant 96d23170-e686-45c2-9b04-1314e19f4bff
+Identities:   rg-terraform-state (centralus)
+/blobServices/default/containers/terraform-4631-a30c-a3af82622a6a/resourceGroups/rg-terraform-state/providers/Microsoft.Storage/storageAccounts/demonstration
+Registry:     crloginappdemo7fyguj
+
+id-loginapp-github-plan
++ identity id-loginapp-github-plan
+  trusts repo:biffkittz/login-app:environment:infra-pr
+'. If the assignee is an appId, make sure the corresponding service principal is created with 'az ad sp create --id a0894447-7090-4cf3-b993-bd72a8e34bb0
+
+What from the output is needed to populate the following in demo.tfvars:
+
+key_vault_administrator_object_id   = "<your object ID>"
+key_vault_additional_administrators = { github_deploy = "<id-loginapp-github-deploy principal ID>" }
+
+
+GitHub is showing the following error running jobs `Does this touch the app` and `Does this touch the infrastructure`:
+
+Run .github/scripts/changed-areas.sh app '^(app/|global\.json$|dotnet-tools\.json$|\.github/workflows/app\.yml$|\.github/actions/build-and-scan-image/|\.github/scripts/propose-deploy\.sh$)'
+/home/runner/work/_temp/734a9546-d640-4e95-be27-23eb90e0861d.sh: line 1: .github/scripts/changed-areas.sh: Permission denied
+
+
+GitHub is now showing the following error running job `terraform-docs is up to date`:
+
+Run curl -sSfLo "$RUNNER_TEMP/terraform-docs.tgz" \
+/home/runner/work/_temp/terraform-docs.tgz: OK
+Error: README.md is out of date
+Error: Run 'terraform-docs .' in infra/ and commit the result.
+Error: Process completed with exit code 1.
+
+
+Terraform init is now failing during the `speculative plan` job:
+
+  Error: Failed to get existing workspaces: listing blobs: executing request: authorizing request: clientCredentialsToken: received HTTP status 401 with response: {"error":"invalid_client","error_description":"AADSTS700213: No matching federated identity record found for presented assertion subject 'repo:biffkittz@6528701/login-app@1445841144:environment:infra-pr'. Check your federated identity credential Subject, Audience and Issuer against the presented assertion. https://learn.microsoft.com/entra/workload-id/workload-identity-federation Trace ID: 088acc6a-04b6-4251-a203-70c297e49800 Correlation ID: fc06270b-6432-4abc-86a4-60e4daaa1104 Timestamp: 2026-11-10 22:19:12Z","error_codes":[700213],"timestamp":"2026-11-10 22:19:12Z","trace_id":"088acc6a-04b6-4251-a203-70c297e49800","correlation_id":"fc06270b-6432-4abc-86a4-60e4daaa1104","error_uri":"https://login.microsoftonline.com/error?code=700213"}
+
+
+The ShellCheck on buildAndRunSite.sh in the `Image (build and scan, not pushed)` job is throwing the following error:
+
+Run shellcheck app/buildAndRunSite.sh
+
+In app/buildAndRunSite.sh line 27:
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+         ^--------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+For more information:
+  https://www.shellcheck.net/wiki/SC2155 -- Declare and assign separately to ...
+Error: Process completed with exit code 1.
+
+Terraform plan is failing because it can't communicate with Azure:
+
+Run bash .github/scripts/terraform-plan.sh
+terraform plan messages
+  
+  Error: making Read request on Azure KeyVault Secret grocery-db-connection-string: keyvault.BaseClient#GetSecret: Failure responding to request: StatusCode=403 -- Original Error: autorest/azure: Service returned an error. Status=403 Code="Forbidden" Message="Caller is not authorized to perform action on resource.\r\nIf role assignments, deny assignments or role definitions were changed recently, please observe propagation time.\r\nCaller: appid=cea9342f-a192-4252-a452-888e53551f86;oid=a81d64db-6f59-44c4-be91-a7c50764d9db;iss=https://sts.windows.net/96d23170-e686-45c2-9b04-1314e19f4bff/\r\nAction: 'Microsoft.KeyVault/vaults/secrets/getSecret/action'\r\nResource: '/subscriptions/3c3f379f-8161-4631-a30c-a3af82622a6a/resourcegroups/rg-loginapp-demo/providers/microsoft.keyvault/vaults/kv-loginappdemo-7fyguj/secrets/grocery-db-connection-string'\r\nAssignment: (not found)\r\nDenyAssignmentId: null\r\nDecisionReason: null \r\nVault: kv-loginappdemo-7fyguj;location=centralus\r\n" InnerError={"code":"ForbiddenByRbac"}
+  
+    with module.key_vault.azurerm_key_vault_secret.this["grocery_db_connection_string"],
+    on modules/key-vault/main.tf line 69, in resource "azurerm_key_vault_secret" "this":
+    69: resource "azurerm_key_vault_secret" "this" {
+
+Is the output of a terraform plan visible from within a GitHub job? The terraform plan action runs, but I can't see it in GitHub. Also, how do I run the terraform apply from GitHub?
+
+
+The next step in this project is to build out the observability stack. You are an expert DevOps and Site Reliability Engineer. You must integrate the existing app with Grafana and Prometheus.
+Grafana and Prometheus should be hosted as containers in the existing Azure Container Apps environment. Prometheus should use something like Azure Disk storage for its storage backend. The app should be
+properly instrumented to report app metrics like `SignalR messages per second` and `number of clients connected to the SignalR hub`. It would be great for Prometheus to ingest infrastructure metrics like
+container health. Grafana will integrate with GitHub identity provider, if possible. You should create the Grafana dashboard definitions based on what's been instrumented. 
+Grafana should be hosted at `grafana.biffkittz.com`. Feel free to ask follow-up questions regarding architecture.
+
+
+I'd like to implement a workflow with Temporal in the grocery app. You are now a Temporal expert. Your implementation should use Temporal Cloud.
+I have already created a Temporal Cloud account, and I can create API keys as needed. Please ask me to review major architectural decisions before implementing them.
+For example, I'm not sure the best way to host the Temporal worker that actually performs the work.
+Review and implement the feature described below:
+
+The "Speak Now or Forever Hold Your Peace" Grocery Run (Human-in-the-Loop)
+
+The Concept: When one user decides it is time to go to the store, they click "Start Grocery Run." This locks the list from major edits and gives all other collaborators a set time window to add their last-minute requests before the list is finalized.
+How it uses Temporal:
+
+    Signals: Collaborators get a notification and can click "I'm good" (sending a Signal to the workflow).
+
+    Timers: The workflow uses a durable sleep (e.g., Workflow.DelayAsync(TimeSpan.FromHours(2))).
+
+    Wait Conditions: The workflow wakes up early if all collaborators send the "I'm good" Signal before the timer expires.
+
+    SignalR Integration: Once the workflow completes (either via timeout or consensus), an Activity fires a SignalR message to the Vue frontend, unlocking the UI and moving the list to a "Shopping in Progress" state.

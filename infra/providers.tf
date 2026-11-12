@@ -44,6 +44,7 @@ provider "azurerm" {
     "Microsoft.ManagedIdentity",
     "Microsoft.Network",
     "Microsoft.OperationalInsights",
+    "Microsoft.Storage", # the observability stack's NFS share
   ]
 
   features {

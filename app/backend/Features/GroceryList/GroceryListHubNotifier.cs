@@ -7,7 +7,9 @@ namespace LoginApp.Api.Features.GroceryList;
 /// Broadcasts list changes through <see cref="GroceryListHub"/>.
 /// </summary>
 /// <param name="hub">The hub's context, usable outside a hub method.</param>
-internal sealed class GroceryListHubNotifier(IHubContext<GroceryListHub, IGroceryListClient> hub) : IGroceryListNotifier
+/// <param name="metrics">Counts the broadcasts and the messages they send.</param>
+internal sealed class GroceryListHubNotifier(IHubContext<GroceryListHub, IGroceryListClient> hub, GroceryListMetrics metrics)
+    : IGroceryListNotifier
 {
     /// <inheritdoc />
     /// <remarks>
@@ -16,8 +18,26 @@ internal sealed class GroceryListHubNotifier(IHubContext<GroceryListHub, IGrocer
     /// handles a failed send by closing that one connection (its client then reconnects and reloads the list), so
     /// one broken phone can't make the write fail.
     /// </remarks>
-    public Task ListChangedAsync(GroceryListChange change) => hub.Clients.All.ListChanged(change);
+    public async Task ListChangedAsync(GroceryListChange change)
+    {
+        long recipients = metrics.OpenConnections;
+        await hub.Clients.All.ListChanged(change);
+        metrics.ListChangeBroadcast(change, recipients);
+    }
 
     /// <inheritdoc />
-    public Task SettingsChangedAsync(GroceryListSettingsResponse settings) => hub.Clients.All.SettingsChanged(settings);
+    public async Task SettingsChangedAsync(GroceryListSettingsResponse settings)
+    {
+        long recipients = metrics.OpenConnections;
+        await hub.Clients.All.SettingsChanged(settings);
+        metrics.SettingsChangeBroadcast(recipients);
+    }
+
+    /// <inheritdoc />
+    public async Task RunChangedAsync(GroceryRunResponse run)
+    {
+        long recipients = metrics.OpenConnections;
+        await hub.Clients.All.RunChanged(run);
+        metrics.RunChangeBroadcast(recipients);
+    }
 }

@@ -1,0 +1,825 @@
+{
+  "events": [
+    {
+      "eventId": "1",
+      "eventTime": "2026-11-11T23:41:35.332059955Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_EXECUTION_STARTED",
+      "taskId": "1048642",
+      "workflowExecutionStartedEventAttributes": {
+        "workflowType": {
+          "name": "GroceryRun"
+        },
+        "taskQueue": {
+          "name": "grocery-run-tests-ec7c89138352492bba8e37d46c835773",
+          "kind": "TASK_QUEUE_KIND_NORMAL"
+        },
+        "input": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "eyJSdW5JZCI6IjAzMGE0MDNhLTc2Y2QtNGNlOC05MjFjLTE0ZWNhZTFhOTRlYSIsIlNob3BwZXJJZCI6InNob3BwZXItMDAwMCIsIlBhcnRpY2lwYW50SWRzIjpbImFsaWNlLTAwMDEiLCJib2ItMDAwMiJdLCJMYXN0Q2FsbFdpbmRvdyI6IjAxOjAwOjAwIiwiU2hvcHBpbmdUaW1lTGltaXQiOiIwNDowMDowMCJ9"
+            }
+          ]
+        },
+        "workflowTaskTimeout": "10s",
+        "originalExecutionRunId": "01a1ccfd-00e4-70e6-b79c-8ef4e611cc9d",
+        "identity": "grocery-run-tests",
+        "firstExecutionRunId": "01a1ccfd-00e4-70e6-b79c-8ef4e611cc9d",
+        "attempt": 1,
+        "firstWorkflowTaskBackoff": "0s",
+        "workflowId": "grocery-run-test-030a403a76cd4ce8921c14ecae1a94ea"
+      }
+    },
+    {
+      "eventId": "2",
+      "eventTime": "2026-11-11T23:41:35.332155655Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
+      "taskId": "1048643",
+      "workflowTaskScheduledEventAttributes": {
+        "taskQueue": {
+          "name": "grocery-run-tests-ec7c89138352492bba8e37d46c835773",
+          "kind": "TASK_QUEUE_KIND_NORMAL"
+        },
+        "startToCloseTimeout": "10s",
+        "attempt": 1
+      }
+    },
+    {
+      "eventId": "3",
+      "eventTime": "2026-11-11T23:41:35.340737455Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_STARTED",
+      "taskId": "1048648",
+      "workflowTaskStartedEventAttributes": {
+        "scheduledEventId": "2",
+        "identity": "grocery-run-tests",
+        "requestId": "58acc89e-eb5c-462b-8f7c-6e259c103a46",
+        "historySizeBytes": "549",
+        "workerVersion": {
+          "buildId": "f73176dd-b442-4941-8c6e-bff3ebd45b46"
+        }
+      }
+    },
+    {
+      "eventId": "4",
+      "eventTime": "2026-11-11T23:41:35.346756255Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_COMPLETED",
+      "taskId": "1048653",
+      "workflowTaskCompletedEventAttributes": {
+        "scheduledEventId": "2",
+        "startedEventId": "3",
+        "identity": "grocery-run-tests",
+        "workerVersion": {
+          "buildId": "f73176dd-b442-4941-8c6e-bff3ebd45b46"
+        },
+        "sdkMetadata": {
+          "coreUsedFlags": [
+            4,
+            2,
+            3,
+            1
+          ],
+          "langUsedFlags": [
+            2
+          ],
+          "sdkName": "temporal-dotnet",
+          "sdkVersion": "1.21.1.0"
+        },
+        "meteringMetadata": {}
+      }
+    },
+    {
+      "eventId": "5",
+      "eventTime": "2026-11-11T23:41:35.346800955Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_SCHEDULED",
+      "taskId": "1048654",
+      "activityTaskScheduledEventAttributes": {
+        "activityId": "1",
+        "activityType": {
+          "name": "OpenLastCall"
+        },
+        "taskQueue": {
+          "name": "grocery-run-tests-ec7c89138352492bba8e37d46c835773",
+          "kind": "TASK_QUEUE_KIND_NORMAL"
+        },
+        "header": {},
+        "input": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "eyJSdW5JZCI6IjAzMGE0MDNhLTc2Y2QtNGNlOC05MjFjLTE0ZWNhZTFhOTRlYSIsIlNlcXVlbmNlIjoxLCJTdGF0dXMiOiJsYXN0Q2FsbCIsIlNob3BwZXJJZCI6InNob3BwZXItMDAwMCIsIlBhcnRpY2lwYW50SWRzIjpbImFsaWNlLTAwMDEiLCJib2ItMDAwMiJdLCJSZWFkeVVzZXJJZHMiOltdLCJTdGFydGVkQXQiOiIyMDI2LTExLTExVDIzOjQxOjM1LjM0MDczNzQrMDA6MDAiLCJMYXN0Q2FsbEVuZHNBdCI6IjIwMjYtMTEtMTJUMDA6NDE6MzUuMzQwNzM3NCswMDowMCIsIlNob3BwaW5nU3RhcnRlZEF0IjpudWxsLCJFbmRlZEF0IjpudWxsLCJFeHBpcmVzQXQiOiIyMDI2LTExLTEyVDA0OjQxOjM1LjM0MDczNzQrMDA6MDAiLCJMYXN0Q2FsbE91dGNvbWUiOm51bGx9"
+            }
+          ]
+        },
+        "scheduleToCloseTimeout": "0s",
+        "scheduleToStartTimeout": "0s",
+        "startToCloseTimeout": "30s",
+        "heartbeatTimeout": "0s",
+        "workflowTaskCompletedEventId": "4",
+        "retryPolicy": {
+          "initialInterval": "1s",
+          "backoffCoefficient": 2,
+          "maximumInterval": "60s"
+        },
+        "useWorkflowBuildId": true
+      }
+    },
+    {
+      "eventId": "6",
+      "eventTime": "2026-11-11T23:41:35.346825755Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_STARTED",
+      "taskId": "1048658",
+      "activityTaskStartedEventAttributes": {
+        "scheduledEventId": "5",
+        "identity": "grocery-run-tests",
+        "requestId": "6ea4edd7-e2af-4865-8c42-703405e9a3ff",
+        "attempt": 1,
+        "workerVersion": {
+          "buildId": "f73176dd-b442-4941-8c6e-bff3ebd45b46"
+        }
+      }
+    },
+    {
+      "eventId": "7",
+      "eventTime": "2026-11-11T23:41:35.350566655Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_COMPLETED",
+      "taskId": "1048659",
+      "activityTaskCompletedEventAttributes": {
+        "result": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "e30="
+            }
+          ]
+        },
+        "scheduledEventId": "5",
+        "startedEventId": "6",
+        "identity": "grocery-run-tests"
+      }
+    },
+    {
+      "eventId": "8",
+      "eventTime": "2026-11-11T23:41:35.350583755Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
+      "taskId": "1048660",
+      "workflowTaskScheduledEventAttributes": {
+        "taskQueue": {
+          "name": "grocery-run-tests-d08375fce1214e75a4425058cac15162",
+          "kind": "TASK_QUEUE_KIND_STICKY",
+          "normalName": "grocery-run-tests-ec7c89138352492bba8e37d46c835773"
+        },
+        "startToCloseTimeout": "10s",
+        "attempt": 1
+      }
+    },
+    {
+      "eventId": "9",
+      "eventTime": "2026-11-11T23:41:35.352470255Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_STARTED",
+      "taskId": "1048664",
+      "workflowTaskStartedEventAttributes": {
+        "scheduledEventId": "8",
+        "identity": "grocery-run-tests",
+        "requestId": "d477300f-dab2-4efc-a34f-e633e5c2fd51",
+        "historySizeBytes": "1684",
+        "workerVersion": {
+          "buildId": "f73176dd-b442-4941-8c6e-bff3ebd45b46"
+        }
+      }
+    },
+    {
+      "eventId": "10",
+      "eventTime": "2026-11-11T23:41:35.356682355Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_COMPLETED",
+      "taskId": "1048668",
+      "workflowTaskCompletedEventAttributes": {
+        "scheduledEventId": "8",
+        "startedEventId": "9",
+        "identity": "grocery-run-tests",
+        "workerVersion": {
+          "buildId": "f73176dd-b442-4941-8c6e-bff3ebd45b46"
+        },
+        "sdkMetadata": {},
+        "meteringMetadata": {}
+      }
+    },
+    {
+      "eventId": "11",
+      "eventTime": "2026-11-11T23:41:35.356711255Z",
+      "eventType": "EVENT_TYPE_TIMER_STARTED",
+      "taskId": "1048669",
+      "timerStartedEventAttributes": {
+        "timerId": "1",
+        "startToFireTimeout": "3599.988267200s",
+        "workflowTaskCompletedEventId": "10"
+      },
+      "userMetadata": {
+        "summary": {
+          "metadata": {
+            "encoding": "anNvbi9wbGFpbg=="
+          },
+          "data": "IldhaXRDb25kaXRpb25Bc3luYyI="
+        }
+      }
+    },
+    {
+      "eventId": "12",
+      "eventTime": "2026-11-11T23:41:35.363757855Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_EXECUTION_SIGNALED",
+      "taskId": "1048672",
+      "workflowExecutionSignaledEventAttributes": {
+        "signalName": "ImGood",
+        "input": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "eyJSdW5JZCI6IjAzMGE0MDNhLTc2Y2QtNGNlOC05MjFjLTE0ZWNhZTFhOTRlYSIsIlVzZXJJZCI6ImFsaWNlLTAwMDEifQ=="
+            }
+          ]
+        },
+        "identity": "grocery-run-tests",
+        "requestId": "068a7235-6a32-4534-ad00-2515b1ae1e02"
+      }
+    },
+    {
+      "eventId": "13",
+      "eventTime": "2026-11-11T23:41:35.363767055Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
+      "taskId": "1048673",
+      "workflowTaskScheduledEventAttributes": {
+        "taskQueue": {
+          "name": "grocery-run-tests-d08375fce1214e75a4425058cac15162",
+          "kind": "TASK_QUEUE_KIND_STICKY",
+          "normalName": "grocery-run-tests-ec7c89138352492bba8e37d46c835773"
+        },
+        "startToCloseTimeout": "10s",
+        "attempt": 1
+      }
+    },
+    {
+      "eventId": "14",
+      "eventTime": "2026-11-11T23:41:35.365459955Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_STARTED",
+      "taskId": "1048677",
+      "workflowTaskStartedEventAttributes": {
+        "scheduledEventId": "13",
+        "identity": "grocery-run-tests",
+        "requestId": "212ec45d-fbc8-47b9-9bea-75c1995a9a21",
+        "historySizeBytes": "2314",
+        "workerVersion": {
+          "buildId": "f73176dd-b442-4941-8c6e-bff3ebd45b46"
+        }
+      }
+    },
+    {
+      "eventId": "15",
+      "eventTime": "2026-11-11T23:41:35.370538155Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_COMPLETED",
+      "taskId": "1048682",
+      "workflowTaskCompletedEventAttributes": {
+        "scheduledEventId": "13",
+        "startedEventId": "14",
+        "identity": "grocery-run-tests",
+        "workerVersion": {
+          "buildId": "f73176dd-b442-4941-8c6e-bff3ebd45b46"
+        },
+        "sdkMetadata": {},
+        "meteringMetadata": {}
+      }
+    },
+    {
+      "eventId": "16",
+      "eventTime": "2026-11-11T23:41:35.370577455Z",
+      "eventType": "EVENT_TYPE_TIMER_CANCELED",
+      "taskId": "1048683",
+      "timerCanceledEventAttributes": {
+        "timerId": "1",
+        "startedEventId": "11",
+        "workflowTaskCompletedEventId": "15",
+        "identity": "grocery-run-tests"
+      },
+      "userMetadata": {
+        "summary": {
+          "metadata": {
+            "encoding": "anNvbi9wbGFpbg=="
+          },
+          "data": "IldhaXRDb25kaXRpb25Bc3luYyI="
+        }
+      }
+    },
+    {
+      "eventId": "17",
+      "eventTime": "2026-11-11T23:41:35.370596555Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_SCHEDULED",
+      "taskId": "1048684",
+      "activityTaskScheduledEventAttributes": {
+        "activityId": "2",
+        "activityType": {
+          "name": "RecordReady"
+        },
+        "taskQueue": {
+          "name": "grocery-run-tests-ec7c89138352492bba8e37d46c835773",
+          "kind": "TASK_QUEUE_KIND_NORMAL"
+        },
+        "header": {},
+        "input": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "eyJSdW5JZCI6IjAzMGE0MDNhLTc2Y2QtNGNlOC05MjFjLTE0ZWNhZTFhOTRlYSIsIlNlcXVlbmNlIjoyLCJTdGF0dXMiOiJsYXN0Q2FsbCIsIlNob3BwZXJJZCI6InNob3BwZXItMDAwMCIsIlBhcnRpY2lwYW50SWRzIjpbImFsaWNlLTAwMDEiLCJib2ItMDAwMiJdLCJSZWFkeVVzZXJJZHMiOlsiYWxpY2UtMDAwMSJdLCJTdGFydGVkQXQiOiIyMDI2LTExLTExVDIzOjQxOjM1LjM0MDczNzQrMDA6MDAiLCJMYXN0Q2FsbEVuZHNBdCI6IjIwMjYtMTEtMTJUMDA6NDE6MzUuMzQwNzM3NCswMDowMCIsIlNob3BwaW5nU3RhcnRlZEF0IjpudWxsLCJFbmRlZEF0IjpudWxsLCJFeHBpcmVzQXQiOiIyMDI2LTExLTEyVDA0OjQxOjM1LjM0MDczNzQrMDA6MDAiLCJMYXN0Q2FsbE91dGNvbWUiOm51bGx9"
+            }
+          ]
+        },
+        "scheduleToCloseTimeout": "0s",
+        "scheduleToStartTimeout": "0s",
+        "startToCloseTimeout": "30s",
+        "heartbeatTimeout": "0s",
+        "workflowTaskCompletedEventId": "15",
+        "retryPolicy": {
+          "initialInterval": "1s",
+          "backoffCoefficient": 2,
+          "maximumInterval": "60s"
+        },
+        "useWorkflowBuildId": true
+      }
+    },
+    {
+      "eventId": "18",
+      "eventTime": "2026-11-11T23:41:35.370620655Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_STARTED",
+      "taskId": "1048687",
+      "activityTaskStartedEventAttributes": {
+        "scheduledEventId": "17",
+        "identity": "grocery-run-tests",
+        "requestId": "2e42efb1-3608-466d-877b-5289bbc91425",
+        "attempt": 1,
+        "workerVersion": {
+          "buildId": "f73176dd-b442-4941-8c6e-bff3ebd45b46"
+        }
+      }
+    },
+    {
+      "eventId": "19",
+      "eventTime": "2026-11-11T23:41:35.373661055Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_COMPLETED",
+      "taskId": "1048688",
+      "activityTaskCompletedEventAttributes": {
+        "result": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "e30="
+            }
+          ]
+        },
+        "scheduledEventId": "17",
+        "startedEventId": "18",
+        "identity": "grocery-run-tests"
+      }
+    },
+    {
+      "eventId": "20",
+      "eventTime": "2026-11-11T23:41:35.373676255Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
+      "taskId": "1048689",
+      "workflowTaskScheduledEventAttributes": {
+        "taskQueue": {
+          "name": "grocery-run-tests-d08375fce1214e75a4425058cac15162",
+          "kind": "TASK_QUEUE_KIND_STICKY",
+          "normalName": "grocery-run-tests-ec7c89138352492bba8e37d46c835773"
+        },
+        "startToCloseTimeout": "10s",
+        "attempt": 1
+      }
+    },
+    {
+      "eventId": "21",
+      "eventTime": "2026-11-11T23:41:35.374639255Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_EXECUTION_SIGNALED",
+      "taskId": "1048693",
+      "workflowExecutionSignaledEventAttributes": {
+        "signalName": "ImGood",
+        "input": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "eyJSdW5JZCI6IjAzMGE0MDNhLTc2Y2QtNGNlOC05MjFjLTE0ZWNhZTFhOTRlYSIsIlVzZXJJZCI6ImJvYi0wMDAyIn0="
+            }
+          ]
+        },
+        "identity": "grocery-run-tests",
+        "requestId": "306c49b9-8dd6-4a1b-b65c-162c72f49dc5"
+      }
+    },
+    {
+      "eventId": "22",
+      "eventTime": "2026-11-11T23:41:35.376605555Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_STARTED",
+      "taskId": "1048695",
+      "workflowTaskStartedEventAttributes": {
+        "scheduledEventId": "20",
+        "identity": "grocery-run-tests",
+        "requestId": "84506956-2997-4543-be79-e5f18f7a354f",
+        "historySizeBytes": "3710",
+        "workerVersion": {
+          "buildId": "f73176dd-b442-4941-8c6e-bff3ebd45b46"
+        }
+      }
+    },
+    {
+      "eventId": "23",
+      "eventTime": "2026-11-11T23:41:35.387032755Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_COMPLETED",
+      "taskId": "1048700",
+      "workflowTaskCompletedEventAttributes": {
+        "scheduledEventId": "20",
+        "startedEventId": "22",
+        "identity": "grocery-run-tests",
+        "workerVersion": {
+          "buildId": "f73176dd-b442-4941-8c6e-bff3ebd45b46"
+        },
+        "sdkMetadata": {},
+        "meteringMetadata": {}
+      }
+    },
+    {
+      "eventId": "24",
+      "eventTime": "2026-11-11T23:41:35.387078455Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_SCHEDULED",
+      "taskId": "1048701",
+      "activityTaskScheduledEventAttributes": {
+        "activityId": "3",
+        "activityType": {
+          "name": "StartShopping"
+        },
+        "taskQueue": {
+          "name": "grocery-run-tests-ec7c89138352492bba8e37d46c835773",
+          "kind": "TASK_QUEUE_KIND_NORMAL"
+        },
+        "header": {},
+        "input": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "eyJSdW5JZCI6IjAzMGE0MDNhLTc2Y2QtNGNlOC05MjFjLTE0ZWNhZTFhOTRlYSIsIlNlcXVlbmNlIjozLCJTdGF0dXMiOiJzaG9wcGluZyIsIlNob3BwZXJJZCI6InNob3BwZXItMDAwMCIsIlBhcnRpY2lwYW50SWRzIjpbImFsaWNlLTAwMDEiLCJib2ItMDAwMiJdLCJSZWFkeVVzZXJJZHMiOlsiYWxpY2UtMDAwMSIsImJvYi0wMDAyIl0sIlN0YXJ0ZWRBdCI6IjIwMjYtMTEtMTFUMjM6NDE6MzUuMzQwNzM3NCswMDowMCIsIkxhc3RDYWxsRW5kc0F0IjoiMjAyNi0xMS0xMlQwMDo0MTozNS4zNDA3Mzc0KzAwOjAwIiwiU2hvcHBpbmdTdGFydGVkQXQiOiIyMDI2LTExLTExVDIzOjQxOjM1LjM3NjYwNTUrMDA6MDAiLCJFbmRlZEF0IjpudWxsLCJFeHBpcmVzQXQiOiIyMDI2LTExLTEyVDAzOjQxOjM1LjM3NjYwNTUrMDA6MDAiLCJMYXN0Q2FsbE91dGNvbWUiOiJldmVyeW9uZVJlYWR5In0="
+            }
+          ]
+        },
+        "scheduleToCloseTimeout": "0s",
+        "scheduleToStartTimeout": "0s",
+        "startToCloseTimeout": "30s",
+        "heartbeatTimeout": "0s",
+        "workflowTaskCompletedEventId": "23",
+        "retryPolicy": {
+          "initialInterval": "1s",
+          "backoffCoefficient": 2,
+          "maximumInterval": "60s"
+        },
+        "useWorkflowBuildId": true
+      }
+    },
+    {
+      "eventId": "25",
+      "eventTime": "2026-11-11T23:41:35.387106155Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_STARTED",
+      "taskId": "1048704",
+      "activityTaskStartedEventAttributes": {
+        "scheduledEventId": "24",
+        "identity": "grocery-run-tests",
+        "requestId": "314351e9-37ab-4876-b4b2-a98dd5613ef1",
+        "attempt": 1,
+        "workerVersion": {
+          "buildId": "f73176dd-b442-4941-8c6e-bff3ebd45b46"
+        }
+      }
+    },
+    {
+      "eventId": "26",
+      "eventTime": "2026-11-11T23:41:35.390227955Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_COMPLETED",
+      "taskId": "1048705",
+      "activityTaskCompletedEventAttributes": {
+        "result": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "e30="
+            }
+          ]
+        },
+        "scheduledEventId": "24",
+        "startedEventId": "25",
+        "identity": "grocery-run-tests"
+      }
+    },
+    {
+      "eventId": "27",
+      "eventTime": "2026-11-11T23:41:35.390244855Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
+      "taskId": "1048706",
+      "workflowTaskScheduledEventAttributes": {
+        "taskQueue": {
+          "name": "grocery-run-tests-d08375fce1214e75a4425058cac15162",
+          "kind": "TASK_QUEUE_KIND_STICKY",
+          "normalName": "grocery-run-tests-ec7c89138352492bba8e37d46c835773"
+        },
+        "startToCloseTimeout": "10s",
+        "attempt": 1
+      }
+    },
+    {
+      "eventId": "28",
+      "eventTime": "2026-11-11T23:41:35.392402555Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_STARTED",
+      "taskId": "1048710",
+      "workflowTaskStartedEventAttributes": {
+        "scheduledEventId": "27",
+        "identity": "grocery-run-tests",
+        "requestId": "3159d41c-4bb0-4d87-9904-3218d0940305",
+        "historySizeBytes": "4875",
+        "workerVersion": {
+          "buildId": "f73176dd-b442-4941-8c6e-bff3ebd45b46"
+        }
+      }
+    },
+    {
+      "eventId": "29",
+      "eventTime": "2026-11-11T23:41:35.396330355Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_COMPLETED",
+      "taskId": "1048715",
+      "workflowTaskCompletedEventAttributes": {
+        "scheduledEventId": "27",
+        "startedEventId": "28",
+        "identity": "grocery-run-tests",
+        "workerVersion": {
+          "buildId": "f73176dd-b442-4941-8c6e-bff3ebd45b46"
+        },
+        "sdkMetadata": {},
+        "meteringMetadata": {}
+      }
+    },
+    {
+      "eventId": "30",
+      "eventTime": "2026-11-11T23:41:35.396359155Z",
+      "eventType": "EVENT_TYPE_TIMER_STARTED",
+      "taskId": "1048716",
+      "timerStartedEventAttributes": {
+        "timerId": "2",
+        "startToFireTimeout": "14400s",
+        "workflowTaskCompletedEventId": "29"
+      },
+      "userMetadata": {
+        "summary": {
+          "metadata": {
+            "encoding": "anNvbi9wbGFpbg=="
+          },
+          "data": "IldhaXRDb25kaXRpb25Bc3luYyI="
+        }
+      }
+    },
+    {
+      "eventId": "31",
+      "eventTime": "2026-11-11T23:41:35.393683055Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_EXECUTION_SIGNALED",
+      "taskId": "1048717",
+      "workflowExecutionSignaledEventAttributes": {
+        "signalName": "FinishShopping",
+        "input": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "eyJSdW5JZCI6IjAzMGE0MDNhLTc2Y2QtNGNlOC05MjFjLTE0ZWNhZTFhOTRlYSIsIlVzZXJJZCI6InNob3BwZXItMDAwMCJ9"
+            }
+          ]
+        },
+        "identity": "grocery-run-tests",
+        "requestId": "4e564766-1ffe-4f4e-bbe5-e35df2813e78"
+      }
+    },
+    {
+      "eventId": "32",
+      "eventTime": "2026-11-11T23:41:35.396369755Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
+      "taskId": "1048718",
+      "workflowTaskScheduledEventAttributes": {
+        "taskQueue": {
+          "name": "grocery-run-tests-d08375fce1214e75a4425058cac15162",
+          "kind": "TASK_QUEUE_KIND_STICKY",
+          "normalName": "grocery-run-tests-ec7c89138352492bba8e37d46c835773"
+        },
+        "startToCloseTimeout": "10s",
+        "attempt": 1
+      }
+    },
+    {
+      "eventId": "33",
+      "eventTime": "2026-11-11T23:41:35.396373255Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_STARTED",
+      "taskId": "1048719",
+      "workflowTaskStartedEventAttributes": {
+        "scheduledEventId": "32",
+        "identity": "grocery-run-tests",
+        "requestId": "request-from-RespondWorkflowTaskCompleted",
+        "historySizeBytes": "4998",
+        "workerVersion": {
+          "buildId": "f73176dd-b442-4941-8c6e-bff3ebd45b46"
+        }
+      }
+    },
+    {
+      "eventId": "34",
+      "eventTime": "2026-11-11T23:41:35.401901055Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_COMPLETED",
+      "taskId": "1048724",
+      "workflowTaskCompletedEventAttributes": {
+        "scheduledEventId": "32",
+        "startedEventId": "33",
+        "identity": "grocery-run-tests",
+        "workerVersion": {
+          "buildId": "f73176dd-b442-4941-8c6e-bff3ebd45b46"
+        },
+        "sdkMetadata": {},
+        "meteringMetadata": {}
+      }
+    },
+    {
+      "eventId": "35",
+      "eventTime": "2026-11-11T23:41:35.401929355Z",
+      "eventType": "EVENT_TYPE_TIMER_CANCELED",
+      "taskId": "1048725",
+      "timerCanceledEventAttributes": {
+        "timerId": "2",
+        "startedEventId": "30",
+        "workflowTaskCompletedEventId": "34",
+        "identity": "grocery-run-tests"
+      },
+      "userMetadata": {
+        "summary": {
+          "metadata": {
+            "encoding": "anNvbi9wbGFpbg=="
+          },
+          "data": "IldhaXRDb25kaXRpb25Bc3luYyI="
+        }
+      }
+    },
+    {
+      "eventId": "36",
+      "eventTime": "2026-11-11T23:41:35.402018055Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_SCHEDULED",
+      "taskId": "1048726",
+      "activityTaskScheduledEventAttributes": {
+        "activityId": "4",
+        "activityType": {
+          "name": "EndRun"
+        },
+        "taskQueue": {
+          "name": "grocery-run-tests-ec7c89138352492bba8e37d46c835773",
+          "kind": "TASK_QUEUE_KIND_NORMAL"
+        },
+        "header": {},
+        "input": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "eyJSdW5JZCI6IjAzMGE0MDNhLTc2Y2QtNGNlOC05MjFjLTE0ZWNhZTFhOTRlYSIsIlNlcXVlbmNlIjo0LCJTdGF0dXMiOiJmaW5pc2hlZCIsIlNob3BwZXJJZCI6InNob3BwZXItMDAwMCIsIlBhcnRpY2lwYW50SWRzIjpbImFsaWNlLTAwMDEiLCJib2ItMDAwMiJdLCJSZWFkeVVzZXJJZHMiOlsiYWxpY2UtMDAwMSIsImJvYi0wMDAyIl0sIlN0YXJ0ZWRBdCI6IjIwMjYtMTEtMTFUMjM6NDE6MzUuMzQwNzM3NCswMDowMCIsIkxhc3RDYWxsRW5kc0F0IjoiMjAyNi0xMS0xMlQwMDo0MTozNS4zNDA3Mzc0KzAwOjAwIiwiU2hvcHBpbmdTdGFydGVkQXQiOiIyMDI2LTExLTExVDIzOjQxOjM1LjM3NjYwNTUrMDA6MDAiLCJFbmRlZEF0IjoiMjAyNi0xMS0xMVQyMzo0MTozNS4zOTYzNzMyKzAwOjAwIiwiRXhwaXJlc0F0IjoiMjAyNi0xMS0xMlQwMzo0MTozNS4zNzY2MDU1KzAwOjAwIiwiTGFzdENhbGxPdXRjb21lIjoiZXZlcnlvbmVSZWFkeSJ9"
+            }
+          ]
+        },
+        "scheduleToCloseTimeout": "0s",
+        "scheduleToStartTimeout": "0s",
+        "startToCloseTimeout": "30s",
+        "heartbeatTimeout": "0s",
+        "workflowTaskCompletedEventId": "34",
+        "retryPolicy": {
+          "initialInterval": "1s",
+          "backoffCoefficient": 2,
+          "maximumInterval": "60s"
+        },
+        "useWorkflowBuildId": true
+      }
+    },
+    {
+      "eventId": "37",
+      "eventTime": "2026-11-11T23:41:35.402048355Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_STARTED",
+      "taskId": "1048729",
+      "activityTaskStartedEventAttributes": {
+        "scheduledEventId": "36",
+        "identity": "grocery-run-tests",
+        "requestId": "7f680c8a-be5c-4801-841b-440513c8d45e",
+        "attempt": 1,
+        "workerVersion": {
+          "buildId": "f73176dd-b442-4941-8c6e-bff3ebd45b46"
+        }
+      }
+    },
+    {
+      "eventId": "38",
+      "eventTime": "2026-11-11T23:41:35.405108655Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_COMPLETED",
+      "taskId": "1048730",
+      "activityTaskCompletedEventAttributes": {
+        "result": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "e30="
+            }
+          ]
+        },
+        "scheduledEventId": "36",
+        "startedEventId": "37",
+        "identity": "grocery-run-tests"
+      }
+    },
+    {
+      "eventId": "39",
+      "eventTime": "2026-11-11T23:41:35.405176455Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
+      "taskId": "1048731",
+      "workflowTaskScheduledEventAttributes": {
+        "taskQueue": {
+          "name": "grocery-run-tests-d08375fce1214e75a4425058cac15162",
+          "kind": "TASK_QUEUE_KIND_STICKY",
+          "normalName": "grocery-run-tests-ec7c89138352492bba8e37d46c835773"
+        },
+        "startToCloseTimeout": "10s",
+        "attempt": 1
+      }
+    },
+    {
+      "eventId": "40",
+      "eventTime": "2026-11-11T23:41:35.407009555Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_STARTED",
+      "taskId": "1048735",
+      "workflowTaskStartedEventAttributes": {
+        "scheduledEventId": "39",
+        "identity": "grocery-run-tests",
+        "requestId": "79c97ebd-895f-49c3-8b04-348b5ac77444",
+        "historySizeBytes": "6802",
+        "workerVersion": {
+          "buildId": "f73176dd-b442-4941-8c6e-bff3ebd45b46"
+        }
+      }
+    },
+    {
+      "eventId": "41",
+      "eventTime": "2026-11-11T23:41:35.417481355Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_COMPLETED",
+      "taskId": "1048739",
+      "workflowTaskCompletedEventAttributes": {
+        "scheduledEventId": "39",
+        "startedEventId": "40",
+        "identity": "grocery-run-tests",
+        "workerVersion": {
+          "buildId": "f73176dd-b442-4941-8c6e-bff3ebd45b46"
+        },
+        "sdkMetadata": {},
+        "meteringMetadata": {}
+      }
+    },
+    {
+      "eventId": "42",
+      "eventTime": "2026-11-11T23:41:35.417547455Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_EXECUTION_COMPLETED",
+      "taskId": "1048740",
+      "workflowExecutionCompletedEventAttributes": {
+        "result": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "ImZpbmlzaGVkIg=="
+            }
+          ]
+        },
+        "workflowTaskCompletedEventId": "41"
+      }
+    }
+  ]
+}

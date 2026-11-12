@@ -4,8 +4,11 @@ using LoginApp.Api.Features.Auth.Notifications;
 using LoginApp.Api.Features.GroceryList;
 using LoginApp.Api.Features.GroceryList.CostEstimates;
 using LoginApp.Api.Features.GroceryList.Images;
+using LoginApp.Api.Features.GroceryList.Runs;
 using LoginApp.Api.Infrastructure.Email;
 using LoginApp.Api.Infrastructure.Networking;
+using LoginApp.Api.Infrastructure.Telemetry;
+using LoginApp.Api.Infrastructure.Temporal;
 
 namespace LoginApp.Api.Tests.Infrastructure;
 
@@ -394,6 +397,228 @@ public sealed class OptionsValidationTests
             ApiToken = "test-email-token",
             SenderAddress = "notifications@example.com",
         };
+
+    [Fact]
+    public void TelemetryOptions_Defaults_PassValidationButExportNothing()
+    {
+        // Arrange
+        TelemetryOptions options = new();
+
+        // Act
+        List<ValidationResult> errors = Validate(options);
+
+        // Assert
+        Assert.Empty(errors);
+        Assert.False(options.IsExporting);
+    }
+
+    [Theory]
+    [InlineData("https://prometheus.internal.example.azurecontainerapps.io/api/v1/otlp/v1/metrics")]
+    [InlineData("http://localhost:9090/api/v1/otlp/v1/metrics")]
+    [InlineData("http://127.0.0.1:9090/api/v1/otlp/v1/metrics")]
+    public void TelemetryOptions_WithAnHttpsOrLocalEndpointAndCredentials_PassValidation(string endpoint)
+    {
+        // Arrange
+        TelemetryOptions options = new()
+        {
+            OtlpEndpoint = new Uri(endpoint),
+            OtlpUsername = "app",
+            OtlpPassword = "a-long-random-password",
+            Site = "app.biffkittz.com",
+        };
+
+        // Act
+        List<ValidationResult> errors = Validate(options);
+
+        // Assert
+        Assert.Empty(errors);
+        Assert.True(options.IsExporting);
+    }
+
+    [Theory]
+    [InlineData("http://prometheus.internal.example.azurecontainerapps.io/api/v1/otlp/v1/metrics")] // password in the clear
+    [InlineData("ftp://localhost/api/v1/otlp/v1/metrics")]
+    public void TelemetryOptions_WithAnEndpointThatIsNotHttps_FailValidation(string endpoint)
+    {
+        // Arrange
+        TelemetryOptions options = new() { OtlpEndpoint = new Uri(endpoint), OtlpUsername = "app", OtlpPassword = "secret" };
+
+        // Act
+        List<ValidationResult> errors = Validate(options);
+
+        // Assert
+        Assert.Contains(errors, error => error.MemberNames.Contains(nameof(TelemetryOptions.OtlpEndpoint)));
+    }
+
+    [Theory]
+    [InlineData("https://prometheus.example/api/v1/otlp/v1/metrics", "app", null)]
+    [InlineData("https://prometheus.example/api/v1/otlp/v1/metrics", null, "secret")]
+    [InlineData(null, "app", "secret")] // credentials for nowhere
+    public void TelemetryOptions_WithHalfTheCredentials_FailValidation(string? endpoint, string? username, string? password)
+    {
+        // Arrange
+        TelemetryOptions options = new()
+        {
+            OtlpEndpoint = endpoint is null ? null : new Uri(endpoint),
+            OtlpUsername = username,
+            OtlpPassword = password,
+        };
+
+        // Act
+        List<ValidationResult> errors = Validate(options);
+
+        // Assert
+        Assert.Contains(errors, error => error.MemberNames.Contains(nameof(TelemetryOptions.OtlpUsername)));
+    }
+
+    [Theory]
+    [InlineData("app:admin")] // a colon would split "user:password" in the Basic credentials
+    [InlineData("app\r\nX-Injected: 1")]
+    public void TelemetryOptions_WithAUserNameThatBreaksBasicAuthentication_FailValidation(string username)
+    {
+        // Arrange
+        TelemetryOptions options = new()
+        {
+            OtlpEndpoint = new Uri("https://prometheus.example/api/v1/otlp/v1/metrics"),
+            OtlpUsername = username,
+            OtlpPassword = "secret",
+        };
+
+        // Act
+        List<ValidationResult> errors = Validate(options);
+
+        // Assert
+        Assert.Contains(errors, error => error.MemberNames.Contains(nameof(TelemetryOptions.OtlpUsername)));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(TelemetryOptions.MaxExportIntervalSeconds + 1)]
+    public void TelemetryOptions_WithAnExportIntervalOutOfRange_FailValidation(int seconds)
+    {
+        // Arrange
+        TelemetryOptions options = new() { ExportIntervalSeconds = seconds };
+
+        // Act
+        List<ValidationResult> errors = Validate(options);
+
+        // Assert
+        Assert.Contains(errors, error => error.MemberNames.Contains(nameof(TelemetryOptions.ExportIntervalSeconds)));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("app.biffkittz.com\n")]
+    public void TelemetryOptions_WithAnEmptyOrMultilineSite_FailValidation(string site)
+    {
+        // Arrange
+        TelemetryOptions options = new() { Site = site };
+
+        // Act
+        List<ValidationResult> errors = Validate(options);
+
+        // Assert
+        Assert.Contains(errors, error => error.MemberNames.Contains(nameof(TelemetryOptions.Site)));
+    }
+
+    [Fact]
+    public void TemporalOptions_Defaults_PassValidationWithoutTemporal()
+    {
+        // Arrange
+        TemporalOptions options = new();
+
+        // Act
+        List<ValidationResult> errors = Validate(options);
+
+        // Assert
+        Assert.Empty(errors);
+        Assert.False(options.IsConfigured);
+    }
+
+    [Theory]
+    [InlineData("nibbles-demo.a1b2c.tmprl.cloud:7233", "nibbles-demo.a1b2c", "an-api-key")]
+    [InlineData("localhost:7233", "default", null)] // the development server: no key, no TLS
+    [InlineData("127.0.0.1:7233", "default", null)]
+    [InlineData("[::1]:7233", "default", null)]
+    public void TemporalOptions_WithCloudOrLocalSettings_PassValidation(string address, string @namespace, string? apiKey)
+    {
+        // Arrange
+        TemporalOptions options = new() { Address = address, Namespace = @namespace, ApiKey = apiKey };
+
+        // Act
+        List<ValidationResult> errors = Validate(options);
+
+        // Assert
+        Assert.Empty(errors);
+        Assert.True(options.IsConfigured);
+    }
+
+    [Theory]
+    [InlineData("nibbles-demo.a1b2c.tmprl.cloud:7233", "nibbles-demo.a1b2c", null)] // plain text across the network
+    [InlineData("nibbles-demo.a1b2c.tmprl.cloud", "nibbles-demo.a1b2c", "an-api-key")] // no port
+    [InlineData("https://nibbles-demo.a1b2c.tmprl.cloud:7233", "nibbles-demo.a1b2c", "an-api-key")] // a URL
+    [InlineData("nibbles-demo.a1b2c.tmprl.cloud:99999", "nibbles-demo.a1b2c", "an-api-key")]
+    [InlineData("nibbles-demo.a1b2c.tmprl.cloud:7233", null, "an-api-key")] // no namespace
+    [InlineData("nibbles-demo.a1b2c.tmprl.cloud:7233", "nibbles-demo.a1b2c", "an api key")] // pasted with a space
+    [InlineData(null, "nibbles-demo.a1b2c", "an-api-key")] // half a configuration
+    public void TemporalOptions_WithUnsafeOrIncompleteSettings_FailValidation(string? address, string? @namespace, string? apiKey)
+    {
+        // Arrange
+        TemporalOptions options = new() { Address = address, Namespace = @namespace, ApiKey = apiKey };
+
+        // Act
+        List<ValidationResult> errors = Validate(options);
+
+        // Assert
+        Assert.NotEmpty(errors);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("nibbles main")]
+    [InlineData("-nibbles")]
+    public void TemporalOptions_WithAnInvalidTaskQueue_FailValidation(string taskQueue)
+    {
+        // Arrange
+        TemporalOptions options = new() { TaskQueue = taskQueue };
+
+        // Act
+        List<ValidationResult> errors = Validate(options);
+
+        // Assert
+        Assert.NotEmpty(errors);
+    }
+
+    [Fact]
+    public void GroceryRunOptions_WithTheShippedChoices_PassValidation()
+    {
+        // Arrange
+        GroceryRunOptions options = new() { LastCallMinutes = [15, 30, 60, 120] };
+
+        // Act
+        List<ValidationResult> errors = Validate(options);
+
+        // Assert
+        Assert.Empty(errors);
+    }
+
+    [Theory]
+    [InlineData(new int[0], 240)] // nothing to choose from
+    [InlineData(new[] { 15, 15 }, 240)] // offered twice
+    [InlineData(new[] { 0 }, 240)]
+    [InlineData(new[] { 241 }, 240)] // longer than 4 hours
+    [InlineData(new[] { 15 }, 5)] // a shopping limit too short to shop in
+    public void GroceryRunOptions_WithInvalidChoices_FailValidation(int[] lastCallMinutes, int shoppingTimeLimitMinutes)
+    {
+        // Arrange
+        GroceryRunOptions options = new() { LastCallMinutes = [.. lastCallMinutes], ShoppingTimeLimitMinutes = shoppingTimeLimitMinutes };
+
+        // Act
+        List<ValidationResult> errors = Validate(options);
+
+        // Assert
+        Assert.NotEmpty(errors);
+    }
 
     private static List<ValidationResult> Validate(object options)
     {

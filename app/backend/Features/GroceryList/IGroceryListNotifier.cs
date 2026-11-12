@@ -21,4 +21,11 @@ internal interface IGroceryListNotifier
     /// <param name="settings">The saved settings.</param>
     /// <returns>A task that completes when the message has been queued for every connection.</returns>
     public Task SettingsChangedAsync(GroceryListSettingsResponse settings);
+
+    /// <summary>
+    /// Sends a grocery run's new state to every connected client.
+    /// </summary>
+    /// <param name="run">The saved run.</param>
+    /// <returns>A task that completes when the message has been queued for every connection.</returns>
+    public Task RunChangedAsync(GroceryRunResponse run);
 }

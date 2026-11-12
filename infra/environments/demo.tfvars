@@ -8,6 +8,7 @@
 #   export TF_VAR_tls_certificate_pfx_path=~/.secrets/biffkittz-origin.pfx
 #   export TF_VAR_tls_certificate_pfx_password=...                    # if the PFX has one
 #   export TF_VAR_gemini_api_key=...                                  # optional: AI pictures of items
+#   export TF_VAR_grafana_github_client_secret=...                    # with observability_enabled (below)
 # Every other variable keeps its default from variables.tf.
 
 subscription_id = "3c3f379f-8161-4631-a30c-a3af82622a6a"
@@ -21,7 +22,7 @@ app_hostname  = "app.biffkittz.com"
 
 # Image tag of the app to run, e.g. the short commit SHA pushed with `az acr build`. Leave it commented out for the
 # first apply (no image exists yet). Once set, keep it set: removing it again would delete the Container App.
-app_image_tag = "v8"
+app_image_tag = "v10"
 
 # One replica: this is a demonstration environment.
 app_min_replicas = 1
@@ -53,3 +54,18 @@ postgresql_sku_name = "B_Standard_B1ms"
 # whoever runs it.
 key_vault_administrator_object_id   = "e01611a8-1e53-4313-9ca1-8c1dd450ff8f"
 key_vault_additional_administrators = { github_deploy = "a81d64db-6f59-44c4-be91-a7c50764d9db" }
+
+# Observability (infra/docs/DEPLOYMENT.md, "Observability"): Prometheus collects the app's metrics and Azure's, and
+# Grafana shows them at https://grafana.biffkittz.com to the GitHub users listed here. First create a GitHub OAuth App
+# with the callback URL https://grafana.biffkittz.com/login/github, put its client ID below (it isn't a secret) and its
+# client secret in TF_VAR_grafana_github_client_secret (GRAFANA_GITHUB_CLIENT_SECRET in CI), then set
+# observability_enabled = true.
+observability_enabled    = true
+grafana_github_client_id = "Ov23lijK4onubMdrjg93"
+grafana_github_admins    = ["biffkittz"]
+
+# Grocery runs (infra/docs/DEPLOYMENT.md, "Grocery runs (Temporal Cloud)"): last call before a trip to the store, run as a
+# Temporal workflow. First create a Temporal Cloud namespace with API key authentication (AWS us-east-2 is the nearest
+# region) and a namespace-scoped service account with Write and an API key. Put the namespace's full ID below (it
+# isn't a secret) and the key in TF_VAR_temporal_api_key (TEMPORAL_API_KEY in CI), then uncomment it and apply.
+temporal_namespace = "quickstart-test-and-explore.joqqs"

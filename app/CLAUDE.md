@@ -96,6 +96,33 @@ agreement:
 - Publishing is per platform (`--use-current-runtime`, in the Dockerfile and `buildAndRunSite.sh`): portable output
   would carry SkiaSharp's native library for every OS (over 450 MB).
 
+## Grocery runs (`Features/GroceryList/Runs/`, `Infrastructure/Temporal/`)
+
+Read "Grocery runs" in `docs/ARCHITECTURE.md` first. The rules:
+
+- `GroceryRunWorkflow` (type `GroceryRun`) decides; `GroceryRunActivities` (`OpenLastCall`, `RecordReady`,
+  `StartShopping`, `EndRun`) save each numbered `GroceryRunState` through `GroceryRunStore.ApplyAsync` (only newer
+  sequences apply; under `GroceryListWriteLock`) and broadcast `RunChanged`. The API (`GroceryRunService`) reads the
+  database and only starts and signals workflows through `IGroceryRunCoordinator`; it never queries Temporal.
+- Workflow code is replayed: use `Workflow.UtcNow`, lists (not hash sets), no I/O, no logging, no `Task.Run`. Names in
+  attributes (workflow, signals `ImGood`/`StartShoppingNow`/`Cancel`/`FinishShopping`, query `State`, activities)
+  and the enums' JSON names are in recorded histories: never rename them. A change to timers or activities needs
+  `Workflow.Patched`; after one, record new histories into a new `Histories/v<N>` folder (docs/DEVELOPMENT.md) and keep
+  the old ones.
+- Payloads (`GroceryRunWorkflowInput`, `GroceryRunState`, `GroceryRunSignal`) hold IDs and times only.
+- Participants are whoever has the list open when a run starts (`GroceryListPresence`, fed by the hub). Last call locks
+  `DELETE` and `move` (`GroceryListWriteStatus.LockedForLastCall`, checked under the write lock); the lock lapses one
+  minute past the deadline (`GroceryRunQueries.DeadlineGrace`), and a run is over past `ExpiresAt`, whatever its status.
+- `TemporalWorkerService` replaces the SDK's hosted worker, which would stop the app when Temporal is unreachable. The
+  `temporal` health check is Degraded at worst and not part of readiness. Keep both properties.
+- Config: `Temporal:Address`/`:Namespace`/`:ApiKey`/`:TaskQueue` (off without an address; plain text to loopback only),
+  `GroceryRuns:LastCallMinutes` (appsettings.json) and `:ShoppingTimeLimitMinutes`. Log events 5040-5047 (runs),
+  7000-7003 (worker); metrics `nibbles.grocery_runs.*` and the SDK's meter `Temporal` (`temporal_*`).
+- Tests: `GroceryRunApiFactory` swaps in `FakeGroceryRunCoordinator` (API rules, the lock); `GroceryRunWorkflowTests`
+  and `GroceryRunEndToEndTests` need the Temporal CLI (`TemporalDevServer`, skipped without it unless
+  `TEMPORAL_TESTS_REQUIRED=true`); `TemporalOutageTests` and `GroceryRunReplayTests` need nothing. The app's clock is
+  real in these tests (tokens are checked against it): place deadlines relative to now (`RunStates`).
+
 ## Registration emails (`Features/Auth/Notifications/`, `Infrastructure/Email/`)
 
 - `AuthService.RegisterAsync` calls `IRegistrationNotifier.NotifyRegistered` after the account is saved; it only
@@ -113,6 +140,18 @@ agreement:
 - Tests never call Cloudflare: `NotificationApiFactory` swaps in `FakeEmailSender`; the worker's timing tests use
   `FakeTimeProvider`. Source files must stay ASCII: write `\uXXXX` escapes for special characters in C# literals
   (a literal U+2028 breaks a string).
+
+## Metrics (`Infrastructure/Telemetry/`, `*Metrics.cs` in each feature)
+
+- Instruments come from `IMeterFactory` on the `Nibbles` meter (`ApplicationMeter.Name`), named `nibbles.<area>.<what>`,
+  one small `*Metrics` singleton per feature (e.g. `GroceryListMetrics`). Tag values are fixed strings (constants on
+  the class); never a user, name, email or anything a user typed.
+- Export is off unless `Telemetry:OtlpEndpoint` is set (Terraform, in Azure): `AddApplicationTelemetry` reads the
+  section at registration to decide whether to add the OTLP pipeline. New built-in meters go in its list.
+- The dashboards in `infra/modules/observability/dashboards` and the table in `docs/ARCHITECTURE.md` ("Metrics") name
+  the Prometheus forms (`nibbles_signalr_messages_total`, ...): keep them in step with the instruments.
+- Tests read instruments with `MetricCollector<T>` (`Microsoft.Extensions.Diagnostics.Testing`) on the host's
+  `IMeterFactory`; `MetricsExportTests` checks the OTLP export against a local stand-in receiver.
 
 ## Origin TLS (`Infrastructure/Tls/`)
 
@@ -142,6 +181,12 @@ agree:
 - `ASPNETCORE_URLS=https://+:443` overrides the image's `ASPNETCORE_HTTP_PORTS=80`.
 - `Network__InternalNetworks__100+` holds Cloudflare's IP ranges, so `X-Forwarded-For` is trusted and rate
   limiting sees the real client IP. Indices 0-8 come from `appsettings.json`; keep them below 100.
+- Grocery runs (with `temporal_namespace`): `Temporal__Address`, `Temporal__Namespace` and each instance's
+  `Temporal__TaskQueue` (`nibbles-<instance>`) are plain variables; `Temporal__ApiKey` comes from Key Vault
+  (`Temporal--ApiKey`).
+- Metrics (with `observability_enabled`): `Telemetry__OtlpEndpoint` (Prometheus' internal OTLP URL),
+  `Telemetry__OtlpUsername` (`app`) and each instance's `Telemetry__Site` (its host name) are plain variables;
+  `Telemetry__OtlpPassword` comes from Key Vault (`Telemetry--OtlpPassword`).
 
 ## Container
 

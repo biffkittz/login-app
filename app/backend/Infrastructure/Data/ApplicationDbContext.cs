@@ -1,5 +1,6 @@
 using LoginApp.Api.Features.GroceryList;
 using LoginApp.Api.Features.GroceryList.Images;
+using LoginApp.Api.Features.GroceryList.Runs;
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
 
@@ -27,6 +28,12 @@ internal sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext
     /// <summary>Gets the list's in-app settings: a single row.</summary>
     public DbSet<GroceryListSettings> GroceryListSettings => Set<GroceryListSettings>();
 
+    /// <summary>Gets the grocery runs, as their workflows last reported them.</summary>
+    public DbSet<GroceryRun> GroceryRuns => Set<GroceryRun>();
+
+    /// <summary>Gets the people asked during each grocery run's last call.</summary>
+    public DbSet<GroceryRunParticipant> GroceryRunParticipants => Set<GroceryRunParticipant>();
+
     /// <inheritdoc />
     protected override void OnModelCreating(ModelBuilder builder)
     {
@@ -36,5 +43,7 @@ internal sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext
         builder.ApplyConfiguration(new GroceryItemConfiguration());
         builder.ApplyConfiguration(new GroceryItemImageConfiguration());
         builder.ApplyConfiguration(new GroceryListSettingsConfiguration());
+        builder.ApplyConfiguration<GroceryRun>(new GroceryRunConfiguration());
+        builder.ApplyConfiguration<GroceryRunParticipant>(new GroceryRunConfiguration());
     }
 }

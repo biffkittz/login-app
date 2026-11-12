@@ -1,12 +1,13 @@
 using LoginApp.Api.Features.GroceryList.CostEstimates;
 using LoginApp.Api.Features.GroceryList.Images;
+using LoginApp.Api.Features.GroceryList.Runs;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace LoginApp.Api.Features.GroceryList;
 
 /// <summary>
-/// Registers the grocery list feature: its options, service, realtime hub, rate limit, item pictures and cost
-/// estimates.
+/// Registers the grocery list feature: its options, service, realtime hub, rate limit, item pictures, cost estimates
+/// and grocery runs.
 /// </summary>
 internal static class GroceryListServiceCollectionExtensions
 {
@@ -18,8 +19,9 @@ internal static class GroceryListServiceCollectionExtensions
     /// Adds everything the <c>/api/grocery-list</c> endpoints and hub need.
     /// </summary>
     /// <param name="services">The service collection to add to.</param>
+    /// <param name="configuration">The app's configuration, to tell whether Temporal (grocery runs) is configured.</param>
     /// <returns>The same service collection, for chaining.</returns>
-    public static IServiceCollection AddGroceryListFeature(this IServiceCollection services)
+    public static IServiceCollection AddGroceryListFeature(this IServiceCollection services, IConfiguration configuration)
     {
         services.AddOptions<GroceryListOptions>()
             .BindConfiguration(GroceryListOptions.SectionName)
@@ -32,11 +34,13 @@ internal static class GroceryListServiceCollectionExtensions
 
         services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton<GroceryListWriteLock>();
+        services.AddSingleton<GroceryListMetrics>();
         services.AddSingleton<IGroceryListNotifier, GroceryListHubNotifier>();
         services.AddScoped<IGroceryListService, GroceryListService>();
         services.AddGroceryListRateLimiting();
         services.AddGroceryImages();
         services.AddGroceryCostEstimates();
+        services.AddGroceryRuns(configuration);
 
         return services;
     }

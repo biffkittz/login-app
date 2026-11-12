@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # After an apply, checks every instance of the app from the outside, through Cloudflare, the way users reach it:
-# /health/ready must answer "Healthy" (the app is up and reaches its database) and / must serve the SPA. Retries for
-# up to ten minutes, because a new revision takes a minute or two to start and migrate. Run from the repository root
-# after an apply, with Terraform initialized in infra/.
+# /health/ready must answer "Healthy" (the app is up and reaches its database) and / must serve the SPA. Grafana, when
+# there is one, must answer /api/health with its database "ok". Retries for up to ten minutes, because a new revision
+# takes a minute or two to start and migrate. Run from the repository root after an apply, with Terraform initialized
+# in infra/.
 set -euo pipefail
 
 cd "${GITHUB_WORKSPACE:?}/infra"
@@ -38,4 +39,22 @@ for url in "${urls[@]}"; do
   echo "$url is healthy and serves the app."
   echo "- $url: healthy" >> "${GITHUB_STEP_SUMMARY:?}"
 done
+
+# Grafana (observability_enabled): /api/health answers without signing in and reports its database.
+grafana_url="$(terraform output -json observability | python3 -c '
+import json, sys
+observability = json.load(sys.stdin)
+print(observability["grafana_url"] if observability else "")')"
+if [[ -n "$grafana_url" ]]; then
+  until body="$(curl -fsS --max-time 10 --user-agent "$user_agent" "$grafana_url/api/health" 2> /dev/null)" \
+    && [[ "$(python3 -c 'import json, sys; print(json.loads(sys.argv[1]).get("database"))' "$body" 2> /dev/null)" == "ok" ]]; do
+    if ((SECONDS >= deadline)); then
+      echo "::error::$grafana_url/api/health didn't report its database ok within 10 minutes."
+      exit 1
+    fi
+    sleep 15
+  done
+  echo "$grafana_url is healthy."
+  echo "- $grafana_url: healthy" >> "${GITHUB_STEP_SUMMARY:?}"
+fi
 exit "$failed"
