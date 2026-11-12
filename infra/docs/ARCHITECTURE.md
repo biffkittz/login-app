@@ -57,6 +57,8 @@ flowchart LR
   app -->|"HTTPS: registration email"| mail["Cloudflare Email Service<br/>notifications@biffkittz.com"]
   app2 -->|"HTTPS: registration email"| mail
   mail --> inbox([Recipients' inboxes])
+  app <-->|"gRPC + TLS :7233, API key<br/>task queue nibbles-main"| temporal["Temporal Cloud namespace<br/>(AWS us-east-2): grocery runs"]
+  app2 <-->|"task queue nibbles-grocery"| temporal
 ```
 
 With `observability_enabled`, two more Container Apps run in the same environment ([Observability](#observability-prometheus-and-grafana)):
@@ -81,6 +83,7 @@ flowchart LR
 | Images | Azure Container Registry (Basic) | The app's images |
 | Observability | Log Analytics workspace; with `observability_enabled`, Prometheus and Grafana as Container Apps and a Premium FileStorage account with an NFS share | Container logs and Key Vault audit events; the app's metrics (pushed over OTLP) and Azure's platform metrics, in dashboards at grafana.biffkittz.com |
 | Email | Cloudflare Email Service: `biffkittz.com` onboarded for Email Sending, the recipients as verified destination addresses, an account token for Email Sending | Emails `registration_notification_recipients` from notifications@biffkittz.com whenever someone registers on either instance |
+| Workflows | Temporal Cloud namespace (`temporal_namespace`, created by hand; outside Azure and Terraform) | Runs grocery runs. Each app instance runs its own Temporal worker in-process, on a task queue of its own (`nibbles-<instance>`), and connects out on port 7233 with an API key from Key Vault |
 
 ## Request path
 
@@ -143,7 +146,7 @@ Container App or job first needs them. A system-assigned identity only exists on
 | Principal | Role | Scope | Why |
 | --- | --- | --- | --- |
 | `id-loginapp-demo-app` (the app) | AcrPull | the registry | Pull the app image |
-| | Key Vault Secrets User | secrets `ConnectionStrings--DefaultConnection`, `grocery-db-connection-string`, `Jwt--SigningKey`, `ImageGeneration--ApiKey` (with a Gemini key), `Email--ApiToken` (with registration emails), `Telemetry--OtlpPassword` (with observability), and the certificate's secret | Its secrets and its TLS certificate, nothing else. Both instances run as this identity |
+| | Key Vault Secrets User | secrets `ConnectionStrings--DefaultConnection`, `grocery-db-connection-string`, `Jwt--SigningKey`, `ImageGeneration--ApiKey` (with a Gemini key), `Email--ApiToken` (with registration emails), `Telemetry--OtlpPassword` (with observability), `Temporal--ApiKey` (with grocery runs), and the certificate's secret | Its secrets and its TLS certificate, nothing else. Both instances run as this identity |
 | `id-loginapp-demo-dbinit` (bootstrap job) | Key Vault Secrets User | secrets `postgresql-admin-password` and `postgresql-app-password` | The only identity that can read the administrator password |
 | `id-loginapp-demo-prometheus` (with observability) | Monitoring Reader | the resource group | The Azure Monitor exporter reads platform metrics (replicas, restarts, CPU, memory, the database) |
 | | Key Vault Secrets User | secrets `prometheus-web-config`, `prometheus-self-scrape-password` | Its users' password hashes and its own scrape password |
@@ -176,11 +179,12 @@ only after the wait.
 | `prometheus-grafana-password` | `random_password`; with observability | Grafana | Grafana's password at Prometheus (user `grafana`) |
 | `grafana-github-client-secret` | you (`TF_VAR_grafana_github_client_secret`); with observability | Grafana | Client secret of the GitHub OAuth App Grafana signs users in with |
 | `grafana-secret-key` | `random_password`; with observability | Grafana | Grafana's `secret_key`, which encrypts what it stores |
+| `Temporal--ApiKey` | you (`TF_VAR_temporal_api_key`); with `temporal_namespace` | app | API key of a namespace-scoped Temporal Cloud service account (Write), for grocery runs |
 
 - **How the app receives them.** The app gets its secrets as Container Apps Key Vault references, which the platform
   resolves with the app's identity and exposes as environment variables: `ConnectionStrings__DefaultConnection`,
-  `Jwt__SigningKey`, `OriginTls__CertificatePfxBase64`, `ImageGeneration__ApiKey` when there is a Gemini key, and
-  `Email__ApiToken` when registration emails are on. A Key Vault certificate is served through a secret of the
+  `Jwt__SigningKey`, `OriginTls__CertificatePfxBase64`, `ImageGeneration__ApiKey` when there is a Gemini key,
+  `Email__ApiToken` when registration emails are on, and `Temporal__ApiKey` with grocery runs. A Key Vault certificate is served through a secret of the
   same name, whose value is the PFX in Base64 without a password; the app loads it at startup and refuses to start
   if it can't (no private key, expired, unreadable).
 - **Rotation.** The references carry no version. A new secret or certificate version therefore reaches the app
@@ -638,6 +642,9 @@ token: roughly $0.25 per million input tokens and $1.50 per million output token
 estimates a day per instance, which caps a runaway at about a dollar a day for lists of a few dozen items, and about
 $13 a day if every estimate priced a full 500-item list.
 
+Grocery runs are billed by Temporal Cloud, under your Temporal Cloud plan: a run takes roughly ten to twenty Actions
+(its start, and each of its signals, timers and activities). Azure adds nothing for them; the worker runs in the apps.
+
 Registration emails are free while they go only to verified destination addresses. Emailing other addresses would
 need the Workers Paid plan ($5 a month with 3,000 emails, then $0.35 per 1,000; Cloudflare's pricing page on
 2026-11-10).
@@ -665,8 +672,9 @@ When the demo isn't needed, `terraform destroy` removes everything; see [DEPLOYM
 - **No alerts yet.** Prometheus and Grafana record and show; nothing notifies anyone. Grafana alert rules with a
   contact point (email or a chat webhook) are the next step.
 - **No egress filtering.** Outbound traffic uses the platform defaults; the app's only outbound calls go to the
-  Gemini API (`generativelanguage.googleapis.com`) for item pictures and cost estimates, and to Cloudflare's API
-  (`api.cloudflare.com`) for registration emails. For production, route egress through Azure Firewall with user-defined routes and allow
+  Gemini API (`generativelanguage.googleapis.com`) for item pictures and cost estimates, to Cloudflare's API
+  (`api.cloudflare.com`) for registration emails, and to Temporal Cloud (`<namespace>.<account>.tmprl.cloud:7233`)
+  for grocery runs. For production, route egress through Azure Firewall with user-defined routes and allow
   just those hosts. Workload profile environments support this, and a fixed egress IP would also let the email token
   be limited to it (`condition.request_ip`).
 - **Cloudflare Email Sending is in public beta** (since April 2026). Its API or limits may change before general

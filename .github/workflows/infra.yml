@@ -175,6 +175,7 @@ jobs:
           TLS_CERTIFICATE_PFX_PASSWORD: ${{ secrets.TLS_CERTIFICATE_PFX_PASSWORD }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GRAFANA_GITHUB_CLIENT_SECRET: ${{ secrets.GRAFANA_GITHUB_CLIENT_SECRET }}
+          TEMPORAL_API_KEY: ${{ secrets.TEMPORAL_API_KEY }}
         run: bash .github/scripts/terraform-plan.sh
 
       - name: Comment the plan on the pull request
@@ -233,6 +234,7 @@ jobs:
           TLS_CERTIFICATE_PFX_PASSWORD: ${{ secrets.TLS_CERTIFICATE_PFX_PASSWORD }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GRAFANA_GITHUB_CLIENT_SECRET: ${{ secrets.GRAFANA_GITHUB_CLIENT_SECRET }}
+          TEMPORAL_API_KEY: ${{ secrets.TEMPORAL_API_KEY }}
           TF_PLAN_ENCRYPTION_KEY: ${{ secrets.TF_PLAN_ENCRYPTION_KEY }}
         run: bash .github/scripts/terraform-plan.sh
 

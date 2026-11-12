@@ -80,3 +80,42 @@ const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' 
 export function formatUsd(amount: number): string {
   return usd.format(amount)
 }
+
+/**
+ * Formats a countdown the way a kitchen timer shows it: "4:05" for minutes and seconds, "1:04:05" from an hour up.
+ *
+ * @param totalSeconds - Whole seconds left; anything below 0 counts as 0.
+ */
+export function formatCountdown(totalSeconds: number): string {
+  const seconds = Math.max(0, Math.floor(totalSeconds))
+  const hours = Math.floor(seconds / 3_600)
+  const minutes = Math.floor((seconds % 3_600) / 60)
+  const rest = String(seconds % 60).padStart(2, '0')
+  return hours > 0 ? `${hours}:${String(minutes).padStart(2, '0')}:${rest}` : `${minutes}:${rest}`
+}
+
+/**
+ * Formats the time of day of an instant in the reader's locale, e.g. "5:30 PM".
+ *
+ * @param instant - An ISO 8601 instant.
+ * @param locale - The locale to format in; the browser's by default.
+ */
+export function formatClockTime(instant: string, locale?: string): string {
+  const time = Date.parse(instant)
+  return Number.isNaN(time)
+    ? ''
+    : new Intl.DateTimeFormat(locale, { hour: 'numeric', minute: '2-digit' }).format(new Date(time))
+}
+
+/**
+ * Says how long a last call lasts, for the choices when starting a grocery run: "15 minutes", "1 hour", "2 hours".
+ *
+ * @param minutes - The length in minutes.
+ */
+export function formatLastCallLength(minutes: number): string {
+  if (minutes % 60 === 0) {
+    const hours = minutes / 60
+    return hours === 1 ? '1 hour' : `${hours} hours`
+  }
+  return minutes === 1 ? '1 minute' : `${minutes} minutes`
+}

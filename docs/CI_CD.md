@@ -116,7 +116,8 @@ token.
 **Supply chain.**
 
 - Every third-party action is pinned to a full commit SHA, with the release in a comment.
-- Downloaded tools (Trivy, actionlint, zizmor, terraform-docs) are checked against pinned SHA-256 checksums.
+- Downloaded tools (Trivy, actionlint, zizmor, terraform-docs, and the Temporal CLI the workflow tests run against)
+  are checked against pinned SHA-256 checksums.
 - `terraform init -lockfile=readonly` installs only the provider builds `.terraform.lock.hcl` records.
 - `npm ci` and `dotnet restore` install what the lock and props files say.
 - No dependency caches are shared between pull requests and `main`.
@@ -216,8 +217,8 @@ your calendar. GitHub's runners have no fixed IP addresses, so IP filtering isn'
 
 | Environment | Deployment branches and tags | Required reviewers | Variables | Secrets |
 | --- | --- | --- | --- | --- |
-| `infra-pr` | No restriction (pull request branches) | none (add some for collaborators you don't fully trust) | `AZURE_CLIENT_ID` = plan identity | `CLOUDFLARE_API_TOKEN` (read-only token), `TLS_CERTIFICATE_PFX_BASE64`, `TLS_CERTIFICATE_PFX_PASSWORD`, `GEMINI_API_KEY`, `GRAFANA_GITHUB_CLIENT_SECRET` (with observability) |
-| `demo-plan` | Selected branches: `main` | none | `AZURE_CLIENT_ID` = deploy identity | `CLOUDFLARE_API_TOKEN` (deploy token), `TLS_CERTIFICATE_PFX_BASE64`, `TLS_CERTIFICATE_PFX_PASSWORD`, `GEMINI_API_KEY`, `GRAFANA_GITHUB_CLIENT_SECRET` (with observability), `TF_PLAN_ENCRYPTION_KEY` |
+| `infra-pr` | No restriction (pull request branches) | none (add some for collaborators you don't fully trust) | `AZURE_CLIENT_ID` = plan identity | `CLOUDFLARE_API_TOKEN` (read-only token), `TLS_CERTIFICATE_PFX_BASE64`, `TLS_CERTIFICATE_PFX_PASSWORD`, `GEMINI_API_KEY`, `GRAFANA_GITHUB_CLIENT_SECRET` (with observability), `TEMPORAL_API_KEY` (with grocery runs) |
+| `demo-plan` | Selected branches: `main` | none | `AZURE_CLIENT_ID` = deploy identity | `CLOUDFLARE_API_TOKEN` (deploy token), `TLS_CERTIFICATE_PFX_BASE64`, `TLS_CERTIFICATE_PFX_PASSWORD`, `GEMINI_API_KEY`, `GRAFANA_GITHUB_CLIENT_SECRET` (with observability), `TEMPORAL_API_KEY` (with grocery runs), `TF_PLAN_ENCRYPTION_KEY` |
 | `demo` | Selected branches: `main` | you (and, for a team, **Prevent self-review**) | `AZURE_CLIENT_ID` = deploy identity | `CLOUDFLARE_API_TOKEN` (deploy token), `TLS_CERTIFICATE_PFX_BASE64`, `TF_PLAN_ENCRYPTION_KEY` |
 | `registry` | Selected branches: `main` | you (remove to publish every merge automatically) | `AZURE_CLIENT_ID` = push identity | none |
 
@@ -231,6 +232,7 @@ can't be skipped by accident.
 | `TLS_CERTIFICATE_PFX_PASSWORD` | The PFX's password (leave it out if the PFX has none) | Your password manager |
 | `GEMINI_API_KEY` | The Gemini API key. Without it every plan removes the key and the app loses AI pictures and cost estimates; the plan warns | Google AI Studio |
 | `GRAFANA_GITHUB_CLIENT_SECRET` | With `observability_enabled`: the client secret of Grafana's GitHub OAuth App. Without it the plan fails and says so | GitHub, the OAuth App's page ([infra/docs/AUTHENTICATION.md](../infra/docs/AUTHENTICATION.md#grafanas-github-sign-in)) |
+| `TEMPORAL_API_KEY` | With `temporal_namespace`: the Temporal Cloud API key for grocery runs. Without it the plan fails and says so | Temporal Cloud, the namespace's service account ([infra/docs/AUTHENTICATION.md](../infra/docs/AUTHENTICATION.md#temporal-cloud)) |
 | `TF_PLAN_ENCRYPTION_KEY` | A random key, the **same** in `demo-plan` and `demo`; keep a copy in your password manager to read plans locally | `openssl rand -base64 32` |
 
 With the [GitHub CLI](https://cli.github.com) (`gh auth login` first), secrets are set from standard input, so they
@@ -243,6 +245,7 @@ base64 -w0 ~/.secrets/biffkittz-origin.pfx | gh secret set TLS_CERTIFICATE_PFX_B
 gh secret set TLS_CERTIFICATE_PFX_PASSWORD --env infra-pr     # prompts for the value; repeat for demo-plan
 gh secret set GEMINI_API_KEY --env infra-pr                   # prompts; repeat for demo-plan
 gh secret set GRAFANA_GITHUB_CLIENT_SECRET --env infra-pr     # with observability; repeat for demo-plan
+gh secret set TEMPORAL_API_KEY --env infra-pr                 # with grocery runs; repeat for demo-plan
 gh secret set CLOUDFLARE_API_TOKEN --env infra-pr             # the read-only token
 gh secret set CLOUDFLARE_API_TOKEN --env demo-plan            # the deploy token; repeat for demo
 key="$(openssl rand -base64 32)"
@@ -360,6 +363,7 @@ The Azure identities have no secrets to rotate. For the others, update the secre
 | Origin certificate | Update `TLS_CERTIFICATE_PFX_BASE64` (and the password) everywhere, then run the infra workflow with **apply** |
 | Gemini key | Update `GEMINI_API_KEY` in `infra-pr` and `demo-plan`, then run the infra workflow with **apply** |
 | Grafana's GitHub client secret | Generate a new one in the OAuth App, update `GRAFANA_GITHUB_CLIENT_SECRET` in `infra-pr` and `demo-plan`, run the infra workflow with **apply**, and delete the old one in GitHub after Grafana restarts |
+| Temporal Cloud API key | Before it expires (Temporal emails 30, 20 and 10 days ahead): create a new key for the same service account, update `TEMPORAL_API_KEY` in `infra-pr` and `demo-plan`, run the infra workflow with **apply**, and delete the old key once the apps have restarted ([infra/docs/DEPLOYMENT.md](../infra/docs/DEPLOYMENT.md#rotating-the-api-key)) |
 
 ### Terraform on your own machine
 

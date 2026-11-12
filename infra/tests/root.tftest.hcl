@@ -277,6 +277,117 @@ run "a_gemini_key_reaches_the_app_through_key_vault" {
 }
 
 # ---------------------------------------------------------------------------------------------------------------------
+# Grocery runs (Temporal Cloud)
+# ---------------------------------------------------------------------------------------------------------------------
+
+run "grocery_runs_are_unavailable_without_temporal" {
+  command = apply
+
+  variables {
+    app_image_tag = "1a2b3c4"
+  }
+
+  assert {
+    condition     = !contains(keys(module.key_vault.secret_ids), "temporal_api_key") && length(local.temporal_settings) == 0
+    error_message = "Without a Temporal namespace there must be no API key secret and no Temporal settings (the app then offers no grocery runs)."
+  }
+
+  assert {
+    condition     = !contains(keys(local.app_instance_environment_variables["main"]), "Temporal__TaskQueue")
+    error_message = "Without Temporal the app must get no task queue."
+  }
+}
+
+run "temporal_reaches_every_instance_with_a_task_queue_of_its_own" {
+  command = apply
+
+  variables {
+    app_image_tag      = "1a2b3c4"
+    temporal_namespace = "nibbles-demo.a1b2c"
+    temporal_api_key   = "test-temporal-api-key-0123456789"
+    additional_app_instances = {
+      grocery = {
+        hostname      = "grocery.biffkittz.com"
+        exposed_port  = 8444
+        database_name = "grocery"
+      }
+    }
+  }
+
+  assert {
+    condition     = local.app_secrets["main"]["temporal-api-key"] == module.key_vault.secret_ids["temporal_api_key"] && local.app_secrets["grocery"]["temporal-api-key"] == module.key_vault.secret_ids["temporal_api_key"]
+    error_message = "Every instance must reference the API key's Key Vault secret."
+  }
+
+  assert {
+    condition     = local.app_secret_environment_variables["Temporal__ApiKey"] == "temporal-api-key"
+    error_message = "The app reads the key from Temporal__ApiKey (configuration key Temporal:ApiKey)."
+  }
+
+  assert {
+    condition = (
+      local.temporal_settings["Temporal__Address"] == "nibbles-demo.a1b2c.tmprl.cloud:7233" &&
+      local.temporal_settings["Temporal__Namespace"] == "nibbles-demo.a1b2c"
+    )
+    error_message = "The app must use the namespace endpoint, which Temporal recommends for API keys."
+  }
+
+  assert {
+    condition = (
+      local.app_instance_environment_variables["main"]["Temporal__TaskQueue"] == "nibbles-main" &&
+      local.app_instance_environment_variables["grocery"]["Temporal__TaskQueue"] == "nibbles-grocery"
+    )
+    error_message = "Each instance must poll a task queue of its own: its runs belong to its own database and phones."
+  }
+}
+
+run "an_explicit_temporal_address_replaces_the_namespace_endpoint" {
+  command = plan
+
+  variables {
+    temporal_namespace = "nibbles-demo.a1b2c"
+    temporal_address   = "us-east-2.aws.api.temporal.io:7233"
+    temporal_api_key   = "test-temporal-api-key-0123456789"
+  }
+
+  assert {
+    condition     = local.temporal_settings["Temporal__Address"] == "us-east-2.aws.api.temporal.io:7233"
+    error_message = "temporal_address must replace the namespace endpoint."
+  }
+}
+
+run "rejects_a_temporal_namespace_without_an_api_key" {
+  command = plan
+
+  variables {
+    temporal_namespace = "nibbles-demo.a1b2c"
+  }
+
+  expect_failures = [var.temporal_namespace]
+}
+
+run "rejects_a_temporal_api_key_without_a_namespace" {
+  command = plan
+
+  variables {
+    temporal_api_key = "test-temporal-api-key-0123456789"
+  }
+
+  expect_failures = [var.temporal_namespace]
+}
+
+run "rejects_a_temporal_namespace_without_its_account_id" {
+  command = plan
+
+  variables {
+    temporal_namespace = "nibbles-demo"
+    temporal_api_key   = "test-temporal-api-key-0123456789"
+  }
+
+  expect_failures = [var.temporal_namespace]
+}
+
+# ---------------------------------------------------------------------------------------------------------------------
 # Registration emails (Cloudflare Email Service)
 # ---------------------------------------------------------------------------------------------------------------------
 

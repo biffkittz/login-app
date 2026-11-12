@@ -96,6 +96,16 @@ locals {
   # here, never the key: it decides which of those exist, and for_each refuses sensitive values.
   image_generation_configured = nonsensitive(var.gemini_api_key != null)
 
+  # Grocery runs (Temporal Cloud), on when a namespace is given. The app's own worker runs the workflows in-process,
+  # because their activities push to phones through the app's SignalR hub; each instance polls a task queue of its own
+  # in the shared namespace, since its runs belong to its own database and phones. The API key travels like the other
+  # secrets: Key Vault, a Container App secret, then the environment variable Temporal__ApiKey.
+  temporal_enabled = var.temporal_namespace != null
+  temporal_settings = local.temporal_enabled ? {
+    Temporal__Address   = coalesce(var.temporal_address, "${var.temporal_namespace}.tmprl.cloud:7233")
+    Temporal__Namespace = var.temporal_namespace
+  } : {}
+
   # Registration emails, on when anyone is to receive them. The app sends them through Cloudflare Email Service's REST
   # API with an account token of its own, which travels like the other secrets: Key Vault, a Container App secret,
   # then the environment variable Email__ApiToken. Addresses are kept in lower case, as Cloudflare keeps destination
@@ -128,6 +138,7 @@ locals {
       local.image_generation_configured ? { gemini-api-key = module.key_vault.secret_ids["gemini_api_key"] } : {},
       local.registration_notifications_enabled ? { email-api-token = module.key_vault.secret_ids["email_api_token"] } : {},
       local.observability_enabled ? { telemetry-otlp-password = module.key_vault.secret_ids["prometheus_app_password"] } : {},
+      local.temporal_enabled ? { temporal-api-key = module.key_vault.secret_ids["temporal_api_key"] } : {},
     )
   }
   app_secret_environment_variables = merge(
@@ -139,6 +150,7 @@ locals {
     local.image_generation_configured ? { ImageGeneration__ApiKey = "gemini-api-key" } : {},
     local.registration_notifications_enabled ? { Email__ApiToken = "email-api-token" } : {},
     local.observability_enabled ? { Telemetry__OtlpPassword = "telemetry-otlp-password" } : {},
+    local.temporal_enabled ? { Temporal__ApiKey = "temporal-api-key" } : {},
   )
 
   # Settings of each instance's own. The instances share the JWT signing key, so each additional one names itself as
@@ -151,6 +163,8 @@ locals {
       local.registration_notifications_enabled ? { RegistrationNotifications__SiteUrl = "https://${instance.hostname}" } : {},
       # The site label on every metric, which keeps the instances' series apart in Prometheus.
       local.observability_enabled ? { Telemetry__Site = instance.hostname } : {},
+      # Each instance's grocery runs run on its own task queue (and so its own workflow ID) in the shared namespace.
+      local.temporal_enabled ? { Temporal__TaskQueue = "nibbles-${key}" } : {},
     )
   }
 
@@ -383,6 +397,8 @@ module "key_vault" {
       grafana_github_client_secret    = "grafana-github-client-secret"
       grafana_secret_key              = "grafana-secret-key"
     } : {},
+    # Grocery runs: the Temporal Cloud API key (configuration key Temporal:ApiKey).
+    local.temporal_enabled ? { temporal_api_key = "Temporal--ApiKey" } : {},
   )
   secret_values = merge(
     {
@@ -402,6 +418,7 @@ module "key_vault" {
       grafana_github_client_secret    = var.grafana_github_client_secret
       grafana_secret_key              = random_password.grafana_secret_key[0].result
     } : {},
+    local.temporal_enabled ? { temporal_api_key = var.temporal_api_key } : {},
   )
   secret_readers = merge(
     {
@@ -424,6 +441,7 @@ module "key_vault" {
       grafana_github_client_secret    = { secret = "grafana_github_client_secret", principal_id = azurerm_user_assigned_identity.grafana[0].principal_id }
       grafana_secret_key              = { secret = "grafana_secret_key", principal_id = azurerm_user_assigned_identity.grafana[0].principal_id }
     } : {},
+    local.temporal_enabled ? { app_temporal_api_key = { secret = "temporal_api_key", principal_id = azurerm_user_assigned_identity.app.principal_id } } : {},
   )
 
   certificate_name       = "${replace(var.app_hostname, ".", "-")}-origin"
@@ -472,7 +490,7 @@ module "container_apps" {
     }
   }
   app_secret_environment_variables = local.app_secret_environment_variables
-  app_environment_variables = merge(local.app_trusted_proxy_settings, local.registration_notification_settings, local.app_telemetry_settings, {
+  app_environment_variables = merge(local.app_trusted_proxy_settings, local.registration_notification_settings, local.app_telemetry_settings, local.temporal_settings, {
     ASPNETCORE_ENVIRONMENT                        = "Production"
     OriginTls__RequireCloudflareClientCertificate = tostring(var.require_cloudflare_client_certificate)
   })

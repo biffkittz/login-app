@@ -22,6 +22,8 @@
     <PackageReference Include="OpenTelemetry.Extensions.Hosting" />
     <PackageReference Include="SkiaSharp" />
     <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" />
+    <PackageReference Include="Temporalio" />
+    <PackageReference Include="Temporalio.Extensions.DiagnosticSource" />
     <!--
       Needed only by the `dotnet ef` tooling at design time. Publish="false" keeps it (and the Roslyn
       compiler it depends on) out of the published app and therefore out of the container image.

@@ -8,7 +8,9 @@ Origin Rules and Authenticated Origin Pulls. It also sets up Cloudflare Email Se
 emails the people in `registration_notification_recipients` from notifications@biffkittz.com. With
 `observability_enabled` it adds Prometheus and Grafana to the same environment: the app pushes its metrics to
 Prometheus, which also collects Azure's platform metrics, and Grafana shows them at <https://grafana.biffkittz.com>
-behind GitHub sign-in ([docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#observability)). The instances share the image, the Key
+behind GitHub sign-in ([docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#observability)). With `temporal_namespace`, the apps run
+grocery runs as workflows on Temporal Cloud, each with an in-process worker on a task queue of its own and an API key
+from Key Vault ([docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#grocery-runs-temporal-cloud)). The instances share the image, the Key
 Vault and its secrets. The app terminates TLS itself with the Cloudflare origin certificate, so there
 is no Application Gateway. The variable default is `eastus`; the demo deploys to `centralus`
 (`environments/demo.tfvars`). Every Azure resource is tagged `project:loginapp`.
@@ -32,6 +34,8 @@ flowchart LR
   end
   app -->|"registration email (HTTPS)"| mail[Cloudflare Email Service<br/>notifications@biffkittz.com]
   app2 --> mail
+  app <-->|"grocery runs (gRPC + TLS :7233)"| temporal[Temporal Cloud<br/>namespace]
+  app2 <--> temporal
 ```
 
 ## Quick start
@@ -45,6 +49,7 @@ export CLOUDFLARE_API_TOKEN=...                                         # DNS, Z
 export TF_VAR_tls_certificate_pfx_path=~/.secrets/biffkittz-origin.pfx  # Cloudflare origin certificate
 read -rsp 'PFX password: ' TF_VAR_tls_certificate_pfx_password && export TF_VAR_tls_certificate_pfx_password
 read -rsp 'Gemini API key: ' TF_VAR_gemini_api_key && export TF_VAR_gemini_api_key  # optional: AI pictures and cost estimates
+read -rsp 'Temporal API key: ' TF_VAR_temporal_api_key && export TF_VAR_temporal_api_key  # with temporal_namespace: grocery runs
 
 terraform init
 terraform plan -var-file=environments/demo.tfvars -out=demo.tfplan     # 1. platform (no app yet)

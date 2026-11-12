@@ -24,4 +24,12 @@ public interface IGroceryListClient
     /// <param name="settings">The settings as they are now.</param>
     /// <returns>A task that completes when the message has been queued for sending.</returns>
     public Task SettingsChanged(GroceryListSettingsResponse settings);
+
+    /// <summary>
+    /// Tells the client that a grocery run started, moved on (someone said "I'm good", the shopping began) or ended.
+    /// Sent by the run's workflow, through its activities, after the change has been saved.
+    /// </summary>
+    /// <param name="run">The run as it is now.</param>
+    /// <returns>A task that completes when the message has been queued for sending.</returns>
+    public Task RunChanged(GroceryRunResponse run);
 }

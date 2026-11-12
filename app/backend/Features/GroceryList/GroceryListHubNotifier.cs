@@ -32,4 +32,12 @@ internal sealed class GroceryListHubNotifier(IHubContext<GroceryListHub, IGrocer
         await hub.Clients.All.SettingsChanged(settings);
         metrics.SettingsChangeBroadcast(recipients);
     }
+
+    /// <inheritdoc />
+    public async Task RunChangedAsync(GroceryRunResponse run)
+    {
+        long recipients = metrics.OpenConnections;
+        await hub.Clients.All.RunChanged(run);
+        metrics.RunChangeBroadcast(recipients);
+    }
 }

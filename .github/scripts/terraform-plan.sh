@@ -50,7 +50,13 @@ fi
 if [[ -n "${GRAFANA_GITHUB_CLIENT_SECRET:-}" ]]; then
   export TF_VAR_grafana_github_client_secret="$GRAFANA_GITHUB_CLIENT_SECRET"
 fi
-unset TLS_CERTIFICATE_PFX_BASE64 TLS_CERTIFICATE_PFX_PASSWORD GEMINI_API_KEY GRAFANA_GITHUB_CLIENT_SECRET
+
+# Temporal Cloud's API key for grocery runs (temporal_namespace). Likewise: validation fails the plan if one is set
+# without the other, rather than quietly removing grocery runs.
+if [[ -n "${TEMPORAL_API_KEY:-}" ]]; then
+  export TF_VAR_temporal_api_key="$TEMPORAL_API_KEY"
+fi
+unset TLS_CERTIFICATE_PFX_BASE64 TLS_CERTIFICATE_PFX_PASSWORD GEMINI_API_KEY GRAFANA_GITHUB_CLIENT_SECRET TEMPORAL_API_KEY
 
 args=(-input=false -no-color -detailed-exitcode -var-file=environments/demo.tfvars -out="$out/tfplan")
 if [[ "$mode" == "pr" ]]; then

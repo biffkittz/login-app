@@ -3,7 +3,8 @@
 A realtime grocery list for a family, built for phones. Everyone who signs in shares one list: they can add, edit,
 check off, delete and drag items into order, and every change appears on everybody else's screen as it happens.
 Items carry a quantity, brand, store and notes, remember who changed them last and when, and get a small picture
-drawn by Google's Gemini, which can also estimate what the whole list costs.
+drawn by Google's Gemini, which can also estimate what the whole list costs. Before a trip to the store, a **grocery
+run** gives everyone a last call to add what they need, run as a durable workflow on Temporal Cloud.
 
 **Live demo: <https://grocery.biffkittz.com>.** Register an account (any email address and a password of 12 or more
 characters) and add a few items. It is a demonstration site with its own accounts and list, so don't put anything
@@ -34,6 +35,7 @@ flowchart LR
   app -->|"HTTPS: new registrations"| mail[Cloudflare Email Service<br/>notifications@biffkittz.com]
   app -->|"OTLP: metrics"| prom[Prometheus<br/>internal only]
   grafana[Grafana<br/>grafana.biffkittz.com] -->|PromQL| prom
+  app <-->|"gRPC + TLS: grocery runs<br/>(IDs and times only)"| temporal[Temporal Cloud<br/>workflows]
 ```
 
 The Azure side is built with Terraform in [`infra/`](infra/README.md).
@@ -117,6 +119,13 @@ login-app/
   - **Estimate Cost**, below the list, asks Gemini 3.1 Flash-Lite what everything on the list costs at average U.S.
     prices and shows the total with a price per item. Only names, quantities and brands are sent, the answer must
     match a JSON Schema and is checked by the server, and the whole site allows 500 estimates a day.
+  - **Grocery runs** ("speak now or forever hold your peace"): the person going shopping taps **Start grocery run**
+    and picks how long last call lasts (15 minutes to 2 hours). Everyone else with the list open gets a banner with
+    the countdown and an **I'm good** button; meanwhile items can be added and changed but not removed or moved.
+    Last call ends when everyone is good, when time is up, or when the shopper goes; then the list is final and the
+    banner shows who is shopping until they tap **Done shopping**. Each run is a Temporal workflow (durable timer,
+    signals, a wait condition), run by a worker inside the app whose activities push the run to every phone over
+    SignalR.
 - **Accounts:** registration with name, email and password. Passwords need at least 12 characters (a length-based
   policy per NIST SP 800-63B) and are hashed with PBKDF2 by ASP.NET Core Identity. Any registered user can use the
   list. In Azure, every registration sends the site's owner an email from notifications@biffkittz.com,
@@ -147,6 +156,7 @@ login-app/
   - Validated configuration that fails fast.
 - **Quality gates:**
   - Backend unit and in-memory integration tests (xUnit v3), including realtime tests over WebSockets, and frontend
-    unit and component tests (Vitest).
+    unit and component tests (Vitest). The grocery run workflow is tested on a local Temporal server, end to end
+    through the app, and by replaying recorded histories.
   - Analyzers and code style enforced at build time.
   - ESLint with oxlint, Prettier, and strict TypeScript.

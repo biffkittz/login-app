@@ -242,3 +242,22 @@ Grafana and Prometheus should be hosted as containers in the existing Azure Cont
 properly instrumented to report app metrics like `SignalR messages per second` and `number of clients connected to the SignalR hub`. It would be great for Prometheus to ingest infrastructure metrics like
 container health. Grafana will integrate with GitHub identity provider, if possible. You should create the Grafana dashboard definitions based on what's been instrumented. 
 Grafana should be hosted at `grafana.biffkittz.com`. Feel free to ask follow-up questions regarding architecture.
+
+
+I'd like to implement a workflow with Temporal in the grocery app. You are now a Temporal expert. Your implementation should use Temporal Cloud.
+I have already created a Temporal Cloud account, and I can create API keys as needed. Please ask me to review major architectural decisions before implementing them.
+For example, I'm not sure the best way to host the Temporal worker that actually performs the work.
+Review and implement the feature described below:
+
+The "Speak Now or Forever Hold Your Peace" Grocery Run (Human-in-the-Loop)
+
+The Concept: When one user decides it is time to go to the store, they click "Start Grocery Run." This locks the list from major edits and gives all other collaborators a set time window to add their last-minute requests before the list is finalized.
+How it uses Temporal:
+
+    Signals: Collaborators get a notification and can click "I'm good" (sending a Signal to the workflow).
+
+    Timers: The workflow uses a durable sleep (e.g., Workflow.DelayAsync(TimeSpan.FromHours(2))).
+
+    Wait Conditions: The workflow wakes up early if all collaborators send the "I'm good" Signal before the timer expires.
+
+    SignalR Integration: Once the workflow completes (either via timeout or consensus), an Activity fires a SignalR message to the Vue frontend, unlocking the UI and moving the list to a "Shopping in Progress" state.

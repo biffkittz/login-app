@@ -31,4 +31,9 @@
     <Using Include="Xunit" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Recorded grocery run workflow histories, replayed by GroceryRunReplayTests. -->
+    <None Include="Features/GroceryList/Runs/Histories/**/*.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

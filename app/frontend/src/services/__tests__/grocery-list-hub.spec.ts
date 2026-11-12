@@ -69,6 +69,7 @@ function recordingHandlers(): GroceryListHubHandlers & { states: ConnectionState
     states,
     onChange: vi.fn(),
     onSettingsChange: vi.fn(),
+    onRunChange: vi.fn(),
     onStateChange: (state) => states.push(state),
     onConnected: vi.fn(),
   }
@@ -128,6 +129,7 @@ describe('createGroceryListHub', () => {
       imageGenerationEnabled: false,
       imageGenerationAvailable: true,
       costEstimateAvailable: true,
+      groceryRunsAvailable: false,
     }
 
     fake.messageHandlers.get('SettingsChanged')?.(settings)

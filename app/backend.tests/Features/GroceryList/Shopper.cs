@@ -125,6 +125,22 @@ internal sealed class Shopper : IDisposable
     public Task<HttpResponseMessage> DeleteItemAsync(Guid itemId) =>
         Http.DeleteAsync(new Uri($"{ItemsPath}/{itemId}", UriKind.Relative), CancellationToken);
 
+    /// <summary>Sends <c>POST /api/grocery-list/run</c>: starts a grocery run with this user as the shopper.</summary>
+    /// <param name="lastCallMinutes">How long last call lasts at most.</param>
+    /// <returns>The response.</returns>
+    public Task<HttpResponseMessage> StartRunAsync(int lastCallMinutes) =>
+        Http.PostAsJsonAsync("/api/grocery-list/run", new { lastCallMinutes }, CancellationToken);
+
+    /// <summary>
+    /// Sends one of a run's actions: <c>POST /api/grocery-list/run/{runId}/{action}</c>, where the action is
+    /// <c>ready</c>, <c>start-shopping</c>, <c>cancel</c> or <c>finish</c>.
+    /// </summary>
+    /// <param name="runId">The run.</param>
+    /// <param name="action">The action.</param>
+    /// <returns>The response.</returns>
+    public Task<HttpResponseMessage> PostRunActionAsync(Guid runId, string action) =>
+        Http.PostAsync(new Uri($"/api/grocery-list/run/{runId}/{action}", UriKind.Relative), content: null, CancellationToken);
+
     /// <summary>Adds an item and returns the server's copy of it, failing the test if that doesn't work.</summary>
     /// <param name="name">The item's name.</param>
     /// <param name="afterItemId">The item to add it after, or <see langword="null"/> for the top.</param>

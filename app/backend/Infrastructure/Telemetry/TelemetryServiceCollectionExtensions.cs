@@ -1,6 +1,7 @@
 using System.Net.Http.Headers;
 using System.Reflection;
 using System.Text;
+using LoginApp.Api.Infrastructure.Temporal;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Options;
 using OpenTelemetry.Exporter;
@@ -44,6 +45,7 @@ internal static class TelemetryServiceCollectionExtensions
         "Npgsql", // the PostgreSQL connection pool and commands
         "System.Net.Http", // calls to Gemini and Cloudflare
         "System.Runtime", // CPU, memory, garbage collection, thread pool
+        TemporalServiceCollectionExtensions.MeterName, // the Temporal SDK's worker: slots, polls, task latencies, failures
     ];
 
     /// <summary>

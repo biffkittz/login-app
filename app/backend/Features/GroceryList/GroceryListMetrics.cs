@@ -42,6 +42,9 @@ internal sealed class GroceryListMetrics
     /// <summary>The <see cref="IGroceryListClient.SettingsChanged"/> message.</summary>
     public const string SettingsChangedEvent = "settings_changed";
 
+    /// <summary>The <see cref="IGroceryListClient.RunChanged"/> message.</summary>
+    public const string RunChangedEvent = "run_changed";
+
     /// <summary>Items created or changed.</summary>
     public const string SavedChange = "saved";
 
@@ -126,6 +129,10 @@ internal sealed class GroceryListMetrics
     /// <summary>Records a broadcast of the list's settings.</summary>
     /// <param name="recipients">The connections it went to.</param>
     public void SettingsChangeBroadcast(long recipients) => Broadcast(SettingsChangedEvent, recipients);
+
+    /// <summary>Records a broadcast of a grocery run's new state.</summary>
+    /// <param name="recipients">The connections it went to.</param>
+    public void RunChangeBroadcast(long recipients) => Broadcast(RunChangedEvent, recipients);
 
     private void Broadcast(string message, long recipients)
     {

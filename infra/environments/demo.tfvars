@@ -22,7 +22,7 @@ app_hostname  = "app.biffkittz.com"
 
 # Image tag of the app to run, e.g. the short commit SHA pushed with `az acr build`. Leave it commented out for the
 # first apply (no image exists yet). Once set, keep it set: removing it again would delete the Container App.
-app_image_tag = "v9"
+app_image_tag = "v10"
 
 # One replica: this is a demonstration environment.
 app_min_replicas = 1
@@ -63,3 +63,9 @@ key_vault_additional_administrators = { github_deploy = "a81d64db-6f59-44c4-be91
 observability_enabled    = true
 grafana_github_client_id = "Ov23lijK4onubMdrjg93"
 grafana_github_admins    = ["biffkittz"]
+
+# Grocery runs (infra/docs/DEPLOYMENT.md, "Grocery runs (Temporal Cloud)"): last call before a trip to the store, run as a
+# Temporal workflow. First create a Temporal Cloud namespace with API key authentication (AWS us-east-2 is the nearest
+# region) and a namespace-scoped service account with Write and an API key. Put the namespace's full ID below (it
+# isn't a secret) and the key in TF_VAR_temporal_api_key (TEMPORAL_API_KEY in CI), then uncomment it and apply.
+temporal_namespace = "quickstart-test-and-explore.joqqs"

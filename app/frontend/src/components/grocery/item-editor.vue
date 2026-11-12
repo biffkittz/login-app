@@ -39,6 +39,8 @@ interface Props {
   saving?: boolean
   /** Why the last save failed. */
   error?: ApiError | null
+  /** It's a grocery run's last call: the item can be changed, but not removed or moved. */
+  locked?: boolean
 }
 
 const {
@@ -50,6 +52,7 @@ const {
   currentUserId,
   saving = false,
   error = null,
+  locked = false,
 } = defineProps<Props>()
 
 /** Whether the editor is open (two-way bound with `v-model:open`). */
@@ -182,6 +185,10 @@ async function onSubmit(): Promise<void> {
             {{ item.lastModifiedByName ?? 'Someone' }} changed this item while you had it open.
             Saving keeps their changes to anything you haven't edited.
           </FormAlert>
+          <FormAlert v-if="locked" tone="info">
+            It's last call for a grocery run: you can change this item, but removing and moving it
+            wait until the shopping starts.
+          </FormAlert>
 
           <TextField
             v-model="draft.name"
@@ -243,7 +250,7 @@ async function onSubmit(): Promise<void> {
               <button
                 type="button"
                 class="rounded-full border-2 border-walnut-800 px-4 py-2 font-display text-sm font-semibold text-walnut-900 transition hover:bg-cream-200 focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-ember-600 disabled:cursor-not-allowed disabled:opacity-40 motion-reduce:transition-none"
-                :disabled="index <= 0"
+                :disabled="locked || index <= 0"
                 @click="emit('moveBy', -1)"
               >
                 <span aria-hidden="true">↑</span> Move up
@@ -251,7 +258,7 @@ async function onSubmit(): Promise<void> {
               <button
                 type="button"
                 class="rounded-full border-2 border-walnut-800 px-4 py-2 font-display text-sm font-semibold text-walnut-900 transition hover:bg-cream-200 focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-ember-600 disabled:cursor-not-allowed disabled:opacity-40 motion-reduce:transition-none"
-                :disabled="index >= count - 1"
+                :disabled="locked || index >= count - 1"
                 @click="emit('moveBy', 1)"
               >
                 <span aria-hidden="true">↓</span> Move down
@@ -275,7 +282,8 @@ async function onSubmit(): Promise<void> {
         <button
           v-if="item !== null"
           type="button"
-          class="mr-auto rounded-full px-3 py-2 font-display text-sm font-semibold text-brick-700 underline decoration-2 underline-offset-4 focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-ember-600"
+          class="mr-auto rounded-full px-3 py-2 font-display text-sm font-semibold text-brick-700 underline decoration-2 underline-offset-4 focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-ember-600 disabled:cursor-not-allowed disabled:opacity-40"
+          :disabled="locked"
           @click="emit('remove')"
         >
           Delete

@@ -9,7 +9,8 @@ import * as groceryApi from '@/services/grocery-api'
 import { createGroceryListHub } from '@/services/grocery-list-hub'
 import { useAuthStore } from '@/stores/auth'
 import { useGroceryListStore } from '@/stores/grocery-list'
-import type { CostEstimate, GroceryItem } from '@/types/grocery'
+import type { CostEstimate, GroceryItem, GroceryList } from '@/types/grocery'
+import { makeRun, participant } from '@/utils/__tests__/test-runs'
 import { makeItem } from '@/utils/__tests__/test-items'
 
 import GroceryListView from '../grocery-list-view.vue'
@@ -17,8 +18,8 @@ import GroceryListView from '../grocery-list-view.vue'
 vi.mock('@/services/grocery-api')
 vi.mock('@/services/grocery-list-hub')
 
-async function mountView(...items: GroceryItem[]) {
-  vi.mocked(groceryApi.getList).mockResolvedValue({
+function listOf(items: GroceryItem[], overrides: Partial<GroceryList> = {}): GroceryList {
+  return {
     items,
     stores: ['Whole Foods', 'Indian Grocery', 'Teeter/Lion', 'Costco'],
     settings: {
@@ -26,8 +27,20 @@ async function mountView(...items: GroceryItem[]) {
       imageGenerationEnabled: true,
       imageGenerationAvailable: true,
       costEstimateAvailable: true,
+      groceryRunsAvailable: false,
     },
-  })
+    run: null,
+    lastCallMinutes: [15, 30, 60, 120],
+    ...overrides,
+  }
+}
+
+async function mountView(...items: GroceryItem[]) {
+  return mountListView(listOf(items))
+}
+
+async function mountListView(list: GroceryList) {
+  vi.mocked(groceryApi.getList).mockResolvedValue(list)
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [
@@ -203,6 +216,7 @@ describe('GroceryListView', () => {
       imageGenerationEnabled: false,
       imageGenerationAvailable: true,
       costEstimateAvailable: true,
+      groceryRunsAvailable: false,
     })
 
     await wrapper.get('button[aria-label="List settings"]').trigger('click')
@@ -331,6 +345,93 @@ describe('GroceryListView', () => {
 
       expect(groceryApi.estimateCost).not.toHaveBeenCalled()
       expect(estimateSheet(wrapper)!.text()).toContain('it needs a Gemini API key')
+    })
+  })
+  describe('grocery runs', () => {
+    const RUNS_ON = {
+      version: 1,
+      imageGenerationEnabled: true,
+      imageGenerationAvailable: true,
+      costEstimateAvailable: true,
+      groceryRunsAvailable: true,
+    }
+
+    it('offers to start a run, and starts one with the chosen last call', async () => {
+      vi.mocked(groceryApi.startGroceryRun).mockResolvedValue('run-1')
+      const wrapper = await mountListView(listOf([], { settings: RUNS_ON }))
+
+      const start = wrapper
+        .findAll('button')
+        .find((button) => button.text() === 'Start grocery run')
+      expect(start).toBeDefined()
+      await start!.trigger('click')
+      await flushPromises()
+      const sheet = wrapper
+        .findAll('dialog')
+        .find((dialog) => dialog.text().includes('Start a grocery run'))!
+      await sheet.get('input[value="15"]').setValue(true)
+      await sheet.get('form').trigger('submit')
+      await flushPromises()
+
+      expect(groceryApi.startGroceryRun).toHaveBeenCalledWith(15)
+      expect(wrapper.text()).toContain('Starting…')
+    })
+
+    it('shows last call, locks checking off and moving, and hides the start button', async () => {
+      const run = makeRun({
+        shopperId: 'ben',
+        shopperName: 'Ben',
+        participants: [participant('me', 'Ada')],
+      })
+      const wrapper = await mountListView(
+        listOf([makeItem({ id: 'a', name: 'Apples' })], { settings: RUNS_ON, run }),
+      )
+
+      expect(wrapper.get('[data-grocery-run] h2').text()).toBe('Last call: Ben is going shopping')
+      expect(
+        wrapper.get<HTMLButtonElement>('button[aria-label="Check off Apples"]').element.disabled,
+      ).toBe(true)
+      expect(
+        wrapper.get<HTMLButtonElement>('button[aria-label="Move Apples"]').element.disabled,
+      ).toBe(true)
+      expect(
+        wrapper.findAll('button').some((button) => button.text() === 'Start grocery run'),
+      ).toBe(false)
+    })
+
+    it('sends "I\'m good" from the banner', async () => {
+      vi.mocked(groceryApi.sendGroceryRunAction).mockResolvedValue()
+      const run = makeRun({
+        shopperId: 'ben',
+        shopperName: 'Ben',
+        participants: [participant('me', 'Ada')],
+      })
+      const wrapper = await mountListView(listOf([], { settings: RUNS_ON, run }))
+
+      await wrapper.get('[data-grocery-run] button').trigger('click')
+      await flushPromises()
+
+      expect(groceryApi.sendGroceryRunAction).toHaveBeenCalledWith('run-1', 'ready')
+      expect(wrapper.get('[data-grocery-run]').text()).toContain("You're good to go")
+    })
+
+    it('tells everyone else when a run starts, and when the shopping begins', async () => {
+      const wrapper = await mountListView(listOf([], { settings: RUNS_ON }))
+      const groceryList = useGroceryListStore()
+
+      const run = makeRun({
+        shopperId: 'ben',
+        shopperName: 'Ben',
+        participants: [participant('me', 'Ada')],
+      })
+      groceryList.applyRun(run)
+      await flushPromises()
+      expect(wrapper.text()).toContain('Last call: Ben is going shopping. Add anything you need.')
+
+      groceryList.applyRun({ ...run, sequence: 2, status: 'shopping', lastCallOutcome: 'timeUp' })
+      await flushPromises()
+      expect(wrapper.text()).toContain('The list is final: Ben is shopping.')
+      expect(wrapper.get('[data-grocery-run] h2').text()).toBe('Ben is shopping')
     })
   })
 })

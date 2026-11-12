@@ -1,6 +1,7 @@
 using LoginApp.Api.Features.GroceryList.Contracts;
 using LoginApp.Api.Features.GroceryList.CostEstimates;
 using LoginApp.Api.Features.GroceryList.Images;
+using LoginApp.Api.Features.GroceryList.Runs;
 using LoginApp.Api.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -12,9 +13,17 @@ namespace LoginApp.Api.Features.GroceryList;
 /// and then broadcasts what it changed through <see cref="IGroceryListNotifier"/>.
 /// </summary>
 /// <remarks>
+/// <para>
 /// Each write checks its cancellation token up to the moment the change is saved, never after: a saved change must
 /// still be broadcast and logged even if its client has gone, or the other phones would disagree with the database
 /// until they next reload the list.
+/// </para>
+/// <para>
+/// During a grocery run's last call, removing and moving items are refused (<see cref="GroceryRunStore"/>); adding
+/// and changing them are not, since last-minute requests are the point of last call. The check runs during the
+/// write's turn on the write lock, which the run's activities take too, so last call can't begin between the check and
+/// the save.
+/// </para>
 /// </remarks>
 /// <param name="dbContext">The application database.</param>
 /// <param name="writeLock">Serializes writes, so decisions based on the current list stay valid until saved.</param>
@@ -23,6 +32,9 @@ namespace LoginApp.Api.Features.GroceryList;
 /// <param name="imageOptions">Whether pictures can be drawn at all (an API key is configured).</param>
 /// <param name="costEstimateOptions">Whether the list's cost can be estimated, which the settings report.</param>
 /// <param name="imageSignal">Wakes the worker that draws pictures.</param>
+/// <param name="runs">The grocery run under way, which the list shows and which locks it during last call.</param>
+/// <param name="runOptions">The lengths of last call on offer.</param>
+/// <param name="runCoordinator">Whether grocery runs are possible, which the settings report.</param>
 /// <param name="timeProvider">The clock for creation and modification times.</param>
 /// <param name="logger">The logger.</param>
 internal sealed class GroceryListService(
@@ -33,6 +45,9 @@ internal sealed class GroceryListService(
     IOptions<ImageGenerationOptions> imageOptions,
     IOptions<CostEstimateOptions> costEstimateOptions,
     GroceryImageSignal imageSignal,
+    GroceryRunStore runs,
+    IOptions<GroceryRunOptions> runOptions,
+    IGroceryRunCoordinator runCoordinator,
     TimeProvider timeProvider,
     ILogger<GroceryListService> logger) : IGroceryListService
 {
@@ -44,7 +59,8 @@ internal sealed class GroceryListService(
         List<GroceryItemResponse> items = await ToResponses(dbContext.GroceryItems.AsNoTracking())
             .ToListAsync(cancellationToken);
         GroceryListSettings settings = await LoadSettingsAsync(track: false, cancellationToken);
-        return new GroceryListResponse(items, options.Value.Stores, ToResponse(settings));
+        GroceryRunResponse? run = await runs.GetCurrentAsync(cancellationToken);
+        return new GroceryListResponse(items, options.Value.Stores, ToResponse(settings), run, runOptions.Value.LastCallMinutes);
     }
 
     /// <inheritdoc />
@@ -189,6 +205,11 @@ internal sealed class GroceryListService(
         }
 
         using IDisposable turn = await writeLock.AcquireAsync(cancellationToken);
+        if (await runs.IsListLockedAsync(cancellationToken))
+        {
+            return GroceryListWriteResult.Failure(GroceryListWriteStatus.LockedForLastCall);
+        }
+
         List<GroceryItem> items = await LoadInOrderAsync(cancellationToken);
 
         int currentIndex = items.FindIndex(item => item.Id == itemId);
@@ -269,6 +290,11 @@ internal sealed class GroceryListService(
         }
 
         using IDisposable turn = await writeLock.AcquireAsync(cancellationToken);
+        if (await runs.IsListLockedAsync(cancellationToken))
+        {
+            return GroceryListWriteResult.Failure(GroceryListWriteStatus.LockedForLastCall);
+        }
+
         GroceryItem? item = await dbContext.GroceryItems.FirstOrDefaultAsync(existing => existing.Id == itemId, cancellationToken);
         if (item is null)
         {
@@ -471,7 +497,8 @@ internal sealed class GroceryListService(
             settings.Version,
             settings.ImageGenerationEnabled,
             imageOptions.Value.IsConfigured,
-            costEstimateOptions.Value.IsAvailable(imageOptions.Value));
+            costEstimateOptions.Value.IsAvailable(imageOptions.Value),
+            runCoordinator.IsAvailable);
 
     private Task<bool> UserExistsAsync(string userId, CancellationToken cancellationToken) =>
         dbContext.Users.AnyAsync(user => user.Id == userId, cancellationToken);

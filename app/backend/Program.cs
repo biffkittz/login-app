@@ -7,6 +7,7 @@ using LoginApp.Api.Infrastructure.Hosting;
 using LoginApp.Api.Infrastructure.Networking;
 using LoginApp.Api.Infrastructure.Security;
 using LoginApp.Api.Infrastructure.Telemetry;
+using LoginApp.Api.Infrastructure.Temporal;
 using LoginApp.Api.Infrastructure.Tls;
 
 // Composition root. Each concern registers itself through an extension method, so this file reads as an ordered
@@ -25,10 +26,11 @@ builder.Services.AddOpenApi();
 builder.Services.AddApplicationDatabase();
 builder.Services.AddEmail();
 builder.Services.AddAuthFeature();
-builder.Services.AddGroceryListFeature();
+builder.Services.AddGroceryListFeature(builder.Configuration);
 builder.Services.AddInternalNetworking();
 builder.Services.AddApplicationHealthChecks();
 builder.Services.AddApplicationTelemetry(builder.Configuration);
+builder.Services.AddTemporal(builder.Configuration);
 
 WebApplication app = builder.Build();
 
@@ -38,6 +40,7 @@ if (usesEphemeralSigningKey)
 }
 
 app.LogMetricsExport();
+app.LogTemporalConfiguration();
 
 // Middleware order is significant:
 // 1. The exception handler wraps everything so any failure becomes a ProblemDetails response without internals.

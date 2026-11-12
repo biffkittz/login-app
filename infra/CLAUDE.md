@@ -107,4 +107,9 @@ generated secrets and the Cloudflare records. Modules: `networking`, `registry`,
   write to disk; dashboards are `modules/observability/dashboards/*.json` (gzip+Base64, one variable each). Images
   are pinned by digest (`observability_images`); keep the digest form. The CI deploy identity may assign Monitoring
   Reader only because `scripts/setup-github-oidc.sh` lists it: a new role Terraform assigns needs adding there too.
+- **Grocery runs** (`temporal_namespace`, `temporal_api_key`, optional `temporal_address`): Temporal Cloud is created by
+  hand (no `temporalcloud` provider, by the user's choice), so Terraform only delivers the namespace, the endpoint
+  (default `<namespace>.tmprl.cloud:7233`) and the key (Key Vault `Temporal--ApiKey`) to the apps, plus each instance's
+  task queue `nibbles-<instance>`. Namespace and key go together (cross-variable validation). Changing an instance's
+  task queue strands its runs in flight. Nothing in Azure changes: the worker runs inside the apps.
 

@@ -35,6 +35,14 @@
     -->
     <PackageVersion Include="SkiaSharp" Version="4.154.1" />
     <PackageVersion Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="4.154.1" />
+    <!--
+      Grocery runs are a Temporal workflow (Features/GroceryList/Runs) on Temporal Cloud. The SDK carries Temporal's
+      Rust core as a native library (glibc and musl, x64 and arm64). DiagnosticSource bridges the SDK's metrics into
+      System.Diagnostics.Metrics, so they leave with the app's own over OTLP. The Hosting extension is left out on
+      purpose: its worker service stops the app when Temporal can't be reached (Infrastructure/Temporal).
+    -->
+    <PackageVersion Include="Temporalio" Version="1.21.1" />
+    <PackageVersion Include="Temporalio.Extensions.DiagnosticSource" Version="1.21.1" />
   </ItemGroup>
 
   <ItemGroup Label="Tests">

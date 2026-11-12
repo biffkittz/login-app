@@ -52,6 +52,20 @@ independent instance of the same image runs at https://grocery.biffkittz.com, wi
 - Prometheus and Grafana keep their data on an NFS share (Container Apps can't mount disks); exactly one Prometheus
   writes it. Images are pinned by digest; Dependabot can't update them.
 
+## Grocery runs (Temporal; `app/backend/Features/GroceryList/Runs`, `app/backend/Infrastructure/Temporal`)
+
+- A grocery run is a Temporal workflow on Temporal Cloud (one namespace, API key from Key Vault). Each app instance
+  runs its own worker in-process, on a task queue of its own (`nibbles-<instance>`): the activities push to phones
+  through the in-process SignalR hub. Don't move the worker out of the app without solving that.
+- Temporal decides, the database shows: only the workflow's activities write `GroceryRuns`, and the API reads the
+  database, never Temporal. Without Temporal (or with it down) the list must keep working; only runs are unavailable.
+- Workflow inputs, signals and activity arguments go to Temporal Cloud's history: IDs and times only, never names,
+  emails or items.
+- Workflow code must stay deterministic and replayable: no clock, I/O, `Task.Run` or hash-set iteration in it; guard
+  changes to its timers and activities with `Workflow.Patched`. `GroceryRunReplayTests` replays recorded histories.
+- Tests needing Temporal use the Temporal CLI's development server (`TEMPORAL_CLI_PATH` or `PATH`); CI installs the CLI
+  with a pinned hash and requires them. Don't let the SDK download a server.
+
 ## CI/CD (`.github/`, `docs/CI_CD.md`)
 
 - GitHub Actions signs in to Azure with OIDC only, one identity per GitHub environment (`infra-pr`, `demo-plan`,

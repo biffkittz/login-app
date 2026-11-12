@@ -18,6 +18,7 @@ flowchart LR
     hub[SignalR hub<br/>/api/grocery-list/hub]
     identity[ASP.NET Core Identity]
     ef[EF Core]
+    worker[Temporal worker<br/>grocery runs]
   end
   spa -- "GET /, /login, /assets/*" --> static
   spa -- "JSON + HttpOnly auth cookie" --> api
@@ -25,6 +26,10 @@ flowchart LR
   api -- "broadcast" --> hub
   api --> identity
   api --> ef --> pg[(PostgreSQL)]
+  api -- "start, signal" --> temporal[(Temporal Cloud)]
+  temporal -- "workflow and activity tasks" --> worker
+  worker -- "save, broadcast" --> ef
+  worker --> hub
 ```
 
 - **One origin.** The API serves the compiled SPA, and in development Vite proxies `/api` (WebSockets included) to
@@ -39,6 +44,9 @@ flowchart LR
   exactly one replica; Terraform refuses `app_max_replicas` other than 1. (The two sites, app. and grocery.biffkittz.com,
   are separate deployments with separate databases, not replicas of each other.) Scaling out would need a backplane
   such as Redis.
+- **One worker, in the app.** Grocery runs are Temporal workflows on Temporal Cloud. The app runs its own Temporal
+  worker in the same process, because the workflow's activities push to phones through the in-process hub (see
+  [Grocery runs](#grocery-runs)).
 
 ## Authentication flow
 
@@ -130,7 +138,7 @@ There is one list, shared by every registered user (the requirement is that any 
 
 | Endpoint | Body | Success |
 | --- | --- | --- |
-| `GET /api/grocery-list` | | `200 { items, stores, settings }`: items in order, the store choices in display order, and the list's settings |
+| `GET /api/grocery-list` | | `200 { items, stores, settings, run, lastCallMinutes }`: items in order, the store choices in display order, the list's settings, the grocery run under way (or `null`) and the lengths of last call on offer |
 | `POST /api/grocery-list/items` | `id?`, `name`, optional details, `afterItemId?` | `201` + change |
 | `PATCH /api/grocery-list/items/{id}` | only the fields to change; `""` clears one | `200` + change |
 | `POST /api/grocery-list/items/{id}/move` | `afterItemId` (`null` = top), `store?` (dropped into another store's section; `""` = none) | `200` + change |
@@ -138,11 +146,14 @@ There is one list, shared by every registered user (the requirement is that any 
 | `GET /api/grocery-list/images/{id}` | | `200` WebP picture, cacheable for a year; `404` |
 | `PATCH /api/grocery-list/settings` | `imageGenerationEnabled?` | `200` + settings, also broadcast as `SettingsChanged` |
 | `POST /api/grocery-list/cost-estimate` | | `200 { totalUsd, estimatedItemCount, items, note, estimatedAt }` (see [Cost estimates](#cost-estimates)) |
+| `POST /api/grocery-list/run` | `lastCallMinutes` (one of those offered) | `202 { runId }`; the run arrives as `RunChanged` (see [Grocery runs](#grocery-runs)) |
+| `POST /api/grocery-list/run/{id}/ready`, `/start-shopping`, `/cancel`, `/finish` | | `202`; the change arrives as `RunChanged` |
 
 Every write answers with a **change**, `{ savedItems, deletedItemIds }`, and the hub sends the very same change to
 every connected browser, the author's included. The SPA therefore has one code path for its own changes and
 everybody else's. Failures: `400` validation problem, `404` item gone, `409` (list full at 500 items, the anchor item
-of a move has gone, ID taken, or a concurrent write), `429` per-user rate limit, `401` session ended.
+of a move has gone, ID taken, a concurrent write, or a removal or move during a grocery run's last call), `429`
+per-user rate limit, `401` session ended.
 
 ### Realtime updates
 
@@ -296,6 +307,81 @@ sequenceDiagram
   (just under Cloudflare's 100-second limit), and `502` when it refuses or its answer is unusable. Log events
   5030-5033 give the reason, with user IDs and item counts only.
 
+### Grocery runs
+
+"Speak now or forever hold your peace." Someone about to go shopping taps **Start grocery run** and picks how long
+last call lasts (`GroceryRuns:LastCallMinutes`: 15 minutes, 30 minutes, 1 hour or 2 hours). Everyone else who has the
+list open gets a banner with the countdown and an **I'm good** button. Until last call ends, items can be added and
+changed but not removed or moved. Last call ends when everyone asked has said they're good, when the time is up, or
+when the shopper taps **Start shopping now**. The list is then final and open to every change again, and the banner
+says who is shopping until the shopper taps **Done shopping**.
+
+```mermaid
+sequenceDiagram
+  participant A as Ada's phone (shopper)
+  participant B as Ben's phone
+  participant API as API
+  participant T as Temporal Cloud
+  participant W as Worker (in the app)
+  A->>API: POST /api/grocery-list/run { lastCallMinutes: 30 }
+  API->>T: start workflow GroceryRun: Ada, the people online (Ben), 30 minutes
+  API-->>A: 202 { runId }
+  T->>W: workflow task
+  W->>W: activity OpenLastCall: save the run (the list locks)
+  W-->>A: RunChanged (last call)
+  W-->>B: RunChanged (last call)
+  B->>API: POST /api/grocery-list/run/{id}/ready
+  API->>T: signal ImGood (Ben)
+  T->>W: workflow task: everyone asked is ready, so the timer is cut short
+  W->>W: activity StartShopping: save (the list unlocks)
+  W-->>A: RunChanged (shopping)
+  W-->>B: RunChanged (shopping)
+  A->>API: POST /api/grocery-list/run/{id}/finish
+  API->>T: signal FinishShopping
+  W-->>B: RunChanged (finished)
+```
+
+- **Temporal decides, the database shows.** The workflow (`Features/GroceryList/Runs/GroceryRunWorkflow.cs`) holds
+  the run's state and makes every decision. Last call is one durable timer that wakes early
+  (`Workflow.WaitConditionAsync(everyoneReady, window)`), and the shopping another (`GroceryRuns:ShoppingTimeLimitMinutes`,
+  4 hours). Each change of state is numbered and handed to an activity (`GroceryRunActivities`). The activity saves it
+  to the `GroceryRuns` and `GroceryRunParticipants` tables and broadcasts it to every phone as `RunChanged`. The API
+  and the list read the database, never Temporal, so loading the list, the banner and last call's lock don't depend on
+  Temporal being reachable.
+- **Repeats are harmless.** Temporal may run an activity twice (a retry, or two workers during a deployment), or late.
+  A state is saved only if its number is higher than the stored one, and phones keep the copy with the highest
+  `sequence`, so neither can take a run backwards.
+- **Who is asked.** Everyone else who has the list open when the run starts: the users with a connection the hub
+  accepted (`GroceryListPresence`). Someone who opens the list during last call can add things, but nobody waits for
+  them. With nobody to ask, last call runs its full time, unless the shopper starts shopping.
+- **The lock.** During last call, `DELETE` and `move` answer `409`; adding and editing work as usual. The check runs
+  during the write's turn on the write lock, which the activities take too, so last call can't begin between a
+  removal's check and its save. It lapses a minute after last call's deadline, whatever the database says, so a run
+  whose workflow has stalled can't lock the list for long.
+- **Signals.** `ImGood` (someone asked, during last call), `StartShoppingNow` and `Cancel` (the shopper, during last
+  call), and `FinishShopping` (the shopper, while shopping). Signals don't answer, so the API checks each tap against
+  the database first and explains a late one (`409`) or one that isn't the user's to make (`403`). The workflow ignores
+  any that slip through, and each signal names its run, so a tap on an out-of-date banner can't count towards the next
+  run.
+- **One run at a time.** All of a site's runs have one workflow ID (`<task queue>/grocery-run`), so Temporal itself
+  refuses a second while one is running. A run's final activity saves its end a few milliseconds before the workflow
+  completes; a new start in between is retried for up to a second.
+- **Ending a run.** The shopper taps **Done shopping**, or the run ends by itself after the shopping time limit, or the
+  shopper calls it off during last call. An operator who cancels the workflow (Temporal UI or CLI) still ends the run
+  on every phone: the workflow catches the cancellation and runs its last activity. A workflow that is terminated
+  outright can't; its deadlines end the run for the app, and the next run marks it ended.
+- **Only IDs go to Temporal Cloud.** Temporal keeps every workflow's input, signals and activity arguments in its
+  history. They carry user IDs, run IDs and times, never names, email addresses or items; names are looked up in the
+  database when a run is broadcast.
+- **When Temporal is down.** Starting a run and the banner's buttons answer `503`; the list itself works, and the
+  `temporal` health check reports Degraded (it isn't part of readiness). The worker keeps reconnecting, and runs in
+  flight continue when it is back: their timers and signals wait in Temporal. Without `Temporal:Address` (local
+  development, tests), grocery runs are off and the app says so.
+- **Changing the workflow.** A deployment replays the runs in flight on the new code, which must make the same
+  decisions for them. Guard changes to the order or kind of timers and activities with `Workflow.Patched`;
+  `GroceryRunReplayTests` replays recorded histories (`backend.tests/.../Runs/Histories`) to catch a change that
+  doesn't.
+
 ### Order
 
 Items are ordered by a floating-point `position` (fractional indexing). Moving an item gives it the midpoint between
@@ -424,13 +510,16 @@ Prometheus stores them:
 | --- | --- | --- |
 | `nibbles_signalr_connections` | | Realtime connections the hub accepted that are still open: phones and browsers with the list open |
 | `nibbles_signalr_messages_total` | `event` | Messages the hub sent, one per connected client for each broadcast. `rate()` is the hub's messages per second |
-| `nibbles_signalr_broadcasts_total` | `event` (`list_changed`, `settings_changed`) | Changes pushed to everyone |
+| `nibbles_signalr_broadcasts_total` | `event` (`list_changed`, `settings_changed`, `run_changed`) | Changes pushed to everyone |
 | `nibbles_signalr_connections_refused_total` | `reason` (`cross_origin`, `unknown_user`) | Connections the hub closed at once |
 | `nibbles_grocery_item_changes_total` | `change` (`saved`, `deleted`) | Items in the broadcast changes |
 | `nibbles_pictures_total`, `nibbles_pictures_duration_seconds` | `outcome` (`drawn`, `reused`, `failed`, `daily_limit`) | AI pictures, and how long drawing one took |
 | `nibbles_cost_estimates_total`, `nibbles_cost_estimates_duration_seconds` | `status` (`succeeded`, `model_busy`, `model_failed`, `daily_limit_reached`, `empty_list`, `not_available`) | Estimate Cost presses, and how long Gemini took to answer |
 | `nibbles_registration_emails_total` | `outcome` (`sent`, `failed`, `daily_limit`, `lost_at_shutdown`) | Registration emails |
-| `nibbles_health_status` | `check` (`database`) | The latest health check result: 1 healthy, 0.5 degraded, 0 unhealthy (every 30 seconds) |
+| `nibbles_grocery_runs_started_total` | | Grocery runs that opened last call |
+| `nibbles_grocery_runs_last_calls_total` | `outcome` (`everyone_ready`, `time_up`, `shopper_went_early`) | Last calls that ended and let the shopping begin |
+| `nibbles_grocery_runs_ended_total` | `status` (`finished`, `expired`, `cancelled`) | Grocery runs that ended |
+| `nibbles_health_status` | `check` (`database`, `temporal`) | The latest health check result: 1 healthy, 0.5 degraded, 0 unhealthy (every 30 seconds) |
 
 The metrics carry no user, item name, email address or other personal data: their labels are the fixed values above.
 
@@ -441,6 +530,13 @@ EF Core's queries, saves and concurrency conflicts, Npgsql's connection pool and
 Cloudflare), and the runtime (CPU, memory, garbage collection, thread pool). The list is in
 `TelemetryServiceCollectionExtensions`; it leaves out meters that cost series without answering a question, such as
 routing match attempts.
+
+With grocery runs on, the Temporal SDK's own metrics come too (meter `Temporal`, `Infrastructure/Temporal`), named by
+the SDK: the worker's task slots and pollers (`temporal_worker_task_slots_used`, `temporal_num_pollers`), calls to
+Temporal Cloud and their failures (`temporal_request_total`, `temporal_request_failure_total`), workflow and activity
+task latencies (`temporal_workflow_task_execution_latency_seconds`, `temporal_activity_execution_latency_seconds`, and
+their schedule-to-start waits), and failed activities (`temporal_activity_execution_failed_total`). Their labels are the
+namespace, task queue, workflow and activity types and RPC operation names: fixed values too.
 
 ## Frontend
 
@@ -511,6 +607,10 @@ app/frontend/src/
   session (re-issuing the cookie while the user is active, with an absolute maximum) would fix that; it changes the
   security trade-offs above, so it hasn't been done without a decision.
 - **One replica.** The realtime hub runs in-process. More than one replica would need a SignalR backplane.
+- **Grocery runs reach open lists only.** Notifications are in the app: a run asks whoever has the list open when it
+  starts, and a phone that isn't looking finds the banner when it opens the list. Web Push would reach closed phones,
+  but needs a service worker, VAPID keys and a subscriptions table, and on iPhones works only for sites added to the
+  home screen.
 - **No offline editing.** Changes made without a connection fail (and are rolled back) rather than queue. The list
   shown is the last one loaded, and the status pill says it may be out of date.
 - **Undo re-creates.** "Undo" adds the item back, in its old place, as a new item: its creation date is the time of

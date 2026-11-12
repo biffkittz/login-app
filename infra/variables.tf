@@ -164,6 +164,45 @@ variable "gemini_api_key" {
   }
 }
 
+variable "temporal_namespace" {
+  description = "Temporal Cloud namespace that runs grocery runs, as <namespace>.<account> (e.g. nibbles-demo.a1b2c): the app's in-process worker polls it, and the API starts and signals workflows in it. Both sites share it, each with a task queue of its own (nibbles-<instance>). Null leaves grocery runs unavailable (the app says so). Not a secret."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.temporal_namespace == null || can(regex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?\\.[a-z0-9]+$", var.temporal_namespace))
+    error_message = "temporal_namespace must be the namespace's full ID, <namespace>.<account> in lower case, as the Temporal Cloud UI shows it (e.g. nibbles-demo.a1b2c)."
+  }
+
+  validation {
+    condition     = (var.temporal_namespace == null) == (var.temporal_api_key == null)
+    error_message = "temporal_namespace and TF_VAR_temporal_api_key go together: set both to turn grocery runs on, or neither."
+  }
+}
+
+variable "temporal_address" {
+  description = "Temporal Cloud gRPC endpoint (host:port) for temporal_namespace. Null uses the namespace endpoint, <namespace>.<account>.tmprl.cloud:7233, which Temporal recommends for API keys."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.temporal_address == null || can(regex("^[A-Za-z0-9][A-Za-z0-9.-]*:[0-9]{1,5}$", var.temporal_address))
+    error_message = "temporal_address must be host:port, such as nibbles-demo.a1b2c.tmprl.cloud:7233."
+  }
+}
+
+variable "temporal_api_key" {
+  description = "API key of a namespace-scoped Temporal Cloud service account with Write permission on temporal_namespace. Keys expire (2 years at most); rotate before then (infra/docs/DEPLOYMENT.md). Pass it as TF_VAR_temporal_api_key (the TEMPORAL_API_KEY secret in CI); never put it in a tfvars file."
+  type        = string
+  default     = null
+  sensitive   = true
+
+  validation {
+    condition     = var.temporal_api_key == null || can(regex("^[^\\s]{20,}$", var.temporal_api_key))
+    error_message = "temporal_api_key must be null or a key without spaces; check how it was copied."
+  }
+}
+
 # ---------------------------------------------------------------------------------------------------------------------
 # Container registry and the Container App
 # ---------------------------------------------------------------------------------------------------------------------
