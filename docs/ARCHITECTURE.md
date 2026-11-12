@@ -309,6 +309,8 @@ sequenceDiagram
 
 ### Grocery runs
 
+(How Temporal works and how this workflow is built on it, file by file: [TEMPORAL.md](TEMPORAL.md).)
+
 "Speak now or forever hold your peace." Someone about to go shopping taps **Start grocery run** and picks how long
 last call lasts (`GroceryRuns:LastCallMinutes`: 15 minutes, 30 minutes, 1 hour or 2 hours). Everyone else who has the
 list open gets a banner with the countdown and an **I'm good** button. Until last call ends, items can be added and
