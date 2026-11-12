@@ -18,6 +18,8 @@ interface Props {
    * list without any pictures (they were never on) shows no tiles at all.
    */
   pictureColumn?: boolean
+  /** It's a grocery run's last call: the item can't be checked off (removed) or moved until the shopping starts. */
+  locked?: boolean
   /** A row dragged from another store's section would land just above or below this one: mark the spot. */
   dropMarker?: 'before' | 'after' | null
   /**
@@ -33,6 +35,7 @@ const {
   checked = false,
   moveHintId,
   pictureColumn = false,
+  locked = false,
   dropMarker = null,
   movingTo = null,
 } = defineProps<Props>()
@@ -71,9 +74,10 @@ const emit = defineEmits<{
     />
     <button
       type="button"
-      class="group grid size-11 shrink-0 place-items-center rounded-full focus-visible:outline-3 focus-visible:outline-offset-1 focus-visible:outline-ember-600"
+      class="group grid size-11 shrink-0 place-items-center rounded-full focus-visible:outline-3 focus-visible:outline-offset-1 focus-visible:outline-ember-600 disabled:cursor-not-allowed disabled:opacity-40"
       :aria-label="`Check off ${item.name}`"
       :aria-pressed="checked"
+      :disabled="locked"
       @click="emit('check')"
     >
       <span
@@ -162,12 +166,13 @@ const emit = defineEmits<{
     <button
       type="button"
       data-reorder-handle
-      class="grid h-11 w-10 shrink-0 cursor-grab touch-none place-items-center rounded-xl text-walnut-500 select-none hover:text-walnut-800 focus-visible:outline-3 focus-visible:outline-offset-1 focus-visible:outline-ember-600 active:cursor-grabbing [-webkit-touch-callout:none]"
+      class="grid h-11 w-10 shrink-0 cursor-grab touch-none place-items-center rounded-xl text-walnut-500 select-none hover:text-walnut-800 focus-visible:outline-3 focus-visible:outline-offset-1 focus-visible:outline-ember-600 active:cursor-grabbing disabled:cursor-not-allowed disabled:opacity-40 [-webkit-touch-callout:none]"
       :aria-label="`Move ${item.name}`"
       :aria-describedby="moveHintId"
-      @pointerdown="emit('dragStart', $event)"
-      @keydown.up.prevent="emit('moveBy', -1)"
-      @keydown.down.prevent="emit('moveBy', 1)"
+      :disabled="locked"
+      @pointerdown="!locked && emit('dragStart', $event)"
+      @keydown.up.prevent="!locked && emit('moveBy', -1)"
+      @keydown.down.prevent="!locked && emit('moveBy', 1)"
     >
       <svg class="size-5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
         <circle cx="9" cy="6" r="1.75" />

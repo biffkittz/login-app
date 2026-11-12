@@ -1,6 +1,7 @@
 import type {
   CostEstimate,
   GroceryItemChanges,
+  GroceryRunAction,
   GroceryItemMove,
   GroceryList,
   GroceryListChange,
@@ -124,4 +125,40 @@ export async function estimateCost(options: RequestOptions = {}): Promise<CostEs
     timeout: COST_ESTIMATE_TIMEOUT_MS,
   })
   return data
+}
+
+/**
+ * Starts a grocery run with the signed-in user as the shopper: last call for everyone else who has the list open. The
+ * run itself arrives a moment later over the realtime connection, once the server's workflow has opened last call.
+ *
+ * @param lastCallMinutes - How long last call lasts at most: one of the lengths `getList` offers.
+ * @returns The new run's ID.
+ * @throws {@link ApiError} 400 for a length that isn't offered, 409 when a run is already under way, 503 when runs
+ * aren't available.
+ */
+export async function startGroceryRun(
+  lastCallMinutes: number,
+  options: RequestOptions = {},
+): Promise<string> {
+  const { data } = await httpClient.post<{ runId: string }>(
+    '/grocery-list/run',
+    { lastCallMinutes },
+    options,
+  )
+  return data.runId
+}
+
+/**
+ * Sends one of a run's actions: "I'm good" (`ready`), or the shopper's start shopping now, call it off, or done.
+ * Like starting, it takes effect a moment later, over the realtime connection.
+ *
+ * @throws {@link ApiError} 403 when only the shopper may do it, 409 when it no longer applies (last call is over, the
+ * run has ended), 503 when runs aren't available.
+ */
+export async function sendGroceryRunAction(
+  runId: string,
+  action: GroceryRunAction,
+  options: RequestOptions = {},
+): Promise<void> {
+  await httpClient.post(`/grocery-list/run/${encodeURIComponent(runId)}/${action}`, null, options)
 }

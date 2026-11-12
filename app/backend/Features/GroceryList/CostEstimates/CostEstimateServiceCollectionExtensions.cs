@@ -41,6 +41,7 @@ internal static class CostEstimateServiceCollectionExtensions
 
         services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton<CostEstimateBudget>();
+        services.AddSingleton<CostEstimateMetrics>();
         services.AddScoped<CostEstimateService>();
         return services;
     }

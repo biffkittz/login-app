@@ -94,7 +94,7 @@ someone else to get tokens Azure would accept. Terraform's state backend uses En
 | Identity | Roles | Why not less |
 | --- | --- | --- |
 | `id-loginapp-github-plan` | Reader on the subscription; Storage Blob Data Reader on the state container | Pull request plans don't refresh (`-refresh=false`) or lock the state (`-lock=false`), so reading is all they need |
-| `id-loginapp-github-deploy` | Contributor on the subscription; Role Based Access Control Administrator on the subscription, **constrained** to AcrPull, Key Vault Secrets User, Key Vault Secrets Officer and Key Vault Certificates Officer; Storage Blob Data Contributor on the state container; Key Vault Secrets/Certificates Officer through Terraform | Terraform creates the resource group, registers resource providers and assigns those four roles. The condition stops it from granting anything else, Owner included |
+| `id-loginapp-github-deploy` | Contributor on the subscription; Role Based Access Control Administrator on the subscription, **constrained** to AcrPull, Key Vault Secrets User, Key Vault Secrets Officer, Key Vault Certificates Officer and Monitoring Reader; Storage Blob Data Contributor on the state container; Key Vault Secrets/Certificates Officer through Terraform | Terraform creates the resource group, registers resource providers and assigns those five roles (Monitoring Reader for the observability stack's metrics exporter). The condition stops it from granting anything else, Owner included |
 | `id-loginapp-github-push` | AcrPush and Reader on the registry | Pushing is all publishing does; Reader lets `az acr login` find the registry |
 
 **The repository is public, and so are its logs, job summaries and artifacts.**
@@ -116,7 +116,8 @@ token.
 **Supply chain.**
 
 - Every third-party action is pinned to a full commit SHA, with the release in a comment.
-- Downloaded tools (Trivy, actionlint, zizmor, terraform-docs) are checked against pinned SHA-256 checksums.
+- Downloaded tools (Trivy, actionlint, zizmor, terraform-docs, and the Temporal CLI the workflow tests run against)
+  are checked against pinned SHA-256 checksums.
 - `terraform init -lockfile=readonly` installs only the provider builds `.terraform.lock.hcl` records.
 - `npm ci` and `dotnet restore` install what the lock and props files say.
 - No dependency caches are shared between pull requests and `main`.
@@ -158,6 +159,10 @@ az login && az account set --subscription 3c3f379f-8161-4631-a30c-a3af82622a6a
 credentials and their roles. It looks up the owner and repository IDs for the credentials' subjects on GitHub's
 public API (for a private repository, set `GITHUB_OWNER_ID` and `GITHUB_REPOSITORY_ID`). It is safe to run again, and
 it ends by printing the values for the next steps. Keep that output.
+
+Run it again whenever the roles Terraform assigns change: the deploy identity's Role Based Access Control
+Administrator role may only grant the roles the script lists (AcrPull, three Key Vault roles and, for the
+observability stack, Monitoring Reader). A rerun replaces an assignment whose condition allows fewer.
 
 ### 2. Let the deploy identity manage Key Vault's contents
 
@@ -212,8 +217,8 @@ your calendar. GitHub's runners have no fixed IP addresses, so IP filtering isn'
 
 | Environment | Deployment branches and tags | Required reviewers | Variables | Secrets |
 | --- | --- | --- | --- | --- |
-| `infra-pr` | No restriction (pull request branches) | none (add some for collaborators you don't fully trust) | `AZURE_CLIENT_ID` = plan identity | `CLOUDFLARE_API_TOKEN` (read-only token), `TLS_CERTIFICATE_PFX_BASE64`, `TLS_CERTIFICATE_PFX_PASSWORD`, `GEMINI_API_KEY` |
-| `demo-plan` | Selected branches: `main` | none | `AZURE_CLIENT_ID` = deploy identity | `CLOUDFLARE_API_TOKEN` (deploy token), `TLS_CERTIFICATE_PFX_BASE64`, `TLS_CERTIFICATE_PFX_PASSWORD`, `GEMINI_API_KEY`, `TF_PLAN_ENCRYPTION_KEY` |
+| `infra-pr` | No restriction (pull request branches) | none (add some for collaborators you don't fully trust) | `AZURE_CLIENT_ID` = plan identity | `CLOUDFLARE_API_TOKEN` (read-only token), `TLS_CERTIFICATE_PFX_BASE64`, `TLS_CERTIFICATE_PFX_PASSWORD`, `GEMINI_API_KEY`, `GRAFANA_GITHUB_CLIENT_SECRET` (with observability), `TEMPORAL_API_KEY` (with grocery runs) |
+| `demo-plan` | Selected branches: `main` | none | `AZURE_CLIENT_ID` = deploy identity | `CLOUDFLARE_API_TOKEN` (deploy token), `TLS_CERTIFICATE_PFX_BASE64`, `TLS_CERTIFICATE_PFX_PASSWORD`, `GEMINI_API_KEY`, `GRAFANA_GITHUB_CLIENT_SECRET` (with observability), `TEMPORAL_API_KEY` (with grocery runs), `TF_PLAN_ENCRYPTION_KEY` |
 | `demo` | Selected branches: `main` | you (and, for a team, **Prevent self-review**) | `AZURE_CLIENT_ID` = deploy identity | `CLOUDFLARE_API_TOKEN` (deploy token), `TLS_CERTIFICATE_PFX_BASE64`, `TF_PLAN_ENCRYPTION_KEY` |
 | `registry` | Selected branches: `main` | you (remove to publish every merge automatically) | `AZURE_CLIENT_ID` = push identity | none |
 
@@ -226,6 +231,8 @@ can't be skipped by accident.
 | `TLS_CERTIFICATE_PFX_BASE64` | The origin certificate PFX, Base64 on one line | `base64 -w0 ~/.secrets/biffkittz-origin.pfx` |
 | `TLS_CERTIFICATE_PFX_PASSWORD` | The PFX's password (leave it out if the PFX has none) | Your password manager |
 | `GEMINI_API_KEY` | The Gemini API key. Without it every plan removes the key and the app loses AI pictures and cost estimates; the plan warns | Google AI Studio |
+| `GRAFANA_GITHUB_CLIENT_SECRET` | With `observability_enabled`: the client secret of Grafana's GitHub OAuth App. Without it the plan fails and says so | GitHub, the OAuth App's page ([infra/docs/AUTHENTICATION.md](../infra/docs/AUTHENTICATION.md#grafanas-github-sign-in)) |
+| `TEMPORAL_API_KEY` | With `temporal_namespace`: the Temporal Cloud API key for grocery runs. Without it the plan fails and says so | Temporal Cloud, the namespace's service account ([infra/docs/AUTHENTICATION.md](../infra/docs/AUTHENTICATION.md#temporal-cloud)) |
 | `TF_PLAN_ENCRYPTION_KEY` | A random key, the **same** in `demo-plan` and `demo`; keep a copy in your password manager to read plans locally | `openssl rand -base64 32` |
 
 With the [GitHub CLI](https://cli.github.com) (`gh auth login` first), secrets are set from standard input, so they
@@ -237,6 +244,8 @@ base64 -w0 ~/.secrets/biffkittz-origin.pfx | gh secret set TLS_CERTIFICATE_PFX_B
 base64 -w0 ~/.secrets/biffkittz-origin.pfx | gh secret set TLS_CERTIFICATE_PFX_BASE64 --env demo
 gh secret set TLS_CERTIFICATE_PFX_PASSWORD --env infra-pr     # prompts for the value; repeat for demo-plan
 gh secret set GEMINI_API_KEY --env infra-pr                   # prompts; repeat for demo-plan
+gh secret set GRAFANA_GITHUB_CLIENT_SECRET --env infra-pr     # with observability; repeat for demo-plan
+gh secret set TEMPORAL_API_KEY --env infra-pr                 # with grocery runs; repeat for demo-plan
 gh secret set CLOUDFLARE_API_TOKEN --env infra-pr             # the read-only token
 gh secret set CLOUDFLARE_API_TOKEN --env demo-plan            # the deploy token; repeat for demo
 key="$(openssl rand -base64 32)"
@@ -353,6 +362,8 @@ The Azure identities have no secrets to rotate. For the others, update the secre
 | `TF_PLAN_ENCRYPTION_KEY` | A new random key in `demo-plan` and `demo`. Plans saved with the old key can no longer be applied: re-run them |
 | Origin certificate | Update `TLS_CERTIFICATE_PFX_BASE64` (and the password) everywhere, then run the infra workflow with **apply** |
 | Gemini key | Update `GEMINI_API_KEY` in `infra-pr` and `demo-plan`, then run the infra workflow with **apply** |
+| Grafana's GitHub client secret | Generate a new one in the OAuth App, update `GRAFANA_GITHUB_CLIENT_SECRET` in `infra-pr` and `demo-plan`, run the infra workflow with **apply**, and delete the old one in GitHub after Grafana restarts |
+| Temporal Cloud API key | Before it expires (Temporal emails 30, 20 and 10 days ahead): create a new key for the same service account, update `TEMPORAL_API_KEY` in `infra-pr` and `demo-plan`, run the infra workflow with **apply**, and delete the old key once the apps have restarted ([infra/docs/DEPLOYMENT.md](../infra/docs/DEPLOYMENT.md#rotating-the-api-key)) |
 
 ### Terraform on your own machine
 
@@ -366,7 +377,7 @@ After a local apply, the next CI plan should report no changes.
 | --- | --- |
 | `AADSTS700213: No matching federated identity record found for presented assertion subject '...'` | The credential's subject differs from the one in the message (it is exactly what GitHub presented). Compare the repository's name and IDs, the environment's name, and whether the job runs without its environment. Re-run `setup-github-oidc.sh` after renaming or transferring the repository, or after switching its subject format (Settings, Actions, OpenID Connect) |
 | `AADSTS700016` or `Identity not found` | `AZURE_CLIENT_ID` in that environment isn't the identity's **client** ID (the script prints it) |
-| Plan fails with `403` reading Key Vault secrets (`ForbiddenByRbac`) | The deploy identity isn't a Key Vault administrator yet: step 2, applied from your machine |
+| Plan fails with `403` reading Key Vault secrets (`ForbiddenByRbac`, `Assignment: (not found)`) | The deploy identity (the message's `appid` is its client ID) isn't a Key Vault administrator yet. The two lines in `demo.tfvars` only grant the role once they are **applied**, and a CI plan can't do that for itself because it fails first: step 2, applied from your machine. Then wait a few minutes for the role to take effect and re-run the job |
 | Plan fails with `AuthorizationFailed` on the state (`Storage Blob Data`) | The identity's state role is missing or hasn't propagated yet (a few minutes); re-run `setup-github-oidc.sh` |
 | `Error acquiring the state lock` | Someone else, or another run, holds it. Wait; `terraform force-unlock` only once you are sure nothing is running |
 | Apply: `Saved plan is stale` | The state changed after the plan (another apply). Re-run the whole workflow, so it plans again |

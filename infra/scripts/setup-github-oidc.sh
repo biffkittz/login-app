@@ -114,14 +114,26 @@ ensure_federation() {
 }
 
 # One attempt at a role assignment: skips it if the same one exists, and prints what it did. An optional condition
-# (ABAC) constrains what the role allows.
+# (ABAC) constrains what the role allows; an existing assignment whose condition lacks any of the role IDs in
+# $assignable (an older run of this script) is replaced.
 assign_role() {
   local principal="$1" role="$2" scope="$3" condition="${4:-}"
-  local existing
+  local existing current id
   existing="$(az role assignment list --assignee "$principal" --role "$role" --scope "$scope" --query '[0].id' -o tsv)" || return 1
   if [[ -n "$existing" ]]; then
-    echo "  = $role on ${scope##*/}"
-    return 0
+    current="$(az role assignment list --assignee "$principal" --role "$role" --scope "$scope" --query '[0].condition' -o tsv)" || return 1
+    local outdated=false
+    if [[ -n "$condition" ]]; then
+      for id in ${assignable//,/ }; do
+        [[ "$current" == *"$id"* ]] || outdated=true
+      done
+    fi
+    if [[ "$outdated" == false ]]; then
+      echo "  = $role on ${scope##*/}"
+      return 0
+    fi
+    az role assignment delete --ids "$existing" --output none || return 1
+    echo "  - $role on ${scope##*/} (its condition allowed fewer roles)"
   fi
   local args=(--assignee-object-id "$principal" --assignee-principal-type ServicePrincipal --role "$role" --scope "$scope")
   if [[ -n "$condition" ]]; then
@@ -154,9 +166,9 @@ role_id() {
   az role definition list --name "$1" --query '[0].name' -o tsv
 }
 
-# Role Based Access Control Administrator may only grant or remove the four roles Terraform assigns, so the deploy
-# identity can't make itself, or anyone else, an Owner.
-assignable="$(role_id "AcrPull"), $(role_id "Key Vault Secrets User"), $(role_id "Key Vault Secrets Officer"), $(role_id "Key Vault Certificates Officer")"
+# Role Based Access Control Administrator may only grant or remove the roles Terraform assigns, so the deploy identity
+# can't make itself, or anyone else, an Owner. Monitoring Reader is the observability stack's (read-only metrics).
+assignable="$(role_id "AcrPull"), $(role_id "Key Vault Secrets User"), $(role_id "Key Vault Secrets Officer"), $(role_id "Key Vault Certificates Officer"), $(role_id "Monitoring Reader")"
 constrained="((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR (@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {$assignable})) AND ((!(ActionMatches{'Microsoft.Authorization/roleAssignments/delete'})) OR (@Resource[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {$assignable}))"
 
 echo "id-loginapp-github-plan"

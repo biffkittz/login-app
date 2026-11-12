@@ -11,6 +11,7 @@ import type {
   GroceryListSettings,
 } from '@/types/grocery'
 import { makeItem } from '@/utils/__tests__/test-items'
+import { makeRun, participant } from '@/utils/__tests__/test-runs'
 
 import { useAuthStore } from '../auth'
 import { useGroceryListStore } from '../grocery-list'
@@ -33,10 +34,11 @@ const PICTURES_ON: GroceryListSettings = {
   imageGenerationEnabled: true,
   imageGenerationAvailable: true,
   costEstimateAvailable: true,
+  groceryRunsAvailable: false,
 }
 
 function listOf(items: GroceryItem[], settings: GroceryListSettings = PICTURES_ON): GroceryList {
-  return { items, stores: STORES, settings }
+  return { items, stores: STORES, settings, run: null, lastCallMinutes: [15, 30, 60, 120] }
 }
 
 const networkError = () => new ApiError("We couldn't reach the server.", { kind: 'network' })
@@ -586,6 +588,101 @@ describe('grocery list store', () => {
       hub.onStateChange('reconnecting')
 
       expect(useGroceryListStore().connectionState).toBe('reconnecting')
+    })
+  })
+  describe('grocery runs', () => {
+    it('shows the run the list came with, and the lengths of last call on offer', async () => {
+      vi.mocked(groceryApi.getList).mockResolvedValue({ ...listOf([]), run: makeRun() })
+      const store = useGroceryListStore()
+
+      await store.load()
+
+      expect(store.run?.id).toBe('run-1')
+      expect(store.lastCallMinutes).toEqual([15, 30, 60, 120])
+    })
+
+    it('keeps the newest copy of a run, and a later run over an earlier one', async () => {
+      const store = await storeWith()
+
+      store.applyRun(makeRun({ sequence: 3, status: 'shopping' }))
+      store.applyRun(makeRun({ sequence: 2 }))
+      expect(store.run?.status).toBe('shopping')
+
+      const earlier = makeRun({
+        id: 'run-0',
+        startedAt: '2026-11-01T10:00:00.000Z',
+        status: 'finished',
+      })
+      store.applyRun(earlier)
+      expect(store.run?.id).toBe('run-1')
+
+      const later = makeRun({ id: 'run-2', startedAt: new Date(Date.now() + 1_000).toISOString() })
+      store.applyRun(later)
+      expect(store.run?.id).toBe('run-2')
+    })
+
+    it('applies run messages that arrive during a reload after it', async () => {
+      const store = await storeWith()
+      let answer!: (list: GroceryList) => void
+      vi.mocked(groceryApi.getList).mockReturnValue(new Promise((resolve) => (answer = resolve)))
+
+      const reloading = store.load()
+      store.applyRun(makeRun({ sequence: 1 }))
+      answer(listOf([]))
+      await reloading
+
+      // The reload's answer predates the message, which wins.
+      expect(store.run?.id).toBe('run-1')
+    })
+
+    it('remembers the run it started until the run arrives', async () => {
+      const store = await storeWith()
+      vi.mocked(groceryApi.startGroceryRun).mockResolvedValue('run-1')
+
+      await store.startRun(30)
+      expect(groceryApi.startGroceryRun).toHaveBeenCalledWith(30)
+      expect(store.startingRunId).toBe('run-1')
+
+      store.applyRun(makeRun())
+      expect(store.startingRunId).toBeNull()
+    })
+
+    it('shows "I\'m good" at once, and takes it back when the server refuses', async () => {
+      const store = await storeWith()
+      store.applyRun(
+        makeRun({ participants: [participant('me', 'Ada'), participant('ben', 'Ben')] }),
+      )
+      vi.mocked(groceryApi.sendGroceryRunAction).mockRejectedValue(networkError())
+
+      const sending = store.sendRunAction('ready')
+      expect(store.run?.participants.find((asked) => asked.userId === 'me')?.ready).toBe(true)
+      await expect(sending).rejects.toThrow()
+
+      expect(store.run?.participants.find((asked) => asked.userId === 'me')?.ready).toBe(false)
+      expect(groceryApi.sendGroceryRunAction).toHaveBeenCalledWith('run-1', 'ready')
+    })
+
+    it('reloads when the server says a run request no longer applies', async () => {
+      const store = await storeWith()
+      store.applyRun(makeRun())
+      vi.mocked(groceryApi.sendGroceryRunAction).mockRejectedValue(
+        new ApiError('Last call is over: the list is final.', { kind: 'http', status: 409 }),
+      )
+      vi.mocked(groceryApi.getList).mockClear()
+
+      await expect(store.sendRunAction('start-shopping')).rejects.toThrow('Last call is over')
+
+      expect(groceryApi.getList).toHaveBeenCalledOnce()
+    })
+
+    it('forgets the run when the user signs out', async () => {
+      const store = await storeWith()
+      store.applyRun(makeRun())
+
+      useAuthStore().$patch({ user: null })
+      await Promise.resolve()
+
+      expect(store.run).toBeNull()
     })
   })
 })

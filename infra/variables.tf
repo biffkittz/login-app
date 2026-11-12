@@ -164,6 +164,45 @@ variable "gemini_api_key" {
   }
 }
 
+variable "temporal_namespace" {
+  description = "Temporal Cloud namespace that runs grocery runs, as <namespace>.<account> (e.g. nibbles-demo.a1b2c): the app's in-process worker polls it, and the API starts and signals workflows in it. Both sites share it, each with a task queue of its own (nibbles-<instance>). Null leaves grocery runs unavailable (the app says so). Not a secret."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.temporal_namespace == null || can(regex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?\\.[a-z0-9]+$", var.temporal_namespace))
+    error_message = "temporal_namespace must be the namespace's full ID, <namespace>.<account> in lower case, as the Temporal Cloud UI shows it (e.g. nibbles-demo.a1b2c)."
+  }
+
+  validation {
+    condition     = (var.temporal_namespace == null) == (var.temporal_api_key == null)
+    error_message = "temporal_namespace and TF_VAR_temporal_api_key go together: set both to turn grocery runs on, or neither."
+  }
+}
+
+variable "temporal_address" {
+  description = "Temporal Cloud gRPC endpoint (host:port) for temporal_namespace. Null uses the namespace endpoint, <namespace>.<account>.tmprl.cloud:7233, which Temporal recommends for API keys."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.temporal_address == null || can(regex("^[A-Za-z0-9][A-Za-z0-9.-]*:[0-9]{1,5}$", var.temporal_address))
+    error_message = "temporal_address must be host:port, such as nibbles-demo.a1b2c.tmprl.cloud:7233."
+  }
+}
+
+variable "temporal_api_key" {
+  description = "API key of a namespace-scoped Temporal Cloud service account with Write permission on temporal_namespace. Keys expire (2 years at most); rotate before then (infra/docs/DEPLOYMENT.md). Pass it as TF_VAR_temporal_api_key (the TEMPORAL_API_KEY secret in CI); never put it in a tfvars file."
+  type        = string
+  default     = null
+  sensitive   = true
+
+  validation {
+    condition     = var.temporal_api_key == null || can(regex("^[^\\s]{20,}$", var.temporal_api_key))
+    error_message = "temporal_api_key must be null or a key without spaces; check how it was copied."
+  }
+}
+
 # ---------------------------------------------------------------------------------------------------------------------
 # Container registry and the Container App
 # ---------------------------------------------------------------------------------------------------------------------
@@ -267,8 +306,8 @@ variable "additional_app_instances" {
   default = {}
 
   validation {
-    condition     = alltrue([for key in keys(var.additional_app_instances) : can(regex("^[a-z][a-z0-9]{1,11}$", key)) && key != "main"])
-    error_message = "Instance keys are 2-12 lowercase letters or digits, starting with a letter, and not \"main\" (the instance at app_hostname)."
+    condition     = alltrue([for key in keys(var.additional_app_instances) : can(regex("^[a-z][a-z0-9]{1,11}$", key)) && !contains(["main", "grafana", "prometheus"], key)])
+    error_message = "Instance keys are 2-12 lowercase letters or digits, starting with a letter, and not \"main\" (the instance at app_hostname), \"grafana\" or \"prometheus\" (their Container Apps' names)."
   }
 
   validation {
@@ -484,6 +523,155 @@ variable "key_vault_additional_administrators" {
     )
     error_message = "key_vault_additional_administrators must not list key_vault_administrator_object_id again: Azure refuses a second identical role assignment."
   }
+}
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Observability: Prometheus and Grafana (modules/observability)
+# ---------------------------------------------------------------------------------------------------------------------
+
+variable "observability_enabled" {
+  description = "Runs Prometheus and Grafana in the app's environment: the app pushes its metrics to Prometheus, and Grafana is public at grafana_hostname with GitHub sign-in. Needs grafana_github_client_id, grafana_github_admins and TF_VAR_grafana_github_client_secret (infra/docs/DEPLOYMENT.md)."
+  type        = bool
+  default     = false
+}
+
+variable "grafana_hostname" {
+  description = "Public host name of Grafana, inside dns_zone_name. Cloudflare proxies it like the app's."
+  type        = string
+  default     = "grafana.biffkittz.com"
+
+  validation {
+    condition = (
+      endswith(lower(var.grafana_hostname), ".${lower(var.dns_zone_name)}") &&
+      !contains(concat([lower(var.app_hostname)], [for instance in values(var.additional_app_instances) : lower(instance.hostname)]), lower(var.grafana_hostname))
+    )
+    error_message = "grafana_hostname must be a name inside dns_zone_name that no instance of the app uses."
+  }
+}
+
+variable "grafana_exposed_port" {
+  description = "Public TCP port of the environment for Grafana, which Cloudflare's Origin Rule connects to (see app_exposed_port)."
+  type        = number
+  default     = 8445
+
+  validation {
+    condition = (
+      var.grafana_exposed_port >= 1 && var.grafana_exposed_port <= 65535 &&
+      !contains(concat([80, 443, 36985, var.app_exposed_port], [for instance in values(var.additional_app_instances) : instance.exposed_port]), var.grafana_exposed_port)
+    )
+    error_message = "grafana_exposed_port must be a TCP port other than 80, 443 and 36985 and other than every app instance's exposed_port: TCP ingress can't share a port."
+  }
+}
+
+variable "grafana_github_client_id" {
+  description = "Client ID of the GitHub OAuth App that Grafana signs users in with (not a secret). Register it with the callback URL https://<grafana_hostname>/login/github."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.grafana_github_client_id == null || can(regex("^[A-Za-z0-9.]{16,40}$", var.grafana_github_client_id))
+    error_message = "grafana_github_client_id must be a GitHub OAuth App's client ID, such as Ov23li followed by 14 letters and digits."
+  }
+
+  validation {
+    condition     = !var.observability_enabled || var.grafana_github_client_id != null
+    error_message = "observability_enabled needs grafana_github_client_id: GitHub is the only way to sign in to Grafana."
+  }
+}
+
+variable "grafana_github_client_secret" {
+  description = "Client secret of that GitHub OAuth App. A secret: pass it as TF_VAR_grafana_github_client_secret (the GRAFANA_GITHUB_CLIENT_SECRET secret in CI); it is kept in Key Vault."
+  type        = string
+  default     = null
+  sensitive   = true
+
+  validation {
+    condition     = !var.observability_enabled || can(regex("^[A-Za-z0-9_]{20,}$", var.grafana_github_client_secret))
+    error_message = "observability_enabled needs TF_VAR_grafana_github_client_secret: the OAuth App's client secret (GitHub shows it once, when it is generated)."
+  }
+}
+
+variable "grafana_github_admins" {
+  description = "GitHub usernames, as GitHub spells them, that sign in to Grafana as administrators. Anyone not listed here or in grafana_github_viewers is refused."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for login in var.grafana_github_admins : can(regex("^[A-Za-z0-9]([A-Za-z0-9-]{0,37}[A-Za-z0-9])?$", login))])
+    error_message = "grafana_github_admins must hold GitHub usernames: letters, digits and inner hyphens, at most 39 characters."
+  }
+
+  validation {
+    condition     = !var.observability_enabled || length(var.grafana_github_admins) > 0
+    error_message = "observability_enabled needs at least one GitHub username in grafana_github_admins: Grafana has no other administrator."
+  }
+}
+
+variable "grafana_github_viewers" {
+  description = "GitHub usernames that may sign in to Grafana to view dashboards, without changing anything."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for login in var.grafana_github_viewers : can(regex("^[A-Za-z0-9]([A-Za-z0-9-]{0,37}[A-Za-z0-9])?$", login))])
+    error_message = "grafana_github_viewers must hold GitHub usernames: letters, digits and inner hyphens, at most 39 characters."
+  }
+}
+
+variable "observability_images" {
+  description = "Images of the observability stack, pinned by digest (a tag can be moved to other content). Dependabot can't see these: check for new releases now and then (infra/docs/DEPLOYMENT.md)."
+  type = object({
+    prometheus             = string
+    azure_metrics_exporter = string
+    grafana                = string
+    init                   = string
+  })
+  default = {
+    # Prometheus v3.15.1, from Prometheus' own registry (no Docker Hub pull limits).
+    prometheus = "quay.io/prometheus/prometheus@sha256:fa3302279710be2f21a8301ec17a8b4f2301fd829bd113839b3b6b02b6f191a2"
+    # webdevops/azure-metrics-exporter 26.10.0 (MIT): Azure Monitor metrics for Prometheus.
+    azure_metrics_exporter = "quay.io/webdevops/azure-metrics-exporter@sha256:0f26a275e593538983a13c9ebb9d229e296524a3f292e684666667f24eae2b76"
+    # Grafana OSS 13.3.1 (a security release), from Docker Hub.
+    grafana = "docker.io/grafana/grafana@sha256:0615ec4fbd4072004b7d86b46ded63013a74b7d6eb1119273dd89e8fa25c13cf"
+    # Azure Linux 3.0.20261027 core, the base of the database bootstrap job's image: bash, openssl, gzip.
+    init = "mcr.microsoft.com/azurelinux/base/core@sha256:88fc2b4a425801b3b4d8fe5342e24fb6134669fb718ec970340bdd36dee50c35"
+  }
+}
+
+variable "prometheus_cpu" {
+  description = "vCPUs for Prometheus. Its Azure Monitor exporter takes another 0.25 vCPU and 0.5 GiB."
+  type        = number
+  default     = 0.25
+}
+
+variable "prometheus_memory" {
+  description = "Memory for Prometheus, twice prometheus_cpu in Gi."
+  type        = string
+  default     = "0.5Gi"
+}
+
+variable "prometheus_retention_time" {
+  description = "How long Prometheus keeps metrics, e.g. \"30d\"."
+  type        = string
+  default     = "30d"
+}
+
+variable "prometheus_retention_size" {
+  description = "Most space Prometheus' data may take on the 100 GiB share, e.g. \"20GB\"; the oldest data goes first."
+  type        = string
+  default     = "20GB"
+}
+
+variable "grafana_cpu" {
+  description = "vCPUs for Grafana."
+  type        = number
+  default     = 0.25
+}
+
+variable "grafana_memory" {
+  description = "Memory for Grafana, twice grafana_cpu in Gi."
+  type        = string
+  default     = "0.5Gi"
 }
 
 # ---------------------------------------------------------------------------------------------------------------------

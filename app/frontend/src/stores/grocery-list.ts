@@ -12,6 +12,8 @@ import type {
   GroceryItemDetails,
   GroceryListChange,
   GroceryListSettings,
+  GroceryRun,
+  GroceryRunAction,
 } from '@/types/grocery'
 import { pictureNameKey } from '@/utils/grocery-format'
 import { positionBetween, sortByPosition } from '@/utils/list-order'
@@ -45,6 +47,11 @@ export type NewItemDetails = Pick<GroceryItemDetails, 'name'> & Partial<GroceryI
  * **Pictures and settings.** An item's AI picture arrives as one more change to the item, after the server has drawn
  * it. The list's settings (pictures on or off) are shared by everyone and follow the same rule as items: the copy
  * with the highest version wins.
+ *
+ * **Grocery runs.** The run under way arrives with the list and then over the realtime connection, whenever its
+ * workflow moves it on. Like items, a run's copy with the highest `sequence` wins, and a run that started later
+ * replaces an earlier one. Starting a run and the banner's buttons are requests: their effect arrives as a realtime
+ * message a moment later, for everyone at once.
  */
 export const useGroceryListStore = defineStore('grocery-list', () => {
   const auth = useAuthStore()
@@ -68,8 +75,21 @@ export const useGroceryListStore = defineStore('grocery-list', () => {
   /** The list's settings, shared by everyone (`null` until the first load). */
   const settings = shallowRef<GroceryListSettings | null>(null)
 
+  /**
+   * The latest grocery run this phone knows of: under way, or just ended (so the page can say how it ended). `null`
+   * when there is none.
+   */
+  const run = shallowRef<GroceryRun | null>(null)
+
+  /** The lengths of last call a new run can have, in minutes, as the server offers them. */
+  const lastCallMinutes = ref<number[]>([])
+
+  /** The run this phone has just started, until the server's workflow announces it. */
+  const startingRunId = ref<string | null>(null)
+
   const removedIds = new Set<string>()
   const heldChanges: GroceryListChange[] = []
+  const heldRuns: GroceryRun[] = []
   let holdCount = 0
   let loadGeneration = 0
   let hub: GroceryListHub | null = null
@@ -125,6 +145,30 @@ export const useGroceryListStore = defineStore('grocery-list', () => {
     }
   }
 
+  /**
+   * Applies a grocery run from the server: a newer copy of the same run (higher sequence), or a run that started no
+   * earlier than the one shown. Safe to call with duplicate, stale or out-of-order runs.
+   */
+  function applyRun(next: GroceryRun): void {
+    if (holdCount > 0) {
+      heldRuns.push(next)
+      return
+    }
+
+    const current = run.value
+    const isNewer =
+      current === null ||
+      (next.id === current.id
+        ? next.sequence > current.sequence
+        : Date.parse(next.startedAt) >= Date.parse(current.startedAt))
+    if (isNewer) {
+      run.value = next
+    }
+    if (next.id === startingRunId.value) {
+      startingRunId.value = null
+    }
+  }
+
   // Whether a new or renamed item will wait for a picture. The server decides; guessing the same way here means the
   // picture's placeholder is there from the start instead of popping in a moment later.
   function picturesWillBeDrawn(): boolean {
@@ -147,6 +191,9 @@ export const useGroceryListStore = defineStore('grocery-list', () => {
     if (holdCount === 0) {
       for (const change of heldChanges.splice(0)) {
         applyChange(change)
+      }
+      for (const held of heldRuns.splice(0)) {
+        applyRun(held)
       }
     }
   }
@@ -208,6 +255,9 @@ export const useGroceryListStore = defineStore('grocery-list', () => {
       setItems(next)
       stores.value = list.stores
       applySettings(list.settings)
+      // The server's word on the run under way: messages about runs that came in meanwhile are applied afterwards.
+      run.value = list.run
+      lastCallMinutes.value = list.lastCallMinutes
       loadState.value = 'ready'
       loadError.value = null
     } catch (error: unknown) {
@@ -428,6 +478,62 @@ export const useGroceryListStore = defineStore('grocery-list', () => {
     }
   }
 
+  /**
+   * Starts a grocery run with the signed-in user as the shopper. The run appears once the server's workflow has
+   * opened last call, a moment later; until then {@link startingRunId} holds its ID.
+   *
+   * @throws {@link ApiError} when the server refuses (a run is already under way, runs are unavailable).
+   */
+  async function startRun(minutes: number): Promise<void> {
+    try {
+      startingRunId.value = await groceryApi.startGroceryRun(minutes)
+    } catch (error: unknown) {
+      throw recoverFromFailedRunRequest(error)
+    }
+  }
+
+  /**
+   * Sends one of the run's actions: "I'm good" (shown at once), or the shopper's start shopping now, call it off, or
+   * done shopping (shown when the server confirms, for everyone at once).
+   *
+   * @throws {@link ApiError} when the server refuses; "I'm good" is taken back.
+   */
+  async function sendRunAction(action: GroceryRunAction): Promise<void> {
+    const original = run.value
+    if (original === null) {
+      return
+    }
+
+    const me = auth.user?.id
+    if (action === 'ready') {
+      run.value = {
+        ...original,
+        participants: original.participants.map((participant) =>
+          participant.userId === me ? { ...participant, ready: true } : participant,
+        ),
+      }
+    }
+
+    try {
+      await groceryApi.sendGroceryRunAction(original.id, action)
+    } catch (error: unknown) {
+      if (run.value?.id === original.id && run.value.sequence === original.sequence) {
+        run.value = original
+      }
+      throw recoverFromFailedRunRequest(error)
+    }
+  }
+
+  // A refused run request usually means this phone's picture of the run is out of date (it has moved on, or ended):
+  // reload to catch up.
+  function recoverFromFailedRunRequest(error: unknown): ApiError {
+    const apiError = toApiError(error)
+    if (!endSessionIfUnauthorized(apiError) && apiError.status === 409) {
+      void load()
+    }
+    return apiError
+  }
+
   // While the realtime connection keeps failing, check in over HTTP now and then. Browsers don't reveal why a
   // WebSocket was refused, so this is how the app finds out that the real problem is a session the server no longer
   // accepts (a 401 signs the user out). It also keeps the list fresh on networks that block WebSockets.
@@ -446,6 +552,7 @@ export const useGroceryListStore = defineStore('grocery-list', () => {
     hub ??= createGroceryListHub({
       onChange: applyChange,
       onSettingsChange: applySettings,
+      onRunChange: applyRun,
       onStateChange: (state) => {
         connectionState.value = state
         pollWhileOffline(state)
@@ -486,8 +593,11 @@ export const useGroceryListStore = defineStore('grocery-list', () => {
         loadGeneration++
         setItems(new Map())
         settings.value = null
+        run.value = null
+        startingRunId.value = null
         removedIds.clear()
         heldChanges.length = 0
+        heldRuns.length = 0
         loadState.value = 'idle'
         loadError.value = null
       }
@@ -499,12 +609,16 @@ export const useGroceryListStore = defineStore('grocery-list', () => {
     stores,
     groups,
     settings,
+    run,
+    lastCallMinutes,
+    startingRunId,
     loadState,
     loadError,
     connectionState,
     load,
     applyChange,
     applySettings,
+    applyRun,
     holdChanges,
     releaseChanges,
     addItem,
@@ -512,6 +626,8 @@ export const useGroceryListStore = defineStore('grocery-list', () => {
     moveItem,
     removeItem,
     setImageGeneration,
+    startRun,
+    sendRunAction,
     connect,
     disconnect,
     reconnect,

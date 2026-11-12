@@ -17,9 +17,11 @@ interface Props {
   checkedIds: ReadonlySet<string>
   /** Some items have pictures: line every name up as if all had one. */
   pictureColumn?: boolean
+  /** It's a grocery run's last call: items can't be checked off or moved. */
+  locked?: boolean
 }
 
-const { groups, stores, checkedIds, pictureColumn = false } = defineProps<Props>()
+const { groups, stores, checkedIds, pictureColumn = false, locked = false } = defineProps<Props>()
 
 const emit = defineEmits<{
   check: [item: GroceryItem]
@@ -122,10 +124,11 @@ const movingTo = computed(() =>
           :dragging-index="dragging?.group === group.key ? dragging.index : null"
           :drop-index="dropTarget?.group === group.key ? dropTarget.index : null"
           :moving-to="dragging?.group === group.key ? movingTo : null"
+          :locked="locked"
           @check="emit('check', $event)"
           @edit="emit('edit', $event)"
           @move="(item, toIndex) => emit('move', item, group, group, toIndex)"
-          @drag-start="(event, index) => start(event, group.key, index)"
+          @drag-start="(event, index) => locked || start(event, group.key, index)"
         />
       </div>
     </section>

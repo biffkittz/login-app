@@ -10,8 +10,10 @@ namespace LoginApp.Api.Features.GroceryList.Contracts;
 /// it can't, <paramref name="ImageGenerationEnabled"/> is kept but has no effect.</param>
 /// <param name="CostEstimateAvailable">Whether the server can estimate the list's cost: it has a Gemini API key and
 /// estimates aren't turned off (<c>CostEstimates:MaxEstimatesPerDay</c> is above 0).</param>
+/// <param name="GroceryRunsAvailable">Whether the server can hold grocery runs: Temporal is configured.</param>
 public sealed record GroceryListSettingsResponse(
     int Version,
     bool ImageGenerationEnabled,
     bool ImageGenerationAvailable,
-    bool CostEstimateAvailable);
+    bool CostEstimateAvailable,
+    bool GroceryRunsAvailable);

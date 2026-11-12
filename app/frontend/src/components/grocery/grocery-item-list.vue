@@ -23,6 +23,8 @@ interface Props {
   dropIndex?: number | null
   /** The dragged row is over another store's section, with this heading; `null` otherwise. */
   movingTo?: string | null
+  /** It's a grocery run's last call: items can't be checked off or moved. */
+  locked?: boolean
 }
 
 const {
@@ -33,6 +35,7 @@ const {
   draggingIndex = null,
   dropIndex = null,
   movingTo = null,
+  locked = false,
 } = defineProps<Props>()
 
 const emit = defineEmits<{
@@ -60,7 +63,7 @@ function dropMarker(index: number): 'before' | 'after' | null {
 async function moveBy(index: number, delta: -1 | 1): Promise<void> {
   const item = items[index]
   const toIndex = index + delta
-  if (item === undefined || toIndex < 0 || toIndex >= items.length) {
+  if (locked || item === undefined || toIndex < 0 || toIndex >= items.length) {
     return
   }
 
@@ -90,6 +93,7 @@ async function moveBy(index: number, delta: -1 | 1): Promise<void> {
         :checked="checkedIds.has(item.id)"
         :move-hint-id="moveHintId"
         :picture-column="pictureColumn"
+        :locked="locked"
         @check="emit('check', item)"
         @edit="emit('edit', item)"
         @drag-start="emit('dragStart', $event, index)"

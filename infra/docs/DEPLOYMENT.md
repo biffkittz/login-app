@@ -11,6 +11,7 @@ it down. Commands run in WSL from `infra/` unless they say otherwise.
 - [Phase 4: deploy the app](#phase-4-deploy-the-app)
 - [Verify](#verify)
 - [Registration emails](#registration-emails)
+- [Observability](#observability)
 - [Day-2 operations](#day-2-operations)
 - [Teardown](#teardown)
 - [Troubleshooting](#troubleshooting)
@@ -53,6 +54,10 @@ export TF_VAR_tls_certificate_pfx_path=/home/biffkittz/login-app/infra/.secrets/
 read -rsp 'PFX password: ' TF_VAR_tls_certificate_pfx_password && export TF_VAR_tls_certificate_pfx_password && echo
 # Optional: AI pictures of items and cost estimates. Without it the app runs, and both say they aren't set up.
 read -rsp 'Gemini API key: ' TF_VAR_gemini_api_key && export TF_VAR_gemini_api_key && echo
+# With observability_enabled (see "Observability"): the GitHub OAuth App's client secret for Grafana.
+read -rsp 'Grafana GitHub client secret: ' TF_VAR_grafana_github_client_secret && export TF_VAR_grafana_github_client_secret && echo
+# With temporal_namespace (see "Grocery runs"): the Temporal Cloud API key.
+read -rsp 'Temporal Cloud API key: ' TF_VAR_temporal_api_key && export TF_VAR_temporal_api_key && echo
 ```
 
 Set `TF_VAR_gemini_api_key` in every terminal you apply from once you use it: an apply without it removes the key from
@@ -230,6 +235,138 @@ done
 The old token is deleted in the same apply, so an email sent between the apply and the restart fails and is logged
 (event 1106); registering itself is unaffected.
 
+## Observability
+
+Prometheus collects the app's metrics (which the app pushes every 15 seconds) and Azure's platform metrics, and
+Grafana shows them at https://grafana.biffkittz.com to the GitHub users you list. Design and trade-offs:
+[ARCHITECTURE.md](ARCHITECTURE.md#observability-prometheus-and-grafana). It is off until you turn it on, and adds about
+$63-77 a month ([cost](ARCHITECTURE.md#cost)).
+
+1. **Create a GitHub OAuth App** (GitHub, **Settings → Developer settings → OAuth Apps → New OAuth App**, under your
+   account or an organization):
+   - Application name: `Nibbles Grafana`; Homepage URL: `https://grafana.biffkittz.com`;
+   - Authorization callback URL: `https://grafana.biffkittz.com/login/github`.
+
+   Note the **Client ID** (an OAuth App's starts with `Ov23li`; `Iv...` is a GitHub App, which isn't what this
+   needs), then **Generate a new client secret** and copy it (GitHub shows it once).
+2. **Set the values.** In `environments/demo.tfvars`, set `grafana_github_client_id` to the client ID, list the GitHub
+   usernames who may sign in in `grafana_github_admins` (and `grafana_github_viewers`, for read-only users), and set
+   `observability_enabled = true`. The client secret never goes in the file:
+   `TF_VAR_grafana_github_client_secret` in your shell ([Prerequisites](#prerequisites)), and the
+   `GRAFANA_GITHUB_CLIENT_SECRET` secret in the `infra-pr` and `demo-plan` environments for CI
+   ([docs/CI_CD.md](../../docs/CI_CD.md)).
+3. **If CI applies:** re-run `infra/scripts/setup-github-oidc.sh` once first, so CI's deploy identity may assign
+   Monitoring Reader (the exporter's role).
+4. **Plan and apply.** It adds the storage account and NFS share, two identities, six Key Vault secrets, the Prometheus
+   and Grafana Container Apps, the `grafana` DNS record and its Origin Rule, the subnet's `Microsoft.Storage`
+   service endpoint, and the app's telemetry settings (a new revision of each instance).
+5. **Sign in** at https://grafana.biffkittz.com: Grafana sends you to GitHub, and back. The dashboards are in the
+   **Nibbles** folder: *Realtime (SignalR)*, *Service health* and *Azure infrastructure*. The app's metrics appear
+   within a minute; Azure's arrive a few minutes late, and the share's used capacity hourly.
+
+Check the parts from the command line:
+
+```bash
+curl -s https://grafana.biffkittz.com/api/health                 # {"database": "ok", ...}
+az containerapp logs show -n ca-loginapp-demo-prometheus -g "$RG" --container prometheus --tail 50
+az containerapp logs show -n ca-loginapp-demo-grafana -g "$RG" --container grafana --tail 50
+az containerapp logs show -n ca-loginapp-demo -g "$RG" --tail 200 | grep '"EventId":6000'
+# 6000: "Metrics are sent to ca-loginapp-demo-prometheus.internal... every 15 s as site app.biffkittz.com."
+```
+
+Prometheus has no public address. To look at it directly, use Grafana's **Explore** (the Prometheus data source).
+
+**Changing a dashboard.** Dashboards are code (`modules/observability/dashboards/*.json`) and can't be saved in
+Grafana's UI. Edit a copy there, **Export → Export as JSON**, replace the file, and apply; Grafana restarts with it.
+
+**Changing Prometheus' configuration** (`modules/observability/main.tf`) restarts Prometheus, with about a minute
+without new samples while the new replica waits for the old one's database lock. A mistake in the configuration
+stops Prometheus from starting: check its logs (above) after such an apply.
+
+**Updating the images.** Dependabot can't see the digests in `observability_images` (variables.tf). Now and then,
+look up the current releases and their digests and update the variable:
+
+```bash
+docker buildx imagetools inspect quay.io/prometheus/prometheus:v3.16.0 | head -3    # "Digest: sha256:..."
+docker buildx imagetools inspect docker.io/grafana/grafana:13.3.1 | head -3
+docker buildx imagetools inspect quay.io/webdevops/azure-metrics-exporter:26.10.0 | head -3
+docker buildx imagetools inspect mcr.microsoft.com/azurelinux/base/core:3.0.20261027 | head -3
+```
+
+Read the release notes first: Grafana's major versions change dashboards' schema, and Prometheus' change flags.
+Security releases (Grafana publishes them across its supported versions at once) are worth taking at once.
+
+**Starting Prometheus' history afresh** (say, after a corrupted database): stop it, then delete `prometheus/` on the
+share from a temporary container in the environment, as the share accepts NFS mounts from the Container Apps subnet
+only. Simpler: set `observability_enabled = false` and apply, which deletes the share (Grafana's users and settings
+too), then set it back to `true` and apply again.
+
+## Grocery runs (Temporal Cloud)
+
+Grocery runs ("speak now or forever hold your peace", [docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md#grocery-runs))
+are Temporal workflows. They run on Temporal Cloud, and each app runs its own Temporal worker in its own process, so
+there is nothing to add to Azure: Terraform only gives the apps the namespace and an API key. Until then the app
+offers no grocery runs, and says so in the start sheet.
+
+1. **Create the namespace and its key** in Temporal Cloud: a namespace with API key authentication, in AWS
+   `us-east-2` (the nearest to Central US), and a namespace-scoped service account with Write permission and an API
+   key ([AUTHENTICATION.md](AUTHENTICATION.md#temporal-cloud)). Both sites share it: each polls a task queue of its own
+   (`nibbles-main`, `nibbles-grocery`), and its runs have their own workflow ID.
+2. **Set the values.** In `environments/demo.tfvars`, set `temporal_namespace` to the namespace's full ID
+   (`<namespace>.<account>`). The key goes in `TF_VAR_temporal_api_key` ([Prerequisites](#prerequisites)) and, for CI,
+   in the `TEMPORAL_API_KEY` secret of the `infra-pr` and `demo-plan` environments.
+3. **Plan and apply.** It adds the Key Vault secret `Temporal--ApiKey` and the settings `Temporal__Address`,
+   `Temporal__Namespace`, `Temporal__TaskQueue` and `Temporal__ApiKey` to each app: a new revision of each. The image
+   must include grocery runs (this change or later), and its first start creates the runs' tables.
+4. **Check.** Each app logs that its worker is polling (event 7000), and the Temporal Cloud UI lists two pollers on each
+   task queue during the overlap of a deployment, one afterwards. Then try a run: start one on your phone, with the
+   list open on another device signed in as someone else.
+
+```bash
+for APP in ca-loginapp-demo ca-loginapp-demo-grocery; do
+  az containerapp logs show -n "$APP" -g "$RG" --tail 300 | grep -E '"EventId":(700[0-3]|504[0-7])'
+done
+# 7000: "Temporal worker polling task queue nibbles-main in namespace ... at ...". 7001: it failed and retries.
+```
+
+In Grafana, the *Service health* dashboard's **Grocery runs (Temporal)** row shows the worker's state per site, runs and
+how they ended, and the worker's calls, latencies and failures.
+
+**Temporal Cloud's cost** is your Temporal Cloud plan. A run takes roughly ten to twenty Actions: its start, and each
+of its signals, timers and activities.
+
+**Deploying a change to the workflow** (`GroceryRunWorkflow`): a new revision replays the runs in flight on the new code.
+A change that would make the workflow decide differently for them must be guarded with `Workflow.Patched` (the
+class's remarks say how); `GroceryRunReplayTests` fails in CI otherwise. Without such a change, or with no run in
+flight, there's nothing to do.
+
+### Rotating the API key
+
+A service account can hold several keys at once, so rotate before the old key expires (Temporal emails 30, 20 and 10
+days ahead), without stopping anything:
+
+1. Temporal Cloud: create a second API key for the same service account.
+2. Update `TF_VAR_temporal_api_key` (and `TEMPORAL_API_KEY` in CI), and apply: Key Vault gets the new key.
+3. Give the apps the new key now rather than at the next 30-minute sync, and restart their revisions; their workers
+   reconnect within seconds:
+
+   ```bash
+   IDENTITY="$(az identity show -n id-loginapp-demo-app -g "$RG" --query id -o tsv)"
+   VAULT="$(terraform output -raw key_vault_uri)"
+   for APP in ca-loginapp-demo ca-loginapp-demo-grocery; do
+     az containerapp secret set --name "$APP" --resource-group "$RG" --secrets \
+       "temporal-api-key=keyvaultref:${VAULT}secrets/Temporal--ApiKey,identityref:${IDENTITY}"
+     az containerapp revision restart --name "$APP" --resource-group "$RG" \
+       --revision "$(az containerapp show --name "$APP" --resource-group "$RG" --query properties.latestRevisionName -o tsv)"
+   done
+   ```
+
+4. Once both apps log event 7000 again, delete the old key in Temporal Cloud.
+
+To turn grocery runs off, remove `temporal_namespace` (and the key) and apply. Runs still in flight are abandoned: their
+workflows wait for a worker that never comes (cancel them in the Temporal UI), and the app ends them for the phones
+once their deadlines pass.
+
 ## Day-2 operations
 
 | Task | How |
@@ -360,6 +497,10 @@ Destroying takes about 15 to 20 minutes.
 | Symptom | Likely cause and fix |
 | --- | --- |
 | Plan fails: `tls_certificate_pfx_path doesn't point to a file` | Set `TF_VAR_tls_certificate_pfx_path` in this shell. `~` is expanded, but quotes around `~` prevent the shell's expansion |
+| Plan fails: `temporal_namespace and TF_VAR_temporal_api_key go together` | Set both (grocery runs on) or neither. In CI, the `TEMPORAL_API_KEY` secret is missing from the environment |
+| App log event 7001 (`The Temporal worker stopped`) with `Unauthenticated` or `PermissionDenied` | The API key is wrong, expired or deleted, or its service account lacks Write on the namespace, or the namespace doesn't accept API keys. Fix it in Temporal Cloud, then rotate the key in ([Rotating the API key](#rotating-the-api-key)). The list keeps working meanwhile |
+| Starting a grocery run says "Grocery runs aren't available right now" | The app can't reach Temporal Cloud: app log event 5046 has the reason, 7001 the worker's. Check the namespace's status page in Temporal Cloud |
+| A run was started but never appeared on the phones | No worker is polling the site's task queue (event 7001, or the Temporal UI shows no pollers): the run waits in Temporal and goes on when the worker is back |
 | Plan fails with a Cloudflare `401` / `Authentication error` | `CLOUDFLARE_API_TOKEN` is missing, expired or lacks DNS rights on `biffkittz.com` |
 | Apply fails on `cloudflare_zone_setting.authenticated_origin_pulls` with `403` | The token lacks **Zone Settings: Edit** ([AUTHENTICATION.md](AUTHENTICATION.md#cloudflare)) |
 | Apply fails on `cloudflare_ruleset.origin_port` with `403` | The token lacks **Origin Rules: Edit** ([AUTHENTICATION.md](AUTHENTICATION.md#cloudflare)) |
@@ -393,5 +534,14 @@ Destroying takes about 15 to 20 minutes.
 | No registration email arrives | Look in spam first. Then the app's log: 1101/1102 at start mean the emails are off (no recipients, or the email settings didn't arrive); 1106 gives Cloudflare's reason. `terraform output registration_notifications` should show the recipient as verified |
 | App log 1106: `Cloudflare answered 403 (10102 ...)` or `(10105 ...)` | The token can't send (10102: wrong permission; rotate it) or the account isn't entitled to send to that address (10105: confirm the recipient, or Workers Paid for other addresses) |
 | App log 1106: `Cloudflare answered 401` | The token was deleted or replaced: apply, then restart the revisions ([Rotating the email token](#rotating-the-email-token)) |
+| Grafana: GitHub says `The redirect_uri is not associated with this application` | The OAuth App's callback URL must be exactly `https://grafana.biffkittz.com/login/github` |
+| Grafana: back from GitHub, the sign-in is refused | Your GitHub username isn't in `grafana_github_admins` or `grafana_github_viewers`, spelled as GitHub spells it. Add it and apply |
+| Grafana: `Login failed: Failed to get token from provider`; its log says `incorrect_client_credentials` | The client secret in Key Vault isn't the OAuth App's (for example, still a previous app's). Set the OAuth App's secret in `TF_VAR_grafana_github_client_secret` and in CI's `GRAFANA_GITHUB_CLIENT_SECRET` (`infra-pr`, `demo-plan`), apply, then let Grafana re-read it: `az containerapp secret set -n ca-loginapp-demo-grafana -g "$RG" --secrets "github-client-secret=keyvaultref:<vault URI>secrets/grafana-github-client-secret,identityref:<id-loginapp-demo-grafana resource ID>"` and `az containerapp revision restart` (or wait up to 30 minutes) |
+| Grafana's log: `error getting user teams` | GitHub refused to list your teams: the client ID is a GitHub App's (`Iv...`) rather than an OAuth App's (`Ov23li...`). Create an OAuth App ([AUTHENTICATION.md](AUTHENTICATION.md#grafanas-github-sign-in)) and use its ID and secret |
+| Apply fails on `cloudflare_dns_record.*`: `DNS record comment exceeds the maximum length of 100 characters` (9313) | Cloudflare limits comments to 100 characters below Enterprise; shorten the record's `comment` (the tests check the ones in `main.tf`) |
+| Grafana's dashboards show **No data** for the app | The app isn't pushing: its log should show event 6000 at start. Prometheus' log shows refused pushes (`401`); after rotating Prometheus' passwords, restart the app's revisions so they re-read `Telemetry--OtlpPassword` |
+| Prometheus' log repeats `Waiting for the previous Prometheus replica to release /prometheus/lock` | An old revision still runs. It goes once the new one is ready (a minute); if not, deactivate it: `az containerapp revision list -n ca-loginapp-demo-prometheus -g "$RG" -o table`, then `az containerapp revision deactivate`. After ten minutes Prometheus starts anyway and refuses to run if the lock is really held. With `flock: Bad file descriptor` before each line, the start script is testing the lock with an exclusive lock, which can't work on NFS from busybox's read-only descriptor: it must use `flock -s` |
+| Prometheus or Grafana won't start: `mount.nfs: access denied by server` | The share admits only the Container Apps subnet: check its `Microsoft.Storage` service endpoint and the storage account's network rules, and that secure transfer is off (Terraform sets all three) |
+| The *Azure infrastructure* dashboard is empty | The exporter can't read Azure Monitor yet: its Monitoring Reader role takes a few minutes to take effect after the first apply. Its log (`--container azure-metrics-exporter`) shows `AuthorizationFailed` until then |
 | `Error acquiring the state lock` | Someone else is running Terraform, or a crashed run left the lock. Wait, or `terraform force-unlock <LOCK_ID>` once you're sure |
 | A plan right after an apply isn't empty | Something drifts. Note the attribute and fix it in code (for example a value Azure sets that the configuration should state explicitly). Please don't silence it with `ignore_changes` without a comment explaining why |

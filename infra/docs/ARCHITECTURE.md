@@ -12,6 +12,7 @@ see the app's [docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md).
 - [DNS and Cloudflare settings](#dns-and-cloudflare-settings)
 - [Terraform structure](#terraform-structure)
 - [Design decisions](#design-decisions)
+  - [Observability: Prometheus and Grafana](#observability-prometheus-and-grafana)
 - [Well-Architected Framework alignment](#well-architected-framework-alignment)
 - [Cost](#cost)
 - [Limitations and possible next steps](#limitations-and-possible-next-steps)
@@ -56,6 +57,20 @@ flowchart LR
   app -->|"HTTPS: registration email"| mail["Cloudflare Email Service<br/>notifications@biffkittz.com"]
   app2 -->|"HTTPS: registration email"| mail
   mail --> inbox([Recipients' inboxes])
+  app <-->|"gRPC + TLS :7233, API key<br/>task queue nibbles-main"| temporal["Temporal Cloud namespace<br/>(AWS us-east-2): grocery runs"]
+  app2 <-->|"task queue nibbles-grocery"| temporal
+```
+
+With `observability_enabled`, two more Container Apps run in the same environment ([Observability](#observability-prometheus-and-grafana)):
+
+```mermaid
+flowchart LR
+  you([GitHub user]) -->|HTTPS| cfg["Cloudflare (proxied)<br/>grafana.biffkittz.com"]
+  cfg -->|"TLS :8445 (Origin Rule)"| grafana["ca-loginapp-demo-grafana<br/>Grafana HTTPS :3000<br/>GitHub sign-in"]
+  app["App instances"] -->|"OTLP over HTTPS (internal)"| prom["ca-loginapp-demo-prometheus<br/>internal ingress :9090<br/>+ Azure Monitor exporter"]
+  grafana -->|"PromQL over HTTPS (internal)"| prom
+  prom -->|"Monitoring Reader"| monitor[Azure Monitor metrics]
+  prom & grafana --> nfs[("Premium NFS share<br/>prometheus/ and grafana/")]
 ```
 
 | Component | Resource | Purpose |
@@ -66,8 +81,9 @@ flowchart LR
 | Data | Azure Database for PostgreSQL flexible server (B1ms, PostgreSQL 18) + databases `loginapp` and `grocery` | Each instance's data, in a database of its own; private IP only |
 | Secrets | Key Vault (RBAC) | A connection string per instance; the JWT signing key, Gemini API key, database passwords and TLS certificate, shared by the instances |
 | Images | Azure Container Registry (Basic) | The app's images |
-| Observability | Log Analytics workspace | Container logs, Key Vault audit events |
+| Observability | Log Analytics workspace; with `observability_enabled`, Prometheus and Grafana as Container Apps and a Premium FileStorage account with an NFS share | Container logs and Key Vault audit events; the app's metrics (pushed over OTLP) and Azure's platform metrics, in dashboards at grafana.biffkittz.com |
 | Email | Cloudflare Email Service: `biffkittz.com` onboarded for Email Sending, the recipients as verified destination addresses, an account token for Email Sending | Emails `registration_notification_recipients` from notifications@biffkittz.com whenever someone registers on either instance |
+| Workflows | Temporal Cloud namespace (`temporal_namespace`, created by hand; outside Azure and Terraform) | Runs grocery runs. Each app instance runs its own Temporal worker in-process, on a task queue of its own (`nibbles-<instance>`), and connects out on port 7233 with an API key from Key Vault |
 
 ## Request path
 
@@ -130,8 +146,11 @@ Container App or job first needs them. A system-assigned identity only exists on
 | Principal | Role | Scope | Why |
 | --- | --- | --- | --- |
 | `id-loginapp-demo-app` (the app) | AcrPull | the registry | Pull the app image |
-| | Key Vault Secrets User | secrets `ConnectionStrings--DefaultConnection`, `grocery-db-connection-string`, `Jwt--SigningKey`, `ImageGeneration--ApiKey` (with a Gemini key), `Email--ApiToken` (with registration emails), and the certificate's secret | Its secrets and its TLS certificate, nothing else. Both instances run as this identity |
+| | Key Vault Secrets User | secrets `ConnectionStrings--DefaultConnection`, `grocery-db-connection-string`, `Jwt--SigningKey`, `ImageGeneration--ApiKey` (with a Gemini key), `Email--ApiToken` (with registration emails), `Telemetry--OtlpPassword` (with observability), `Temporal--ApiKey` (with grocery runs), and the certificate's secret | Its secrets and its TLS certificate, nothing else. Both instances run as this identity |
 | `id-loginapp-demo-dbinit` (bootstrap job) | Key Vault Secrets User | secrets `postgresql-admin-password` and `postgresql-app-password` | The only identity that can read the administrator password |
+| `id-loginapp-demo-prometheus` (with observability) | Monitoring Reader | the resource group | The Azure Monitor exporter reads platform metrics (replicas, restarts, CPU, memory, the database) |
+| | Key Vault Secrets User | secrets `prometheus-web-config`, `prometheus-self-scrape-password` | Its users' password hashes and its own scrape password |
+| `id-loginapp-demo-grafana` (with observability) | Key Vault Secrets User | secrets `grafana-github-client-secret`, `grafana-secret-key`, `prometheus-grafana-password`, and the certificate's secret | GitHub sign-in, its encryption key, its Prometheus user, and the TLS certificate it serves |
 | Whoever runs Terraform (`key_vault_administrator_object_id`), and `key_vault_additional_administrators` | Key Vault Secrets Officer, Key Vault Certificates Officer | the vault | Create, update and read back secrets and import the certificate; Terraform grants these itself |
 | GitHub Actions: `id-loginapp-github-plan`, `-deploy`, `-push` | see [AUTHENTICATION.md](AUTHENTICATION.md#cicd-with-openid-connect) | | Pull request plans, plans and applies on main, image pushes; signed in with OIDC, created outside Terraform ([docs/CI_CD.md](../../docs/CI_CD.md)) |
 
@@ -153,12 +172,19 @@ only after the wait.
 | `Email--ApiToken` | `cloudflare_account_token` (module `email-sending`); only with registration email recipients | app | Cloudflare account token limited to Email Sending (sending, and managing sending domains) |
 | `postgresql-admin-password` | `random_password` (32 characters) | bootstrap job | Server administrator password |
 | `postgresql-app-password` | `random_password` (40 alphanumerics) | bootstrap job | Password the job sets on `loginapp_app` |
-| certificate `app-biffkittz-com-origin` | imported from your PFX | app | Cloudflare origin certificate and private key |
+| certificate `app-biffkittz-com-origin` | imported from your PFX | app, Grafana | Cloudflare origin certificate and private key (a wildcard, so it serves grafana.biffkittz.com too) |
+| `Telemetry--OtlpPassword` | `random_password` (40 alphanumerics); with observability | app | The app's password at Prometheus (user `app`) for pushing metrics |
+| `prometheus-web-config` | Terraform (bcrypt hashes of the Prometheus users' passwords); with observability | Prometheus | Prometheus' `web.yml`: users `app`, `grafana` and `prometheus` |
+| `prometheus-self-scrape-password` | `random_password`; with observability | Prometheus | Password Prometheus reads its own metrics with |
+| `prometheus-grafana-password` | `random_password`; with observability | Grafana | Grafana's password at Prometheus (user `grafana`) |
+| `grafana-github-client-secret` | you (`TF_VAR_grafana_github_client_secret`); with observability | Grafana | Client secret of the GitHub OAuth App Grafana signs users in with |
+| `grafana-secret-key` | `random_password`; with observability | Grafana | Grafana's `secret_key`, which encrypts what it stores |
+| `Temporal--ApiKey` | you (`TF_VAR_temporal_api_key`); with `temporal_namespace` | app | API key of a namespace-scoped Temporal Cloud service account (Write), for grocery runs |
 
 - **How the app receives them.** The app gets its secrets as Container Apps Key Vault references, which the platform
   resolves with the app's identity and exposes as environment variables: `ConnectionStrings__DefaultConnection`,
-  `Jwt__SigningKey`, `OriginTls__CertificatePfxBase64`, `ImageGeneration__ApiKey` when there is a Gemini key, and
-  `Email__ApiToken` when registration emails are on. A Key Vault certificate is served through a secret of the
+  `Jwt__SigningKey`, `OriginTls__CertificatePfxBase64`, `ImageGeneration__ApiKey` when there is a Gemini key,
+  `Email__ApiToken` when registration emails are on, and `Temporal__ApiKey` with grocery runs. A Key Vault certificate is served through a secret of the
   same name, whose value is the PFX in Base64 without a password; the app loads it at startup and refuses to start
   if it can't (no private key, expired, unreadable).
 - **Rotation.** The references carry no version. A new secret or certificate version therefore reaches the app
@@ -177,6 +203,7 @@ only after the wait.
 | Zone | Type | Records | Purpose |
 | --- | --- | --- | --- |
 | `biffkittz.com` (Cloudflare) | public | `app` and `grocery` A → environment public IP, **proxied** | Public names of the app's two instances |
+| `biffkittz.com` (Cloudflare) | public | `grafana` A → environment public IP, **proxied** (with observability) | Grafana |
 | `biffkittz.com` (Cloudflare) | public | Created and locked by Cloudflare Email Service, not Terraform: `cf-bounce` MX ×3 and SPF TXT, `cf-bounce._domainkey` TXT (DKIM), `_dmarc` TXT | Sending from notifications@biffkittz.com: bounces return to Cloudflare, and receivers can check the mail is genuine |
 | `<server>.private.postgres.database.azure.com` | private, linked to the VNet | managed by the PostgreSQL service | Makes `<server>.postgres.database.azure.com` resolve to the server's private IP |
 
@@ -187,8 +214,8 @@ requirement off in both Cloudflare and the app.
 
 Terraform also owns the zone's **Origin Rules** ruleset (`cloudflare_ruleset.origin_port`), with a rule per instance:
 requests for `app.biffkittz.com` go to the origin on `app_exposed_port` (8443), and requests for
-`grocery.biffkittz.com` on 8444, instead of 443. Both names point at the same IP; the port is what reaches the right
-Container App. A zone has a single ruleset for this phase, so Origin Rules for other hostnames belong in that
+`grocery.biffkittz.com` on 8444, instead of 443 (and, with observability, `grafana.biffkittz.com` on 8445). The names
+point at the same IP; the port is what reaches the right Container App. A zone has a single ruleset for this phase, so Origin Rules for other hostnames belong in that
 resource too.
 
 The other zone-wide settings aren't managed here, because they would affect every other record in `biffkittz.com`.
@@ -229,6 +256,7 @@ flowchart TD
 | `database` | PostgreSQL flexible server (private access), private DNS zone and link, a database per instance, TLS enforcement |
 | `container-app` | External environment, a Container App with TCP ingress per instance, the bootstrap job and its script |
 | `email-sending` | Cloudflare only: the domain onboarded for Email Sending, the recipients as destination addresses, the app's account token for Email Sending (exists only with recipients) |
+| `observability` | The Premium FileStorage account and NFS share, the environment's storage definition, Prometheus with its Azure Monitor exporter, Grafana with its provisioning and dashboards (`dashboards/*.json`), the exporter's Monitoring Reader role (exists only with `observability_enabled`) |
 
 Module outputs that something must wait for are gated on that event with `depends_on`. Subnet IDs appear once their
 NSG is attached, and secret URIs once read access has propagated. Consumers therefore don't start too early, and no
@@ -468,6 +496,68 @@ registering never waits for it or fails because of it. The app side is described
   module takes Cloudflare's permission catalogue as an input. Its tests (`tests/email-sending.tftest.hcl`) choose from
   catalogues of their own, and the root tests replace the module's outputs to check how the token reaches the app.
 
+### Observability: Prometheus and Grafana
+
+With `observability_enabled`, module `observability` adds Prometheus and Grafana as Container Apps in the app's own
+environment (the requirement), with dashboards at https://grafana.biffkittz.com.
+
+**Metrics travel in two directions.** The app *pushes* its metrics to Prometheus' OTLP receiver
+(`/api/v1/otlp/v1/metrics`) every 15 seconds: its own instruments (SignalR connections and messages, list changes,
+pictures, cost estimates, registration emails, health checks; [docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md#metrics))
+and ASP.NET Core's and .NET's (HTTP, Kestrel, rate limits, Identity, EF Core, Npgsql, the runtime). Pushing needs no
+port beyond the app's one public port, and no public `/metrics` endpoint, which Cloudflare would otherwise serve to
+anyone. Prometheus *pulls* platform metrics from the Azure Monitor exporter beside it
+([webdevops/azure-metrics-exporter](https://github.com/webdevops/azure-metrics-exporter), MIT): replicas, restarts,
+CPU and memory of every Container App, the PostgreSQL server's CPU, memory, storage and connections, and the share's
+used capacity. The exporter signs in as Prometheus' identity, which may read metrics in the resource group and nothing
+else.
+
+**Prometheus is internal.** Its ingress is internal-only, so only the environment's own apps can reach it, over HTTPS
+with the platform's certificate. Every request also needs one of its three users (`web.yml`: `app` pushes, `grafana`
+queries, `prometheus` scrapes itself), whose passwords Terraform generates and keeps in Key Vault; Prometheus holds
+only their bcrypt hashes. Each instance's metrics carry a `site` label (its host name), and each replica sends its own
+series, so the two instances and a revision change never mix.
+
+**Storage: NFS, because Container Apps can't mount a disk.** Container Apps mounts Azure Files (SMB or NFS) and
+ephemeral replica storage, not Azure Disks. Prometheus supports only a POSIX file system for its database; SMB isn't
+one (Prometheus warns that such file systems can corrupt the database beyond repair), and ephemeral storage loses
+every restart's history. An NFS share on Premium FileStorage is the closest to a disk. It costs two things:
+
+- **No encryption in transit.** Container Apps can't encrypt NFS, and Azure refuses the mount while the account requires
+  secure transfer (the NFS-only switch isn't in the azurerm provider), so `https_traffic_only_enabled` is off. The
+  account accepts no keys at all and admits only the Container Apps subnet, through its `Microsoft.Storage` service
+  endpoint; the traffic stays on Azure's backbone.
+- **One writer.** A new revision starts before the old one stops, and two Prometheus processes on one database
+  corrupt it. Prometheus locks its data directory; its start script waits for the lock, and its probes watch the
+  exporter's port so the waiting replica counts as ready and the platform retires the old one, which releases the
+  lock. Expect a minute without new samples on every change to Prometheus. Grafana keeps its SQLite database on the
+  same share; with one replica, SQLite's own locking (which NFS honors) covers the overlap.
+
+**Configuration as code.** `prometheus.yml`, Grafana's data source and dashboard provider and the dashboards
+(`modules/observability/dashboards/*.json`) are rendered by Terraform and written to disk by an init container (Azure
+Linux, the bootstrap job's base image). Container Apps has no config maps, Azure's API can't write to an NFS share, and
+images of our own would need a build pipeline for each change. This way a change is a plan like any other, and
+redeploys only the app it affects. Grafana treats the dashboards as provisioned: they can't be changed or deleted in
+its UI.
+
+**Grafana: like the app instances, without the client certificate.** Grafana is a TCP app on port 8445, which
+Cloudflare's Origin Rule names, with the app's Cloudflare-only IP restrictions, and serves HTTPS itself with the same
+origin certificate (the init container turns the PFX into the PEM files Grafana reads). Grafana can't require
+Cloudflare's client certificate, so the IP restrictions are what keep direct connections out. They are undocumented
+for TCP ingress, and the transitional Container Apps ranges they allow (see `container_apps_transitional_ingress_cidrs`)
+may let any connection through until Microsoft's rollout ends. GitHub sign-in is then what protects Grafana: there is
+no login form, no basic authentication and no admin password, and only the GitHub users in `grafana_github_admins`
+and `grafana_github_viewers` get in (`role_attribute_strict` refuses everyone else). A TLS-terminating sidecar that
+checks the client certificate, or a Cloudflare Tunnel, would close the direct path.
+
+**Footprint.** Prometheus runs at 0.25 vCPU and 0.5 GiB with the exporter at the same, Grafana at 0.25 vCPU and
+0.5 GiB, one replica each. Prometheus keeps 30 days or 20 GB, whichever comes first, on the 100 GiB share (the smallest
+Premium share).
+
+**Images are pinned by digest**, from Prometheus' own registry (quay.io), Microsoft's (MCR) and Docker Hub (Grafana's
+official images; Docker Hub limits anonymous pulls, which matters only if Grafana restarts very often).
+Dependabot can't see digests in Terraform variables, so updates are manual (DEPLOYMENT.md).
+
 ### Smaller choices
 
 - **Workload profiles environment, Consumption profile.** This is the current environment type. It supports a /27
@@ -528,6 +618,19 @@ Approximate monthly cost of the demo, from the
 | Cloudflare Email Service | Free for verified destination addresses, which the recipients are, on every plan | $0 |
 | **Total** | | **≈ $65–115** with two instances (each further instance adds ≈ $10–34) |
 
+With `observability_enabled` (`centralus` list prices, 2026-11-10):
+
+| Resource | Rate | Per month |
+| --- | --- | --- |
+| Prometheus' Container App (Prometheus and the exporter, 0.5 vCPU and 1 GiB together, always busy: the app pushes every 15 seconds) | Active: $0.000024/vCPU-s, $0.000003/GiB-s | ≈ $39 |
+| Grafana's Container App (0.25 vCPU, 0.5 GiB, idle unless someone looks) | Idle: $0.000003/vCPU-s and /GiB-s | ≈ $6 (≈ $20 if always busy) |
+| Premium FileStorage, LRS, 100 GiB provisioned NFS share | $0.181/GB-month | ≈ $18 |
+| Azure Monitor metrics queries (the exporter) | First million API calls a month free; the exporter makes about 30,000 | $0 |
+| **Observability total** | | **≈ $63–77** |
+
+The init containers that prepare each start (0.25 vCPU, 0.5 GiB) run for seconds; if Container Apps bills their
+allocation for the replica's lifetime, add up to ≈ $20 each.
+
 AI pictures are billed by Google, not Azure: about $0.034 per picture with the default model
 (`gemini-3.1-flash-lite-image`, list price on 2026-11-09). A family adding a few dozen new item names a month spends
 around a dollar, since items with a name seen before reuse its picture. The app's daily limit (100 pictures) caps the
@@ -538,6 +641,9 @@ token: roughly $0.25 per million input tokens and $1.50 per million output token
 2026-11-10; check Google's pricing page). A family-sized list costs a fraction of a cent to price. The app allows 500
 estimates a day per instance, which caps a runaway at about a dollar a day for lists of a few dozen items, and about
 $13 a day if every estimate priced a full 500-item list.
+
+Grocery runs are billed by Temporal Cloud, under your Temporal Cloud plan: a run takes roughly ten to twenty Actions
+(its start, and each of its signals, timers and activities). Azure adds nothing for them; the worker runs in the apps.
 
 Registration emails are free while they go only to verified destination addresses. Emailing other addresses would
 need the Workers Paid plan ($5 a month with 3,000 emails, then $0.35 per 1,000; Cloudflare's pricing page on
@@ -556,9 +662,19 @@ When the demo isn't needed, `terraform destroy` removes everything; see [DEPLOYM
 - **Global Authenticated Origin Pulls proves "from Cloudflare", not "from this zone".** Zone-level Authenticated
   Origin Pulls with your own certificate closes that (see above).
 - **IP restrictions on TCP ingress are undocumented.** The client certificate is the control that is relied on.
+- **Grafana has no client-certificate check.** Its IP restrictions (with the transitional Container Apps ranges) may
+  let direct connections through, which then meet Grafana's GitHub sign-in; see
+  [Observability](#observability-prometheus-and-grafana). An Envoy sidecar checking Cloudflare's client certificate,
+  or a Cloudflare Tunnel (no public port at all), would close that path.
+- **The metrics share isn't encrypted in transit** (NFS in Container Apps), and Prometheus' database on NFS isn't a
+  configuration Prometheus supports, though Azure's NFS is POSIX-compliant. If the database is ever corrupted, stop
+  Prometheus, delete `prometheus/` on the share, and start it again: the history is lost, nothing else.
+- **No alerts yet.** Prometheus and Grafana record and show; nothing notifies anyone. Grafana alert rules with a
+  contact point (email or a chat webhook) are the next step.
 - **No egress filtering.** Outbound traffic uses the platform defaults; the app's only outbound calls go to the
-  Gemini API (`generativelanguage.googleapis.com`) for item pictures and cost estimates, and to Cloudflare's API
-  (`api.cloudflare.com`) for registration emails. For production, route egress through Azure Firewall with user-defined routes and allow
+  Gemini API (`generativelanguage.googleapis.com`) for item pictures and cost estimates, to Cloudflare's API
+  (`api.cloudflare.com`) for registration emails, and to Temporal Cloud (`<namespace>.<account>.tmprl.cloud:7233`)
+  for grocery runs. For production, route egress through Azure Firewall with user-defined routes and allow
   just those hosts. Workload profile environments support this, and a fixed egress IP would also let the email token
   be limited to it (`condition.request_ip`).
 - **Cloudflare Email Sending is in public beta** (since April 2026). Its API or limits may change before general

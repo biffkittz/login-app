@@ -171,3 +171,24 @@ mock_resource "azurerm_container_app_job" {
     id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-mock/providers/Microsoft.App/jobs/caj-mock"
   }
 }
+
+mock_resource "azurerm_storage_account" {
+  defaults = {
+    id                 = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-mock/providers/Microsoft.Storage/storageAccounts/stmock"
+    primary_file_host  = "stmock.file.core.windows.net"
+    primary_access_key = "bW9jay1rZXk="
+  }
+}
+
+mock_resource "azurerm_storage_share" {
+  defaults = {
+    id  = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-mock/providers/Microsoft.Storage/storageAccounts/stmock/fileServices/default/shares/observability"
+    url = "https://stmock.file.core.windows.net/observability"
+  }
+}
+
+mock_resource "azurerm_container_app_environment_storage" {
+  defaults = {
+    id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-mock/providers/Microsoft.App/managedEnvironments/cae-mock/storages/observability-nfs"
+  }
+}

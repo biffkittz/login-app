@@ -24,6 +24,7 @@ internal static class RegistrationNotificationServiceCollectionExtensions
         services.AddSingleton<RegistrationNotificationQueue>();
         services.AddSingleton<IRegistrationNotifier>(static serviceProvider => serviceProvider.GetRequiredService<RegistrationNotificationQueue>());
         services.AddSingleton<RegistrationNotificationBudget>();
+        services.AddSingleton<RegistrationNotificationMetrics>();
         services.AddHostedService<RegistrationNotificationWorker>();
         return services;
     }

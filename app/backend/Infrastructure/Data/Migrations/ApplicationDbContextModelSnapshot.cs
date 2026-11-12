@@ -136,6 +136,69 @@ namespace LoginApp.Api.Infrastructure.Data.Migrations
                     b.ToTable("GroceryItemImages");
                 });
 
+            modelBuilder.Entity("LoginApp.Api.Features.GroceryList.Runs.GroceryRun", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("EndedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset>("LastCallEndsAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("LastCallOutcome")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<int>("Sequence")
+                        .IsConcurrencyToken()
+                        .HasColumnType("integer");
+
+                    b.Property<string>("ShopperId")
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset?>("ShoppingStartedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset>("StartedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ShopperId");
+
+                    b.HasIndex("Status");
+
+                    b.ToTable("GroceryRuns");
+                });
+
+            modelBuilder.Entity("LoginApp.Api.Features.GroceryList.Runs.GroceryRunParticipant", b =>
+                {
+                    b.Property<Guid>("RunId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("UserId")
+                        .HasColumnType("text");
+
+                    b.Property<bool>("IsReady")
+                        .HasColumnType("boolean");
+
+                    b.HasKey("RunId", "UserId");
+
+                    b.HasIndex("UserId");
+
+                    b.ToTable("GroceryRunParticipants");
+                });
+
             modelBuilder.Entity("LoginApp.Api.Infrastructure.Data.ApplicationUser", b =>
                 {
                     b.Property<string>("Id")
@@ -288,6 +351,33 @@ namespace LoginApp.Api.Infrastructure.Data.Migrations
                     b.Navigation("LastModifiedBy");
                 });
 
+            modelBuilder.Entity("LoginApp.Api.Features.GroceryList.Runs.GroceryRun", b =>
+                {
+                    b.HasOne("LoginApp.Api.Infrastructure.Data.ApplicationUser", "Shopper")
+                        .WithMany()
+                        .HasForeignKey("ShopperId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.Navigation("Shopper");
+                });
+
+            modelBuilder.Entity("LoginApp.Api.Features.GroceryList.Runs.GroceryRunParticipant", b =>
+                {
+                    b.HasOne("LoginApp.Api.Features.GroceryList.Runs.GroceryRun", null)
+                        .WithMany("Participants")
+                        .HasForeignKey("RunId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("LoginApp.Api.Infrastructure.Data.ApplicationUser", "User")
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("User");
+                });
+
             modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityUserClaim<string>", b =>
                 {
                     b.HasOne("LoginApp.Api.Infrastructure.Data.ApplicationUser", null)
@@ -313,6 +403,11 @@ namespace LoginApp.Api.Infrastructure.Data.Migrations
                         .HasForeignKey("UserId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
+                });
+
+            modelBuilder.Entity("LoginApp.Api.Features.GroceryList.Runs.GroceryRun", b =>
+                {
+                    b.Navigation("Participants");
                 });
 #pragma warning restore 612, 618
         }

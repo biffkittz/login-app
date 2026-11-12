@@ -28,4 +28,10 @@ internal enum GroceryListWriteStatus
 
     /// <summary>The store isn't one of <see cref="GroceryListOptions.Stores"/>.</summary>
     UnknownStore,
+
+    /// <summary>
+    /// A grocery run's last call is on: items may be added and changed, but not removed or moved, until the shopping
+    /// begins.
+    /// </summary>
+    LockedForLastCall,
 }

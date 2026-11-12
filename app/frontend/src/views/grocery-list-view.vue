@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, shallowRef } from 'vue'
+import { computed, ref, shallowRef, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 
 import StarburstMark from '@/components/brand/starburst-mark.vue'
@@ -7,33 +7,57 @@ import AddItemForm from '@/components/grocery/add-item-form.vue'
 import ConnectionStatus from '@/components/grocery/connection-status.vue'
 import CostEstimateSheet from '@/components/grocery/cost-estimate-sheet.vue'
 import { GROCERY_CARD_CLASS } from '@/components/grocery/card'
+import GroceryRunBanner from '@/components/grocery/grocery-run-banner.vue'
 import GroceryStoreGroups from '@/components/grocery/grocery-store-groups.vue'
 import ItemEditor from '@/components/grocery/item-editor.vue'
 import ListSettings from '@/components/grocery/list-settings.vue'
+import StartRunSheet from '@/components/grocery/start-run-sheet.vue'
 import BaseButton from '@/components/ui/base-button.vue'
 import FormAlert from '@/components/ui/form-alert.vue'
 import ToastNotice from '@/components/ui/toast-notice.vue'
 import { useCostEstimate } from '@/composables/useCostEstimate'
 import { useEventListener } from '@/composables/useEventListener'
 import { useGroceryListLiveUpdates } from '@/composables/useGroceryListLiveUpdates'
+import { useGroceryRun } from '@/composables/useGroceryRun'
 import { useToast } from '@/composables/useToast'
 import { vFocusOnMount } from '@/directives/focus-on-mount'
 import { toApiError, type ApiError } from '@/services/api-error'
 import { useAuthStore } from '@/stores/auth'
 import { useGroceryListStore } from '@/stores/grocery-list'
-import type { GroceryItem, GroceryItemChanges, RemovedItem } from '@/types/grocery'
+import type {
+  GroceryItem,
+  GroceryItemChanges,
+  GroceryRun,
+  GroceryRunAction,
+  RemovedItem,
+} from '@/types/grocery'
 import { listIndexForGroupMove, listIndexForGroupTransfer } from '@/utils/list-order'
 import type { StoreGroup } from '@/utils/store-groups'
 
 // A checked-off item shows its check mark this long before it leaves the list: enough to see that the tap landed.
 const CHECK_OFF_DELAY_MS = 350
 
+// After the shopper's button is accepted, it keeps spinning until the run's change arrives, but no longer than this.
+const RUN_ACTION_SETTLE_MS = 10_000
+
 const auth = useAuthStore()
 const groceryList = useGroceryListStore()
-const { items, stores, groups, settings, loadState, loadError, connectionState } =
-  storeToRefs(groceryList)
+const {
+  items,
+  stores,
+  groups,
+  settings,
+  loadState,
+  loadError,
+  connectionState,
+  run: latestRun,
+  lastCallMinutes,
+  startingRunId,
+} = storeToRefs(groceryList)
 const toast = useToast()
 useGroceryListLiveUpdates()
+const groceryRun = useGroceryRun()
+const { run: activeRun, listLocked, isShopper, myParticipation, secondsLeft } = groceryRun
 
 const announcement = ref('')
 const checkedIds = shallowRef<ReadonlySet<string>>(new Set())
@@ -59,6 +83,13 @@ const pictureColumn = computed(() =>
 
 const settingsOpen = ref(false)
 const settingsError = ref<string | null>(null)
+
+const runsAvailable = computed(() => settings.value?.groceryRunsAvailable === true)
+const startSheetOpen = ref(false)
+const startPending = ref(false)
+const startError = ref<string | null>(null)
+const runBusy = ref<GroceryRunAction | null>(null)
+let runBusyTimer: ReturnType<typeof setTimeout> | undefined
 
 const costEstimate = useCostEstimate()
 const estimateOpen = ref(false)
@@ -223,6 +254,95 @@ function estimateCost(): void {
   }
 }
 
+function openStartSheet(): void {
+  startError.value = null
+  startSheetOpen.value = true
+}
+
+// The run appears a moment after the server accepts it, for everyone at once; the sheet closes as soon as it's
+// accepted, and the button says "Starting…" until then.
+async function startRun(minutes: number): Promise<void> {
+  startPending.value = true
+  startError.value = null
+  try {
+    await groceryList.startRun(minutes)
+    startSheetOpen.value = false
+  } catch (error: unknown) {
+    const apiError = toApiError(error)
+    if (!apiError.isUnauthorized) {
+      startError.value = apiError.message
+    }
+  } finally {
+    startPending.value = false
+  }
+}
+
+const RUN_ACTION_FAILURES: Record<GroceryRunAction, string> = {
+  ready: "Couldn't tell everyone you're good.",
+  'start-shopping': "Couldn't start the shopping.",
+  cancel: "Couldn't call the run off.",
+  finish: "Couldn't finish the run.",
+}
+
+// The shopper's buttons take effect when the run's change arrives, a moment after the server accepts them; until
+// then the button keeps its spinner.
+async function sendRunAction(action: GroceryRunAction): Promise<void> {
+  clearTimeout(runBusyTimer)
+  runBusy.value = action
+  try {
+    await groceryList.sendRunAction(action)
+    if (action === 'ready') {
+      runBusy.value = null
+    } else {
+      runBusyTimer = setTimeout(() => (runBusy.value = null), RUN_ACTION_SETTLE_MS)
+    }
+  } catch (error: unknown) {
+    runBusy.value = null
+    showError(error, RUN_ACTION_FAILURES[action])
+  }
+}
+
+function shopperName(run: GroceryRun): string {
+  return run.shopperId !== null && run.shopperId === auth.user?.id
+    ? 'You'
+    : (run.shopperName ?? 'Someone')
+}
+
+// The in-app notification: a run starting, the shopping beginning and the run ending are announced to everyone else
+// (the shopper did them), with a toast and for screen readers. Someone asked also gets a buzz, where phones allow it.
+watch(latestRun, (next, previous) => {
+  if (next !== null && previous?.sequence !== next.sequence) {
+    runBusy.value = null
+    clearTimeout(runBusyTimer)
+  }
+  if (next === null || next.shopperId === auth.user?.id) {
+    return
+  }
+
+  const name = shopperName(next)
+  const sameRun = previous?.id === next.id
+  let message: string | null = null
+  if (!sameRun && next.status === 'lastCall') {
+    message = `Last call: ${name} is going shopping. Add anything you need.`
+    if (next.participants.some((participant) => participant.userId === auth.user?.id)) {
+      navigator.vibrate?.([120, 80, 120])
+    }
+  } else if (sameRun && previous.status === 'lastCall' && next.status === 'shopping') {
+    message = `The list is final: ${name} is shopping.`
+  } else if (sameRun && previous.status !== next.status && next.status === 'finished') {
+    message = `${name} finished shopping.`
+  } else if (sameRun && previous.status !== next.status && next.status === 'cancelled') {
+    message = `${name} called the grocery run off.`
+  } else if (sameRun && previous.status !== next.status && next.status === 'expired') {
+    message = 'The grocery run has ended.'
+  }
+
+  if (message !== null) {
+    announce(message)
+    toast.show(message)
+  }
+})
+
 function openSettings(): void {
   settingsError.value = null
   settingsOpen.value = true
@@ -296,6 +416,16 @@ useEventListener(document, 'keydown', (event) => {
       </div>
     </div>
 
+    <GroceryRunBanner
+      v-if="activeRun"
+      :run="activeRun"
+      :is-shopper="isShopper"
+      :my-participation="myParticipation"
+      :seconds-left="secondsLeft"
+      :busy="runBusy"
+      @action="sendRunAction"
+    />
+
     <!-- Sticky, so adding is always one tap away however far down the list the user has scrolled. -->
     <div
       data-sticky-header
@@ -358,6 +488,7 @@ useEventListener(document, 'keydown', (event) => {
       :stores="stores"
       :checked-ids="checkedIds"
       :picture-column="pictureColumn"
+      :locked="listLocked"
       @check="checkOff"
       @edit="openEditor"
       @move="moveItem"
@@ -365,8 +496,22 @@ useEventListener(document, 'keydown', (event) => {
       @drag-end="groceryList.releaseChanges()"
     />
 
-    <div v-if="items.length > 0" class="mt-6 flex justify-center">
+    <div
+      v-if="loadState === 'ready' && (items.length > 0 || runsAvailable)"
+      class="mt-6 flex flex-wrap justify-center gap-3"
+    >
+      <!-- An empty list can start a run too: last call is when everyone adds what they need. -->
       <BaseButton
+        v-if="runsAvailable && activeRun === null"
+        variant="secondary"
+        aria-haspopup="dialog"
+        :loading="startingRunId !== null"
+        @click="openStartSheet"
+      >
+        {{ startingRunId !== null ? 'Starting…' : 'Start grocery run' }}
+      </BaseButton>
+      <BaseButton
+        v-if="items.length > 0"
         variant="secondary"
         aria-haspopup="dialog"
         :loading="costEstimate.loading.value"
@@ -388,6 +533,7 @@ useEventListener(document, 'keydown', (event) => {
       :current-user-id="auth.user?.id"
       :saving="saving"
       :error="saveError"
+      :locked="listLocked"
       @save="saveChanges"
       @remove="removeFromEditor"
       @move-by="moveFromEditor"
@@ -401,6 +547,15 @@ useEventListener(document, 'keydown', (event) => {
       :available="estimateAvailable"
       :order="displayOrder"
       @estimate="costEstimate.run()"
+    />
+
+    <StartRunSheet
+      v-model:open="startSheetOpen"
+      :lengths="lastCallMinutes"
+      :available="runsAvailable"
+      :starting="startPending"
+      :error="startError"
+      @start="startRun"
     />
 
     <ListSettings

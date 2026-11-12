@@ -24,6 +24,7 @@ namespace LoginApp.Api.Features.GroceryList.Images;
 /// <param name="scopeFactory">Creates a scope (and so a database context) per item.</param>
 /// <param name="signal">Wakes the worker.</param>
 /// <param name="budget">The daily limit.</param>
+/// <param name="metrics">Counts the pictures by outcome and times the drawing.</param>
 /// <param name="options">The image settings.</param>
 /// <param name="timeProvider">The clock, for delays and timing.</param>
 /// <param name="logger">The logger.</param>
@@ -31,6 +32,7 @@ internal sealed class GroceryImageWorker(
     IServiceScopeFactory scopeFactory,
     GroceryImageSignal signal,
     GroceryImageBudget budget,
+    GroceryImageMetrics metrics,
     IOptions<ImageGenerationOptions> options,
     TimeProvider timeProvider,
     ILogger<GroceryImageWorker> logger) : BackgroundService
@@ -131,6 +133,7 @@ internal sealed class GroceryImageWorker(
         else
         {
             GroceryImageLog.ImageReused(logger, item.ItemId);
+            metrics.PictureNotDrawn(GroceryImageMetrics.Reused);
         }
 
         await services.GetRequiredService<IGroceryListService>()
@@ -156,6 +159,7 @@ internal sealed class GroceryImageWorker(
         if (!budget.TryTake())
         {
             GroceryImageLog.DailyLimitReached(logger, item.ItemId, options.Value.MaxImagesPerDay);
+            metrics.PictureNotDrawn(GroceryImageMetrics.DailyLimit);
             return null;
         }
 
@@ -169,11 +173,13 @@ internal sealed class GroceryImageWorker(
         catch (Exception exception) when (IsExpectedFailure(exception) && !cancellationToken.IsCancellationRequested)
         {
             GroceryImageLog.ImageFailed(logger, item.ItemId, exception.Message);
+            metrics.PictureNotDrawn(GroceryImageMetrics.Failed);
             return null;
         }
         catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
         {
             GroceryImageLog.ImageFailedUnexpectedly(logger, item.ItemId, exception);
+            metrics.PictureNotDrawn(GroceryImageMetrics.Failed);
             return null;
         }
 
@@ -189,8 +195,9 @@ internal sealed class GroceryImageWorker(
 
         // The picture has been paid for: keep it even if the app is shutting down, so it isn't drawn again on restart.
         await dbContext.SaveChangesAsync(CancellationToken.None);
-        long elapsedMilliseconds = (long)timeProvider.GetElapsedTime(started).TotalMilliseconds;
-        GroceryImageLog.ImageDrawn(logger, item.ItemId, content.Length, elapsedMilliseconds);
+        TimeSpan elapsed = timeProvider.GetElapsedTime(started);
+        GroceryImageLog.ImageDrawn(logger, item.ItemId, content.Length, (long)elapsed.TotalMilliseconds);
+        metrics.PictureDrawn(elapsed);
         return image.Id;
     }
 
