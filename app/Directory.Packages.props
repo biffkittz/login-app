@@ -7,8 +7,8 @@
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
 
     <!-- ASP.NET Core and EF Core packages must stay on the same patch as the shared framework (10.0.x). -->
-    <AspNetCoreVersion>10.0.14</AspNetCoreVersion>
-    <EntityFrameworkCoreVersion>10.0.14</EntityFrameworkCoreVersion>
+    <AspNetCoreVersion>10.0.15</AspNetCoreVersion>
+    <EntityFrameworkCoreVersion>10.0.15</EntityFrameworkCoreVersion>
   </PropertyGroup>
 
   <ItemGroup Label="API">
@@ -33,8 +33,8 @@
       SkiaSharp brings its own native library: the Linux one comes from the NoDependencies package, which needs no
       fontconfig in the container, and Windows and macOS ones come with SkiaSharp itself for development machines.
     -->
-    <PackageVersion Include="SkiaSharp" Version="4.154.1" />
-    <PackageVersion Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="4.154.1" />
+    <PackageVersion Include="SkiaSharp" Version="4.155.0" />
+    <PackageVersion Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="4.155.0" />
     <!--
       Grocery runs are a Temporal workflow (Features/GroceryList/Runs) on Temporal Cloud. The SDK carries Temporal's
       Rust core as a native library (glibc and musl, x64 and arm64). DiagnosticSource bridges the SDK's metrics into
@@ -53,6 +53,6 @@
     <PackageVersion Include="Microsoft.Extensions.TimeProvider.Testing" Version="10.11.0" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.11.0" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="4.0.1" />
-    <PackageVersion Include="xunit.v3" Version="4.0.2" />
+    <PackageVersion Include="xunit.v3" Version="4.0.3" />
   </ItemGroup>
 </Project>
