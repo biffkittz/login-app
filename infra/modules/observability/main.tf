@@ -4,6 +4,7 @@
 #   Azure Monitor <--Monitoring Reader-- azure-metrics-exporter (sidecar) <--scrape-- Prometheus
 #   Temporal Cloud (metrics.temporal.io) <--scrape, Bearer API key (with temporal_cloud_metrics)-- Prometheus
 #   visitor --> Cloudflare (grafana.<zone>) --> TCP ingress (Cloudflare's ranges only) --> Grafana (TLS, GitHub login)
+#   Grafana (alert rules, alerting.tf) --SMTP on 465 (with grafana_alerting)--> Cloudflare Email Service --> recipients
 #
 # Both keep their data on one NFS share of a Premium FileStorage account: Container Apps can't mount Azure Disks, and
 # NFS is the POSIX file system among its options (Prometheus' database needs one). docs/ARCHITECTURE.md (infra) has
@@ -190,15 +191,15 @@ locals {
   ]
 
   # ---------------------------------------------------------------------------------------------------------------
-  # Grafana's provisioning: the Prometheus data source and the dashboards in ./dashboards, written to disk by the
-  # init container. Grafana treats them as code: they can't be changed or deleted in its UI.
+  # Grafana's provisioning: the Prometheus data source, the dashboards in ./dashboards and the alerting in alerting.tf,
+  # written to disk by the init container. Grafana treats them as code: they can't be changed or deleted in its UI.
   # ---------------------------------------------------------------------------------------------------------------
 
   grafana_datasources = yamlencode({
     apiVersion = 1
     datasources = [{
       name          = "Prometheus"
-      uid           = "prometheus"
+      uid           = local.grafana_prometheus_datasource_uid
       type          = "prometheus"
       access        = "proxy"
       url           = local.prometheus_url
@@ -221,9 +222,13 @@ locals {
 
   grafana_dashboards_dir = "/etc/grafana/provisioning/dashboards-json"
 
-  # Grafana folders, keyed by their UID, and the directory of ./dashboards each one shows. Every folder is a
-  # provider with a directory of its own under grafana_dashboards_dir: providers read their paths recursively, so a
-  # folder nested in another's directory would show up in both.
+  # Grafana folders, each with the directory of ./dashboards it shows. Every folder is a provider with a directory of its
+  # own under grafana_dashboards_dir: providers read their paths recursively, so a folder nested in another's directory
+  # would show up in both.
+  #
+  # Providers find their folder by title, as alert rules do (alerting.tf), not by UID: Grafana provisions alerting
+  # first, so on a new database a provider with a folderUid would make a second folder of the same title beside the
+  # one the rules created. Folders made by earlier releases keep their UIDs (nibbles, temporal-cloud).
   grafana_dashboard_folders = merge(
     { nibbles = { title = "Nibbles", source = "${path.module}/dashboards" } },
     local.temporal_cloud_enabled ? { temporal-cloud = { title = "Temporal Cloud", source = "${path.module}/dashboards/temporal-cloud" } } : {},
@@ -236,7 +241,6 @@ locals {
         name                  = folder
         orgId                 = 1
         folder                = settings.title
-        folderUid             = folder
         type                  = "file"
         disableDeletion       = true
         allowUiUpdates        = false
@@ -607,6 +611,17 @@ resource "azurerm_container_app" "grafana" {
     identity            = var.grafana_identity_id
   }
 
+  # Cloudflare's token for sending alert emails: Grafana's SMTP password.
+  dynamic "secret" {
+    for_each = local.grafana_alerting_enabled ? [var.grafana_alerting.smtp_password_secret_id] : []
+
+    content {
+      name                = "smtp-password"
+      key_vault_secret_id = secret.value
+      identity            = var.grafana_identity_id
+    }
+  }
+
   # Like the app: TCP ingress passes TLS through to Grafana, on a port of its own that Cloudflare's Origin Rule names.
   ingress {
     external_enabled = true
@@ -659,6 +674,10 @@ resource "azurerm_container_app" "grafana" {
         name  = "GRAFANA_DATA_DIR"
         value = local.grafana_data_dir
       }
+      env {
+        name  = "GRAFANA_ALERTING"
+        value = local.grafana_alerting_provisioning
+      }
 
       dynamic "env" {
         for_each = local.grafana_dashboards
@@ -690,7 +709,7 @@ resource "azurerm_container_app" "grafana" {
       memory = var.grafana_memory
 
       dynamic "env" {
-        for_each = local.grafana_environment
+        for_each = merge(local.grafana_environment, local.grafana_smtp_environment)
 
         content {
           name  = env.key
@@ -709,6 +728,14 @@ resource "azurerm_container_app" "grafana" {
       env {
         name        = "PROMETHEUS_PASSWORD"
         secret_name = "prometheus-password"
+      }
+      dynamic "env" {
+        for_each = local.grafana_alerting_enabled ? ["smtp-password"] : []
+
+        content {
+          name        = "GF_SMTP_PASSWORD"
+          secret_name = env.value
+        }
       }
 
       volume_mounts {

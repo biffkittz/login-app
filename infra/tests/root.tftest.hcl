@@ -438,8 +438,8 @@ run "registration_emails_reach_every_instance_through_key_vault" {
   override_module {
     target = module.email_sending
     outputs = {
-      api_token        = "mock-cloudflare-email-sending-token"
-      token_name       = "loginapp-demo app: send registration emails (managed by Terraform, project:loginapp)"
+      api_tokens       = { app = "mock-cloudflare-email-sending-token" }
+      token_names      = { app = "loginapp-demo app: send registration emails (managed by Terraform, project:loginapp)" }
       permission_group = "Email Sending Send"
       sending_domain   = "biffkittz.com"
       recipients       = { "owner@example.com" = "awaiting confirmation", "second@example.org" = "awaiting confirmation" }
@@ -473,6 +473,11 @@ run "registration_emails_reach_every_instance_through_key_vault" {
       local.app_instance_environment_variables["grocery"]["Jwt__Audience"] == "grocery.biffkittz.com"
     )
     error_message = "Each instance's emails must name its own site, and the grocery instance keeps its own audience."
+  }
+
+  assert {
+    condition     = local.email_sending_tokens == tomap({ app = "loginapp-demo app: send registration emails (managed by Terraform, project:loginapp)" })
+    error_message = "Registration emails alone need the app's token alone."
   }
 
   assert {
@@ -945,6 +950,169 @@ run "rejects_a_temporal_metrics_key_without_observability" {
   }
 
   expect_failures = [var.temporal_metrics_api_key]
+}
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Grafana's alert emails (Cloudflare Email Service's SMTP)
+# ---------------------------------------------------------------------------------------------------------------------
+
+run "grafana_alerts_are_off_without_recipients" {
+  command = plan
+
+  variables {
+    app_image_tag                = "1a2b3c4"
+    observability_enabled        = true
+    grafana_github_client_id     = "Ov23liAbCdEfGhIjKlMn"
+    grafana_github_client_secret = "0123456789abcdef0123456789abcdef01234567"
+    grafana_github_admins        = ["biffkittz"]
+  }
+
+  assert {
+    condition = (
+      !local.grafana_alerts_enabled &&
+      length(module.email_sending) == 0 &&
+      !contains(keys(module.key_vault.secret_ids), "grafana_smtp_password") &&
+      output.observability.alert_emails == null
+    )
+    error_message = "Without grafana_alert_recipients, Grafana must get no token and send nothing, and Cloudflare Email Service stays unconfigured."
+  }
+}
+
+# Registration emails and alerts together: one Cloudflare setup, a token for each sender, and every recipient of either
+# a destination address.
+run "grafana_alert_emails_go_through_a_token_of_their_own" {
+  command = apply
+
+  variables {
+    app_image_tag                        = "1a2b3c4"
+    observability_enabled                = true
+    grafana_github_client_id             = "Ov23liAbCdEfGhIjKlMn"
+    grafana_github_client_secret         = "0123456789abcdef0123456789abcdef01234567"
+    grafana_github_admins                = ["biffkittz"]
+    registration_notification_recipients = ["owner@example.com", "second@example.org"]
+    grafana_alert_recipients             = ["Owner@Example.com", "oncall@example.net"]
+  }
+
+  override_module {
+    target = module.email_sending
+    outputs = {
+      api_tokens = {
+        app     = "mock-cloudflare-email-sending-token"
+        grafana = "mock-cloudflare-grafana-email-token"
+      }
+      token_names = {
+        app     = "loginapp-demo app: send registration emails (managed by Terraform, project:loginapp)"
+        grafana = "loginapp-demo Grafana: send alert emails (managed by Terraform, project:loginapp)"
+      }
+      permission_group = "Email Sending Write"
+      sending_domain   = "biffkittz.com"
+      recipients = {
+        "owner@example.com"  = "verified"
+        "second@example.org" = "awaiting confirmation"
+        "oncall@example.net" = "awaiting confirmation"
+      }
+    }
+  }
+
+  assert {
+    condition = (
+      length(module.email_sending) == 1 &&
+      keys(local.email_sending_tokens) == tolist(["app", "grafana"]) &&
+      local.email_sending_tokens["grafana"] == "loginapp-demo Grafana: send alert emails (managed by Terraform, project:loginapp)" &&
+      local.email_sending_recipients == tolist(["owner@example.com", "second@example.org", "oncall@example.net"])
+    )
+    error_message = "Each sender must get a token of its own, and every recipient of either (in lower case, once) must become a destination address."
+  }
+
+  assert {
+    condition = (
+      contains(keys(module.key_vault.secret_ids), "grafana_smtp_password") &&
+      contains(keys(module.key_vault.secret_ids), "email_api_token") &&
+      !contains(keys(local.app_secrets["main"]), "grafana-smtp-password")
+    )
+    error_message = "Grafana's token must be kept in Key Vault apart from the app's, and never reach the app."
+  }
+
+  assert {
+    condition = (
+      output.observability.alert_emails.sender == "alerts@biffkittz.com" &&
+      output.observability.alert_emails.cloudflare_token == "loginapp-demo Grafana: send alert emails (managed by Terraform, project:loginapp)" &&
+      length(output.observability.alert_emails.rules) > 0
+    )
+    error_message = "The outputs must show where alerts come from, the token that sends them and the rules."
+  }
+
+  assert {
+    condition = (
+      output.observability.alert_emails.recipients == { "owner@example.com" = "verified", "oncall@example.net" = "awaiting confirmation" } &&
+      output.registration_notifications.recipients == { "owner@example.com" = "verified", "second@example.org" = "awaiting confirmation" }
+    )
+    error_message = "Each kind of email must list its own recipients, with whether they have confirmed their address."
+  }
+
+  assert {
+    condition     = strcontains(output.next_steps.confirm_recipients, "owner@example.com, second@example.org, oncall@example.net")
+    error_message = "The next steps must name everyone who gets either kind of email."
+  }
+}
+
+run "grafana_alerts_alone_set_up_email_without_the_apps_token" {
+  command = apply
+
+  variables {
+    app_image_tag                = "1a2b3c4"
+    observability_enabled        = true
+    grafana_github_client_id     = "Ov23liAbCdEfGhIjKlMn"
+    grafana_github_client_secret = "0123456789abcdef0123456789abcdef01234567"
+    grafana_github_admins        = ["biffkittz"]
+    grafana_alert_recipients     = ["owner@example.com"]
+  }
+
+  override_module {
+    target = module.email_sending
+    outputs = {
+      api_tokens       = { grafana = "mock-cloudflare-grafana-email-token" }
+      token_names      = { grafana = "loginapp-demo Grafana: send alert emails (managed by Terraform, project:loginapp)" }
+      permission_group = "Email Sending Write"
+      sending_domain   = "biffkittz.com"
+      recipients       = { "owner@example.com" = "awaiting confirmation" }
+    }
+  }
+
+  assert {
+    condition = (
+      length(module.email_sending) == 1 &&
+      keys(local.email_sending_tokens) == tolist(["grafana"]) &&
+      !contains(keys(module.key_vault.secret_ids), "email_api_token") &&
+      !contains(keys(local.app_secret_environment_variables), "Email__ApiToken") &&
+      output.registration_notifications == null
+    )
+    error_message = "Alerts alone must set up Cloudflare Email Service with Grafana's token only; the app sends no registration emails."
+  }
+}
+
+run "rejects_grafana_alert_recipients_without_observability" {
+  command = plan
+
+  variables {
+    grafana_alert_recipients = ["owner@example.com"]
+  }
+
+  expect_failures = [var.grafana_alert_recipients]
+}
+
+run "rejects_a_malformed_grafana_alert_recipient" {
+  command = plan
+
+  variables {
+    observability_enabled        = true
+    grafana_github_client_id     = "Ov23liAbCdEfGhIjKlMn"
+    grafana_github_client_secret = "0123456789abcdef0123456789abcdef01234567"
+    grafana_github_admins        = ["biffkittz"]
+    grafana_alert_recipients     = ["owner@example.com;evil@example.com"]
+  }
+
+  expect_failures = [var.grafana_alert_recipients]
 }
 
 run "rejects_observability_without_a_github_oauth_app" {

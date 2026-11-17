@@ -5,8 +5,9 @@
 #   - turns the Cloudflare origin certificate from Key Vault (a Base64 PFX without a password, the format the app
 #     loads too) into the PEM files Grafana serves HTTPS with, readable by Grafana's user only;
 #   - writes the provisioning Terraform passes in as environment variables: the Prometheus data source, the dashboard
-#     providers (one per folder) and each dashboard (GRAFANA_DASHBOARD_JSON_<FOLDER>__<NAME>, gzip-compressed and
-#     Base64-encoded), into the directory of its folder's provider;
+#     providers (one per folder), each dashboard (GRAFANA_DASHBOARD_JSON_<FOLDER>__<NAME>, gzip-compressed and
+#     Base64-encoded) into the directory of its folder's provider, and the alerting (rules, contact point, policy; or,
+#     with alerting off, what to remove);
 #   - gives Grafana's user (472, group root) its directory on the NFS share, whose root belongs to root.
 #
 # Mounts: the TLS volume at /tls, the provisioning volume at /provisioning, the whole share at /data.
@@ -15,7 +16,8 @@ set -euo pipefail
 readonly grafana_user=472
 readonly grafana_group=0
 
-: "${ORIGIN_CERTIFICATE_PFX_BASE64:?}" "${GRAFANA_DATASOURCES:?}" "${GRAFANA_DASHBOARD_PROVIDERS:?}" "${GRAFANA_DATA_DIR:?}"
+: "${ORIGIN_CERTIFICATE_PFX_BASE64:?}" "${GRAFANA_DATASOURCES:?}" "${GRAFANA_DASHBOARD_PROVIDERS:?}" "${GRAFANA_DATA_DIR:?}" \
+  "${GRAFANA_ALERTING:?}"
 
 umask 0077
 work="$(mktemp -d)"
@@ -47,6 +49,7 @@ install -d -o "$grafana_user" -g "$grafana_group" -m 0750 \
   /provisioning/plugins /provisioning/alerting
 printf '%s\n' "$GRAFANA_DATASOURCES" > /provisioning/datasources/prometheus.yaml
 printf '%s\n' "$GRAFANA_DASHBOARD_PROVIDERS" > /provisioning/dashboards/providers.yaml
+printf '%s\n' "$GRAFANA_ALERTING" > /provisioning/alerting/alerting.yaml
 
 dashboards=0
 for variable in $(compgen -e); do

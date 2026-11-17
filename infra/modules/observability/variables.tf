@@ -251,3 +251,30 @@ variable "temporal_cloud_metrics" {
   })
   default = null
 }
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Alerting
+# ---------------------------------------------------------------------------------------------------------------------
+
+variable "grafana_alerting" {
+  description = "Grafana's alert rules (alerting.tf) and where they are emailed: recipients, the sender_address (in a domain onboarded for Cloudflare Email Sending) and smtp_password_secret_id, the versionless Key Vault secret ID of a Cloudflare token that can send email, which Grafana's identity must be able to read. smtp_host and smtp_user default to Cloudflare Email Service's SMTP. Null (the default) leaves alerting off, and removes the rules, contact point and policy if they were provisioned before."
+  type = object({
+    recipients              = list(string)
+    sender_address          = string
+    sender_name             = optional(string, "Nibbles Grafana")
+    smtp_host               = optional(string, "smtp.mx.cloudflare.net:465")
+    smtp_user               = optional(string, "api_token")
+    smtp_password_secret_id = string
+  })
+  default = null
+
+  validation {
+    condition     = var.grafana_alerting == null || try(length(var.grafana_alerting.recipients) > 0 && alltrue([for address in var.grafana_alerting.recipients : !strcontains(address, ";")]), false)
+    error_message = "grafana_alerting.recipients must name at least one address, none containing \";\" (Grafana's separator)."
+  }
+
+  validation {
+    condition     = var.grafana_alerting == null || try(can(regex("^[^\\s]+:[0-9]+$", var.grafana_alerting.smtp_host)), false)
+    error_message = "grafana_alerting.smtp_host must be a host and port, such as smtp.mx.cloudflare.net:465."
+  }
+}

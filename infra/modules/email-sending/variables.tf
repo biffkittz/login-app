@@ -28,9 +28,14 @@ variable "recipients" {
   }
 }
 
-variable "token_name" {
-  description = "Name of the app's API token, as the Cloudflare dashboard lists it."
-  type        = string
+variable "tokens" {
+  description = "The API tokens to create, keyed by the sender that uses each (such as app or grafana), with the name the Cloudflare dashboard lists it under. Each can send email (through the REST API or SMTP) and nothing else."
+  type        = map(string)
+
+  validation {
+    condition     = length(var.tokens) > 0 && alltrue([for name in values(var.tokens) : trimspace(name) != ""])
+    error_message = "tokens must name at least one token, each with a name."
+  }
 }
 
 variable "permission_groups" {

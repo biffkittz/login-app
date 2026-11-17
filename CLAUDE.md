@@ -48,8 +48,9 @@ independent instance of the same image runs at https://grocery.biffkittz.com, wi
   endpoint, and the app's one port stays Cloudflare's. Prometheus has internal ingress only; Grafana is public at
   grafana.biffkittz.com (Cloudflare, TCP ingress on 8445) with GitHub sign-in only, for usernames listed in Terraform.
 - Metric labels carry fixed values only: never a user, item name, email address or other personal data.
-- The dashboards (`infra/modules/observability/dashboards/*.json`) query the metric names in docs/ARCHITECTURE.md
-  ("Metrics"): rename an instrument and its queries together.
+- The dashboards (`infra/modules/observability/dashboards/*.json`) and the alert rules
+  (`infra/modules/observability/alerting.tf`) query the metric names in docs/ARCHITECTURE.md ("Metrics"): rename an
+  instrument and its queries together.
 - Prometheus and Grafana keep their data on an NFS share (Container Apps can't mount disks); exactly one Prometheus
   writes it. Images are pinned by digest; Dependabot can't update them.
 - With `temporal_metrics_api_key` (a Metrics Read-Only service account's key, not the app's), Prometheus scrapes
@@ -57,6 +58,11 @@ independent instance of the same image runs at https://grocery.biffkittz.com, wi
   Temporal allows 180 scrapes an hour per account, and the dashboard's queries count each minute's sample once.
   `dashboards/temporal-cloud/temporal-overview.json` is vendored from grafana/jsonnet-libs (Apache-2.0) with a few
   edits listed in the module README; repeat them when updating it.
+- With `grafana_alert_recipients`, Grafana emails alerts from alerts@biffkittz.com through Cloudflare Email Service's
+  SMTP, with a Cloudflare token of its own (module `email-sending`, one token per sender). Cloudflare only sends from
+  biffkittz.com. The rules are provisioned (UI-read-only); to remove one, move its UID to
+  `grafana_retired_alert_rule_uids`, since Grafana keeps a rule that merely leaves the file. Every rule's `for` stays at
+  5 minutes or more, so a Prometheus restart doesn't email.
 
 ## Grocery runs (Temporal; `app/backend/Features/GroceryList/Runs`, `app/backend/Infrastructure/Temporal`)
 

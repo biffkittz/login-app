@@ -1,12 +1,12 @@
-output "api_token" {
-  description = "The app's token for sending email: Authorization: Bearer <token> on Cloudflare's email sending API."
-  value       = cloudflare_account_token.this.value
+output "api_tokens" {
+  description = "Each sender's token, by the keys of tokens: Authorization: Bearer <token> on Cloudflare's email sending API, or the password of SMTP user api_token at smtp.mx.cloudflare.net:465."
+  value       = { for key, token in cloudflare_account_token.this : key => token.value }
   sensitive   = true
 }
 
-output "token_name" {
-  description = "Name of the app's API token, as the Cloudflare dashboard lists it."
-  value       = cloudflare_account_token.this.name
+output "token_names" {
+  description = "Each sender's token name, as the Cloudflare dashboard lists it, by the keys of tokens."
+  value       = { for key, token in cloudflare_account_token.this : key => token.name }
 }
 
 output "permission_group" {

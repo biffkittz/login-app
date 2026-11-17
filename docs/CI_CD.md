@@ -195,7 +195,8 @@ Cloudflare dashboard: **My Profile → API Tokens → Create Token → Custom to
 | `loginapp CI plan (read-only)` | Zone · Zone · Read; Account · Account API Tokens · Read | zone `biffkittz.com`; the account that owns it | `infra-pr` |
 
 The read-only token only needs to read what the configuration looks up (the zone, and the token permission catalogue
-for registration emails), because pull request plans don't refresh. Give both an expiry date and put a reminder in
+for registration and alert emails), because pull request plans don't refresh. Grafana's alert emails need nothing more
+in CI: Terraform creates their token with the deploy token's Account API Tokens permission. Give both an expiry date and put a reminder in
 your calendar. GitHub's runners have no fixed IP addresses, so IP filtering isn't possible.
 
 ### 4. Configure the repository's Actions settings

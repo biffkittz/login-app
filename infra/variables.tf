@@ -618,6 +618,44 @@ variable "grafana_github_viewers" {
   }
 }
 
+variable "grafana_alert_recipients" {
+  description = "Email addresses Grafana sends its alerts to (rules in modules/observability/alerting.tf). Grafana sends them through Cloudflare Email Service's SMTP from grafana_alert_sender_username@dns_zone_name, with a Cloudflare token of its own; each address becomes a verified destination address, like registration_notification_recipients (Cloudflare emails it a confirmation link once). Empty (the default) turns alerting off. Needs observability_enabled."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition = alltrue([
+      for address in var.grafana_alert_recipients :
+      can(regex("^[^@\\s\"<>,;]+@[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)+$", address)) && length(address) <= 254
+    ])
+    error_message = "Each of grafana_alert_recipients must be a plain email address (name@example.com), at most 254 characters."
+  }
+
+  validation {
+    condition = (
+      length(var.grafana_alert_recipients) <= 50 &&
+      length(distinct([for address in var.grafana_alert_recipients : lower(address)])) == length(var.grafana_alert_recipients)
+    )
+    error_message = "grafana_alert_recipients must not repeat an address, and holds at most 50: Cloudflare's limit for one email."
+  }
+
+  validation {
+    condition     = length(var.grafana_alert_recipients) == 0 || var.observability_enabled
+    error_message = "grafana_alert_recipients needs observability_enabled: Grafana is what sends the alerts."
+  }
+}
+
+variable "grafana_alert_sender_username" {
+  description = "The part before the @ of the address Grafana sends its alerts from, in dns_zone_name: \"alerts\" sends from alerts@biffkittz.com. Nobody reads replies: Cloudflare Email Service only sends from it. Cloudflare can't send from an address outside the domain (such as a Gmail address)."
+  type        = string
+  default     = "alerts"
+
+  validation {
+    condition     = can(regex("^[a-z0-9]([a-z0-9._-]{0,62}[a-z0-9])?$", var.grafana_alert_sender_username)) && !strcontains(var.grafana_alert_sender_username, "..")
+    error_message = "grafana_alert_sender_username must be 1-64 lowercase letters, digits, dots, hyphens or underscores, start and end with a letter or digit, and have no two dots in a row."
+  }
+}
+
 variable "temporal_metrics_api_key" {
   description = "API key of a Temporal Cloud service account with the account role Metrics Read-Only. With it, Prometheus scrapes Temporal Cloud's metrics endpoint (metrics.temporal.io) for every namespace in the account, and Grafana shows them in its Temporal Cloud folder. Not temporal_api_key: the app's key is namespace-scoped and can't read metrics, and this one can't touch workflows. Null leaves Temporal Cloud unmonitored. Needs observability_enabled. Pass it as TF_VAR_temporal_metrics_api_key (the TEMPORAL_METRICS_API_KEY secret in CI); never put it in a tfvars file."
   type        = string

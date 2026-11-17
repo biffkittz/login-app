@@ -503,7 +503,10 @@ signing in with HTTP Basic authentication (`Telemetry:OtlpUsername`, `Telemetry:
 letting Prometheus scrape a `/metrics` endpoint, needs no second port and no public endpoint: the app's only port faces
 Cloudflare, which would serve `/metrics` to anyone. Every metric carries `site` (`Telemetry:Site`, the instance's host
 name), and each process is its own `instance` (the replica's host name), so instances and overlapping revisions never
-mix. Prometheus, Grafana and the dashboards are infrastructure: [infra/docs/ARCHITECTURE.md](../infra/docs/ARCHITECTURE.md#observability-prometheus-and-grafana).
+mix. Prometheus, Grafana, the dashboards and the alert rules are infrastructure: [infra/docs/ARCHITECTURE.md](../infra/docs/ARCHITECTURE.md#observability-prometheus-and-grafana).
+The dashboards (`infra/modules/observability/dashboards`) and the alerts (`infra/modules/observability/alerting.tf`)
+query the names below, `nibbles_health_status` and the HTTP, Kestrel and Temporal ones among them: renaming an
+instrument means updating its queries in both.
 
 The app's own meter, `Nibbles` (`Infrastructure/Telemetry/ApplicationMeter.cs`), has these instruments, shown here as
 Prometheus stores them:

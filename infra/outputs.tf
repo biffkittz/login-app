@@ -93,15 +93,18 @@ output "virtual_network_name" {
 output "registration_notifications" {
   description = "Who gets an email when someone registers, and the address it comes from, or null while registration_notification_recipients is empty. Each recipient shows \"verified\" once its owner has followed the link in Cloudflare's confirmation email (as of the last plan or apply; terraform apply -refresh-only updates it)."
   value = local.registration_notifications_enabled ? {
-    sender           = local.notification_sender_address
-    recipients       = module.email_sending[0].recipients
-    cloudflare_token = module.email_sending[0].token_name
+    sender = local.notification_sender_address
+    recipients = {
+      for address, status in module.email_sending[0].recipients : address => status
+      if contains(local.registration_notification_recipients, address)
+    }
+    cloudflare_token = module.email_sending[0].token_names["app"]
     permission       = module.email_sending[0].permission_group
   } : null
 }
 
 output "observability" {
-  description = "Grafana's URL and the GitHub OAuth App's callback URL, Prometheus' internal URL, and the Container Apps and storage account behind them, or null while observability_enabled is false."
+  description = "Grafana's URL and the GitHub OAuth App's callback URL, Prometheus' internal URL, the Container Apps and storage account behind them, and who gets Grafana's alert emails (null while grafana_alert_recipients is empty; \"verified\" as for registration_notifications), or null while observability_enabled is false."
   value = local.observability_enabled ? {
     grafana_url          = module.observability[0].grafana_url
     github_callback_url  = module.observability[0].github_callback_url
@@ -109,6 +112,15 @@ output "observability" {
     prometheus_url       = module.observability[0].prometheus_url
     prometheus_app_name  = module.observability[0].prometheus_app_name
     storage_account_name = module.observability[0].storage_account_name
+    alert_emails = local.grafana_alerts_enabled ? {
+      sender = local.grafana_alert_sender_address
+      recipients = {
+        for address, status in module.email_sending[0].recipients : address => status
+        if contains(local.grafana_alert_recipients, address)
+      }
+      cloudflare_token = module.email_sending[0].token_names["grafana"]
+      rules            = module.observability[0].grafana_alert_rules
+    } : null
   } : null
 }
 
@@ -120,8 +132,8 @@ output "next_steps" {
       bootstrap_db = "az containerapp job start --name ${module.container_apps.db_bootstrap_job_name} --resource-group ${azurerm_resource_group.this.name}"
       deploy_app   = "Set app_image_tag = \"<tag>\" in infra/environments/${var.environment}.tfvars, then terraform plan and apply."
     },
-    local.registration_notifications_enabled ? {
-      confirm_recipients = "Each of ${join(", ", local.registration_notification_recipients)} gets an email from Cloudflare asking to verify the address: follow its link once. terraform output registration_notifications shows who has."
+    local.email_sending_enabled ? {
+      confirm_recipients = "Each of ${join(", ", local.email_sending_recipients)} gets an email from Cloudflare asking to verify the address: follow its link once. terraform output registration_notifications (and observability, for alert emails) shows who has."
     } : {},
     local.observability_enabled ? {
       open_grafana = "Open https://${var.grafana_hostname} and sign in with GitHub as one of ${join(", ", var.grafana_github_admins)}. The dashboards are in the Nibbles folder."

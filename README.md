@@ -35,6 +35,7 @@ flowchart LR
   app -->|"HTTPS: new registrations"| mail[Cloudflare Email Service<br/>notifications@biffkittz.com]
   app -->|"OTLP: metrics"| prom[Prometheus<br/>internal only]
   grafana[Grafana<br/>grafana.biffkittz.com] -->|PromQL| prom
+  grafana -->|"SMTP: alert emails<br/>from alerts@biffkittz.com"| mail
   prom -->|"HTTPS: scrape (Metrics Read-Only key)"| tcm[Temporal Cloud<br/>metrics endpoint]
   app <-->|"gRPC + TLS: grocery runs<br/>(IDs and times only)"| temporal[Temporal Cloud<br/>workflows]
 ```
@@ -156,6 +157,9 @@ login-app/
     platform metrics (replicas, restarts, CPU, memory, PostgreSQL) and, optionally, Temporal Cloud's metrics for every
     namespace in the account. Grafana dashboards at grafana.biffkittz.com, behind
     GitHub sign-in for the people listed in Terraform ([infra/docs/DEPLOYMENT.md](infra/docs/DEPLOYMENT.md#observability)).
+  - Alert emails from Grafana (through Cloudflare Email Service) when a site is down, unhealthy or refusing Cloudflare,
+    errors or latency climb, the database or a container runs short, a metric source fails, or grocery runs (Temporal)
+    go wrong ([infra/docs/ARCHITECTURE.md](infra/docs/ARCHITECTURE.md#alerts)).
   - Structured JSON logs that never contain item contents, emails or tokens.
   - EF Core migrations applied at startup.
   - Validated configuration that fails fast.

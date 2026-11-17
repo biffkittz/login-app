@@ -16,6 +16,10 @@ Prometheus and Grafana as Container Apps in the app's own environment, with thei
   own, Cloudflare-only IP restrictions, and TLS in the container with the same origin certificate. GitHub is the only
   way in, for the users in `grafana_github_admins` and `grafana_github_viewers`. Its data source and the dashboards
   in `dashboards/` are provisioned and read-only in the UI.
+- **Alerting** (with `grafana_alerting`): the rules in `alerting.tf`, an email contact point and the notification
+  policy, provisioned like the dashboards. Grafana sends through SMTP, by default Cloudflare Email Service's
+  (`smtp.mx.cloudflare.net:465`, TLS from the start, user `api_token`), with the password, a Cloudflare token, from
+  Key Vault.
 - **Storage**: a Premium FileStorage account with one NFS share, which admits only the Container Apps subnet.
   Prometheus keeps its database in `prometheus/`, Grafana its SQLite database in `grafana/`.
 
@@ -37,7 +41,18 @@ apply.
 **Nibbles**, and `dashboards/temporal-cloud/*.json` is **Temporal Cloud** (only with `temporal_cloud_metrics`). Each
 dashboard travels as `GRAFANA_DASHBOARD_JSON_<FOLDER>__<NAME>`, and the init container writes it to
 `dashboards-json/<folder>/<name>.json`. The providers' directories are siblings because Grafana reads a provider's
-path recursively: a folder nested in another's directory would show in both.
+path recursively: a folder nested in another's directory would show in both. Providers find their folder by title,
+not UID: Grafana provisions alerting first, and its rules (which name folders by title) would otherwise create a
+folder of the same title before the provider made its own.
+
+**Alert rules.** `local.grafana_alert_groups` in `alerting.tf` lists them by group and folder, each as PromQL plus a
+condition on its value, a pending period, a severity and the email's summary and description; the Temporal Cloud
+group exists only with `temporal_cloud_metrics`. They travel as one file (`GRAFANA_ALERTING`), which the init container
+writes to `provisioning/alerting/`. Grafana keeps a provisioned rule that leaves the file, so the file also asks it to
+delete the rules of groups that are off and those in `grafana_retired_alert_rule_uids` (move a rule's UID there to
+remove it); with `grafana_alerting` null it deletes every rule, the contact point and the policy. Keep each `for` at 5
+minutes or more, and `$` out of titles, labels and folder names (Grafana expands it there). To try a change locally,
+`promtool test rules` with synthetic series catches most mistakes before Grafana sees them.
 
 **The Temporal overview dashboard** (`dashboards/temporal-cloud/temporal-overview.json`) is Grafana Labs'
 [temporal-mixin](https://github.com/grafana/jsonnet-libs/tree/master/temporal-mixin) dashboard (Apache License 2.0,
@@ -99,6 +114,7 @@ updating it (`tests/modules.tftest.hcl` checks the first two):
 | <a name="input_storage_account_name"></a> [storage\_account\_name](#input\_storage\_account\_name) | Globally unique name of the Premium FileStorage account that holds the NFS share: 3-24 lowercase letters and digits. | `string` | n/a | yes |
 | <a name="input_subscription_id"></a> [subscription\_id](#input\_subscription\_id) | Subscription of the monitored resources, which the Azure Monitor exporter queries. | `string` | n/a | yes |
 | <a name="input_tags"></a> [tags](#input\_tags) | Tags applied to every taggable resource in this module. | `map(string)` | n/a | yes |
+| <a name="input_grafana_alerting"></a> [grafana\_alerting](#input\_grafana\_alerting) | Grafana's alert rules (alerting.tf) and where they are emailed: recipients, the sender\_address (in a domain onboarded for Cloudflare Email Sending) and smtp\_password\_secret\_id, the versionless Key Vault secret ID of a Cloudflare token that can send email, which Grafana's identity must be able to read. smtp\_host and smtp\_user default to Cloudflare Email Service's SMTP. Null (the default) leaves alerting off, and removes the rules, contact point and policy if they were provisioned before. | <pre>object({<br/>    recipients              = list(string)<br/>    sender_address          = string<br/>    sender_name             = optional(string, "Nibbles Grafana")<br/>    smtp_host               = optional(string, "smtp.mx.cloudflare.net:465")<br/>    smtp_user               = optional(string, "api_token")<br/>    smtp_password_secret_id = string<br/>  })</pre> | `null` | no |
 | <a name="input_grafana_cpu"></a> [grafana\_cpu](#input\_grafana\_cpu) | vCPUs for Grafana. | `number` | `0.25` | no |
 | <a name="input_grafana_github_viewers"></a> [grafana\_github\_viewers](#input\_grafana\_github\_viewers) | GitHub usernames that may view dashboards (but not change anything). | `list(string)` | `[]` | no |
 | <a name="input_grafana_ingress_allowed_cidrs"></a> [grafana\_ingress\_allowed\_cidrs](#input\_grafana\_ingress\_allowed\_cidrs) | IP restrictions for Grafana's ingress, keyed by rule name (Cloudflare's ranges). Grafana can't check Cloudflare's client certificate, so these are what keep direct connections out. | `map(string)` | `{}` | no |
@@ -116,6 +132,7 @@ updating it (`tests/modules.tftest.hcl` checks the first two):
 | Name | Description |
 | ---- | ----------- |
 | <a name="output_github_callback_url"></a> [github\_callback\_url](#output\_github\_callback\_url) | Authorization callback URL to register in the GitHub OAuth App. |
+| <a name="output_grafana_alert_rules"></a> [grafana\_alert\_rules](#output\_grafana\_alert\_rules) | The alert rules Grafana evaluates, as "<folder> / <group>: <title>"; empty while grafana\_alerting is null. |
 | <a name="output_grafana_app_id"></a> [grafana\_app\_id](#output\_grafana\_app\_id) | Resource ID of Grafana's Container App. |
 | <a name="output_grafana_app_name"></a> [grafana\_app\_name](#output\_grafana\_app\_name) | Name of Grafana's Container App. |
 | <a name="output_grafana_url"></a> [grafana\_url](#output\_grafana\_url) | Grafana's public URL. |

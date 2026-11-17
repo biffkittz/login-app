@@ -66,6 +66,11 @@ observability_enabled    = true
 grafana_github_client_id = "Ov23lijK4onubMdrjg93"
 grafana_github_admins    = ["biffkittz"]
 
+# Grafana emails its alerts (rules in infra/modules/observability/alerting.tf) to this address from alerts@biffkittz.com,
+# through Cloudflare Email Service with a token of Grafana's own. Cloudflare can only send from biffkittz.com. The
+# address is already a confirmed destination (registration emails); a new one gets Cloudflare's confirmation link.
+grafana_alert_recipients = ["benjamin.e.burner@gmail.com"]
+
 # Grocery runs (infra/docs/DEPLOYMENT.md, "Grocery runs (Temporal Cloud)"): last call before a trip to the store, run as a
 # Temporal workflow. First create a Temporal Cloud namespace with API key authentication (AWS us-east-2 is the nearest
 # region) and a namespace-scoped service account with Write and an API key. Put the namespace's full ID below (it

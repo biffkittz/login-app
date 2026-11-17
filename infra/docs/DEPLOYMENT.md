@@ -24,7 +24,7 @@ release is just phase 2 plus phase 4.
 
 | Phase | You run | Creates | Time |
 | --- | --- | --- | --- |
-| 1. Platform | `terraform apply` (no `app_image_tag`) | Everything except the Container Apps: network, NSGs, Log Analytics, identities, registry, Key Vault + secrets + certificate, PostgreSQL + a database per instance, Container Apps environment (public IP), bootstrap job, Cloudflare records, Origin Rules and Authenticated Origin Pulls; with `registration_notification_recipients`, Cloudflare Email Service for registration emails | 15–25 min |
+| 1. Platform | `terraform apply` (no `app_image_tag`) | Everything except the Container Apps: network, NSGs, Log Analytics, identities, registry, Key Vault + secrets + certificate, PostgreSQL + a database per instance, Container Apps environment (public IP), bootstrap job, Cloudflare records, Origin Rules and Authenticated Origin Pulls; with `registration_notification_recipients` or `grafana_alert_recipients`, Cloudflare Email Service for registration emails and alerts | 15–25 min |
 | 2. Image | `az acr build` | `login-app:<tag>` in the registry | 5–10 min |
 | 3. Database role | `az containerapp job start` | Role `loginapp_app` with its password from Key Vault, allowed into every instance's database | 1–2 min |
 | 4. App | `terraform apply` with `app_image_tag` | A Container App per instance (`app` and `grocery`); each migrates its own schema on first start | 3–5 min |
@@ -222,7 +222,7 @@ list turns the emails off and removes the Cloudflare setup, including the DNS re
 ### Rotating the email token
 
 ```bash
-terraform apply -var-file=environments/demo.tfvars -replace='module.email_sending[0].cloudflare_account_token.this'
+terraform apply -var-file=environments/demo.tfvars -replace='module.email_sending[0].cloudflare_account_token.this["app"]'
 # Re-read the secret now instead of waiting for the 30-minute sync, then restart each instance's revision.
 IDENTITY="$(az identity show -n id-loginapp-demo-app -g "$RG" --query id -o tsv)"
 VAULT="$(terraform output -raw key_vault_uri)"
@@ -346,6 +346,45 @@ Once `up{job="temporal-cloud"}` is 1 again, delete the old key in Temporal Cloud
 **Turning it off:** unset `TF_VAR_temporal_metrics_api_key` (and delete the CI secret) and apply. The collected series
 stay in Prometheus until they age out.
 
+### Alert emails
+
+Grafana checks the alert rules in `modules/observability/alerting.tf` every minute and emails
+`grafana_alert_recipients` from alerts@biffkittz.com when one starts firing, every 12 hours while it keeps firing, and
+when it resolves. What they watch, and why these: [ARCHITECTURE.md](ARCHITECTURE.md#alerts). It goes through
+Cloudflare Email Service's SMTP with a token of Grafana's own, so it needs no mailbox; Cloudflare only sends from
+biffkittz.com, so the sender can't be a Gmail address (`grafana_alert_sender_username` picks the name before the @).
+
+1. **Set the recipients** in `environments/demo.tfvars`: `grafana_alert_recipients` (observability must be on).
+2. **Plan and apply.** It adds Grafana's Cloudflare token (Key Vault `grafana-smtp-password`, readable by Grafana's
+   identity only; the Cloudflare dashboard lists it as "loginapp-demo Grafana: send alert emails"), a destination address
+   for each new recipient, and a new revision of Grafana with the rules. CI needs nothing new: Terraform creates the
+   token, with the Account API Tokens permission the deploying token already has.
+3. **Confirm new recipients**, as for [registration emails](#registration-emails): an address that already gets them
+   is confirmed already. `terraform output observability` shows each under `alert_emails`.
+4. **Try it.** In Grafana, **Alerting → Contact points**, then **Test** on *Email*: a test alert arrives within a
+   minute (the first may land in spam). **Alerting → Alert rules** lists the rules and their state. A target Prometheus
+   already fails to scrape fires *Prometheus can't collect metrics* about 10 minutes after the apply.
+
+**Quieting an alert** (planned work, a known problem): **Alerting → Silences**. Silences aren't provisioned, so Grafana's
+UI can make them, unlike the rules. **Changing the rules**: edit `alerting.tf` and apply. To remove one, move its UID to
+`grafana_retired_alert_rule_uids` there: Grafana keeps a provisioned rule that merely disappears from the file.
+
+**Rotating Grafana's token:**
+
+```bash
+terraform apply -var-file=environments/demo.tfvars -replace='module.email_sending[0].cloudflare_account_token.this["grafana"]'
+# Re-read the secret now instead of waiting for the 30-minute sync, then restart Grafana's revision.
+IDENTITY="$(az identity show -n id-loginapp-demo-grafana -g "$RG" --query id -o tsv)"
+VAULT="$(terraform output -raw key_vault_uri)"
+az containerapp secret set --name ca-loginapp-demo-grafana --resource-group "$RG" --secrets \
+  "smtp-password=keyvaultref:${VAULT}secrets/grafana-smtp-password,identityref:${IDENTITY}"
+az containerapp revision restart --name ca-loginapp-demo-grafana --resource-group "$RG" \
+  --revision "$(az containerapp show --name ca-loginapp-demo-grafana --resource-group "$RG" --query properties.latestRevisionName -o tsv)"
+```
+
+**Turning alerts off:** an empty `grafana_alert_recipients`, then apply. Grafana removes the rules, the contact point
+and the policy, and Grafana's token is deleted; Cloudflare Email Service stays while registration emails use it.
+
 ## Grocery runs (Temporal Cloud)
 
 Grocery runs ("speak now or forever hold your peace", [docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md#grocery-runs))
@@ -427,6 +466,7 @@ once their deadlines pass.
 | **Add another instance of the app** | See [Adding an instance](#adding-an-instance) |
 | **Change who gets registration emails** | Edit `registration_notification_recipients` and apply; new addresses confirm Cloudflare's link ([Registration emails](#registration-emails)) |
 | **Rotate the email token** | See [Rotating the email token](#rotating-the-email-token) |
+| **Change who gets alerts, or the alert rules** | Edit `grafana_alert_recipients` (`environments/demo.tfvars`) or `modules/observability/alerting.tf` and apply ([Alert emails](#alert-emails)) |
 | **Scale** | Up only: `app_cpu` / `app_memory`. `app_max_replicas` must stay 1 (validated): the realtime hub broadcasts in-process, without a backplane, so a second replica's users would miss each other's changes |
 | **Detect drift** | `terraform plan -detailed-exitcode` (exit code 2 = changes). Fix by re-applying, or by moving the change into code |
 | **Upgrade Terraform or providers** | See [DEVELOPMENT.md](DEVELOPMENT.md#8-upgrading-terraform-and-providers) |
@@ -572,7 +612,7 @@ Destroying takes about 15 to 20 minutes.
 | Plan wants to destroy the Container Apps | `app_image_tag` was removed from `environments/demo.tfvars` |
 | Plan wants to destroy and re-create `ca-loginapp-demo` or the `app` DNS record | The `moved` blocks were removed from `main.tf` before this state was applied with them. Put them back |
 | Plan fails: "The Cloudflare account offers none of the permission groups in preferred_permission_groups" | The account has no Email Sending yet, or Cloudflare names the permission differently. The message lists the email sending groups it found; put the right one in `cloudflare_email_sending_permission_groups` |
-| Plan or apply fails on `data.cloudflare_account_api_token_permission_groups_list` or `module.email_sending[0].cloudflare_account_token.this` with `403` / `Authentication error` | The deploying token lacks **Account API Tokens: Edit** ([AUTHENTICATION.md](AUTHENTICATION.md#cloudflare)) |
+| Plan or apply fails on `data.cloudflare_account_api_token_permission_groups_list` or `module.email_sending[0].cloudflare_account_token.this[...]` with `403` / `Authentication error` | The deploying token lacks **Account API Tokens: Edit** ([AUTHENTICATION.md](AUTHENTICATION.md#cloudflare)) |
 | Apply fails on `module.email_sending[0].cloudflare_email_sending_subdomain.this` with `401 Unauthorized` and code 2036 | The deploying token lacks the **Account** permission **Email Sending: Edit** (Read isn't enough, and there's no Zone one; [AUTHENTICATION.md](AUTHENTICATION.md#cloudflare)). Add it and apply again. Resources that don't wait for the domain, the apps included, may already be applied: until it is onboarded, registering works but each email fails (log 1106) |
 | Apply fails on `module.email_sending[0].cloudflare_email_sending_subdomain.this` with `403`, or still fails with the permission in place | The account may not be entitled to Email Sending (a public beta). Open **Compute → Email Service → Email Sending** in the dashboard to see whether it's available; a Workers Paid plan may be needed |
 | Apply fails on `module.email_sending[0].cloudflare_email_routing_address.recipients[...]`: the address already exists | It is already a destination address of the account (added by hand). Import it: `terraform import -var-file=environments/demo.tfvars 'module.email_sending[0].cloudflare_email_routing_address.recipients["<address>"]' '<account id>/<destination address id>'` |
@@ -588,6 +628,8 @@ Destroying takes about 15 to 20 minutes.
 | Plan fails: `TF_VAR_temporal_metrics_api_key needs observability_enabled` | The metrics key is set (in CI, the `TEMPORAL_METRICS_API_KEY` secret) while observability is off. Turn observability on, or unset the key |
 | `up{job="temporal-cloud"}` is 0, or the *Temporal overview* dashboard stays empty | Temporal Cloud refused the scrape. Prometheus doesn't log why; Grafana shows it, to a signed-in admin, at `https://grafana.biffkittz.com/api/datasources/proxy/uid/prometheus/api/v1/targets?scrapePool=temporal-cloud` (`lastError`). **401**: Temporal doesn't know the key (mistyped, expired or deleted). **403**: it does, but the key's service account lacks the account role Metrics Read-Only, typically a key made on the grocery runs' namespace-scoped service account; create a new service account ([Temporal Cloud metrics](#temporal-cloud-metrics)). To see which service account the deployed key belongs to without showing it: `az keyvault secret show --vault-name <vault> -n temporal-metrics-api-key --query value -o tsv \| cut -d. -f2 \| base64 -d 2>/dev/null` (the `sub` claim; compare with `Temporal--ApiKey`'s). Fix it, then rotate. **429**: something else scrapes the same account too: Temporal allows 180 requests an hour per account, and Prometheus alone takes 120 |
 | The *Temporal overview* dashboard is empty, `up{job="temporal-cloud"}` is 1 | Wait: each minute arrives three minutes late. Then check the dashboard's namespace and region pickers at the top. A namespace with no workflow activity has few series |
+| No alert email arrives | Look in spam first, and at **Alerting → Alert rules** in Grafana: a rule must be *Firing*, not *Pending*. Then Grafana's log: `az containerapp logs show -n ca-loginapp-demo-grafana -g "$RG" --tail 300 \| grep -iE 'smtp\|email'`. Cloudflare's answer is in it: `535 5.7.8` the token was refused (deleted or replaced: rotate it, [Alert emails](#alert-emails)); `550 5.7.1` the sender's domain isn't onboarded for Email Sending; `554` Cloudflare's content policy. `terraform output observability` should show the recipient as verified |
+| An alert email named *DatasourceError* | Grafana couldn't query Prometheus for 5 minutes, so it can't tell whether anything else is wrong: Prometheus is down, restarting, or its new revision is waiting for the old one's lock (row below). It resolves itself once Prometheus answers |
 | Prometheus' log repeats `Waiting for the previous Prometheus replica to release /prometheus/lock` | An old revision still runs. It goes once the new one is ready (a minute); if not, deactivate it: `az containerapp revision list -n ca-loginapp-demo-prometheus -g "$RG" -o table`, then `az containerapp revision deactivate`. After ten minutes Prometheus starts anyway and refuses to run if the lock is really held. With `flock: Bad file descriptor` before each line, the start script is testing the lock with an exclusive lock, which can't work on NFS from busybox's read-only descriptor: it must use `flock -s` |
 | Prometheus or Grafana won't start: `mount.nfs: access denied by server` | The share admits only the Container Apps subnet: check its `Microsoft.Storage` service endpoint and the storage account's network rules, and that secure transfer is off (Terraform sets all three) |
 | The *Azure infrastructure* dashboard is empty | The exporter can't read Azure Monitor yet: its Monitoring Reader role takes a few minutes to take effect after the first apply. Its log (`--container azure-metrics-exporter`) shows `AuthorizationFailed` until then |
