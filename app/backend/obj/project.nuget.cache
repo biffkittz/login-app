@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "dgSpecHash": "UicSwvtiq7o=",
+  "dgSpecHash": "B9QsUC/TTrQ=",
   "success": true,
   "projectFilePath": "/home/biffkittz/login-app/app/backend/LoginApp.Api.csproj",
   "expectedPackageFiles": [
@@ -65,8 +65,7 @@
     "/home/biffkittz/.nuget/packages/system.memory.data/10.0.9/system.memory.data.10.0.9.nupkg.sha512",
     "/home/biffkittz/.nuget/packages/system.security.cryptography.protecteddata/4.5.0/system.security.cryptography.protecteddata.4.5.0.nupkg.sha512",
     "/home/biffkittz/.nuget/packages/temporalio/1.21.1/temporalio.1.21.1.nupkg.sha512",
-    "/home/biffkittz/.nuget/packages/temporalio.extensions.diagnosticsource/1.21.1/temporalio.extensions.diagnosticsource.1.21.1.nupkg.sha512",
-    "/home/biffkittz/.nuget/packages/microsoft.netcore.app.host.linux-x64/10.0.15/microsoft.netcore.app.host.linux-x64.10.0.15.nupkg.sha512"
+    "/home/biffkittz/.nuget/packages/temporalio.extensions.diagnosticsource/1.21.1/temporalio.extensions.diagnosticsource.1.21.1.nupkg.sha512"
   ],
   "logs": []
 }

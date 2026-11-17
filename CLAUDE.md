@@ -8,7 +8,8 @@ independent instance of the same image runs at https://grocery.biffkittz.com, wi
 
 - `app/`: ASP.NET Core 10 API + Vue 3 SPA in one container. See `app/CLAUDE.md`.
 - `infra/`: Terraform for Azure and Cloudflare. See `infra/CLAUDE.md`.
-- `docs/`: app docs (DEVELOPMENT, BUILD_AND_DEPLOY, ARCHITECTURE). `infra/docs/` has the infrastructure docs.
+- `docs/`: app docs (DEVELOPMENT, BUILD_AND_DEPLOY, ARCHITECTURE, DATABASE, TEMPORAL, TEMPORAL_WORKER).
+  `infra/docs/` has the infrastructure docs. A schema change (new migration) updates `docs/DATABASE.md` too.
 
 ## Ground rules
 

@@ -73,7 +73,9 @@ cd app/frontend && npm run dev                                   # SPA on http:/
 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Setting up WSL, VS Code, extensions and tooling; running, debugging and testing locally; conventions; troubleshooting |
 | [docs/BUILD_AND_DEPLOY.md](docs/BUILD_AND_DEPLOY.md) | `buildAndRunSite.sh`, the container image, and deployment to Azure Container Apps with Key Vault and PostgreSQL |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | How the pieces fit together: authentication, the grocery list and its realtime updates, and the security decisions behind them |
+| [docs/DATABASE.md](docs/DATABASE.md) | The PostgreSQL schema: every table and column, relationships and delete rules, concurrency tokens, personal data, migrations, and useful queries |
 | [docs/TEMPORAL.md](docs/TEMPORAL.md) | Temporal explained, and the grocery run workflow built on it: workflows, activities, workflow tasks and commands, signals, timers, replay, and the purpose of every file involved |
+| [docs/TEMPORAL_WORKER.md](docs/TEMPORAL_WORKER.md) | How the Temporal worker is hosted inside the app: why in-process, startup, the retry loop, per-call DI scopes, shutdown and deployments, failure modes, health, logs and metrics |
 | [docs/CI_CD.md](docs/CI_CD.md) | GitHub Actions: checks on every pull request, approval-gated image publishing and Terraform applies, the security model, and how to set it up (identities, environments, secrets) |
 | [infra/README.md](infra/README.md) | The Terraform project for Azure and Cloudflare, with its own docs: [architecture](infra/docs/ARCHITECTURE.md), [authentication](infra/docs/AUTHENTICATION.md), [deployment](infra/docs/DEPLOYMENT.md), [development setup](infra/docs/DEVELOPMENT.md) |
 

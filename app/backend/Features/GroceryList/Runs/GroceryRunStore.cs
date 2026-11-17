@@ -35,6 +35,7 @@ internal sealed class GroceryRunStore(ApplicationDbContext dbContext, GroceryLis
         List<Guid> supersededRunIds = [];
         if (run is null)
         {
+            // End any other run still marked as under way before creating the new one.
             supersededRunIds = await EndEarlierRunsAsync(state, cancellationToken);
             run = await CreateAsync(state, cancellationToken);
         }

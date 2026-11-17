@@ -387,6 +387,9 @@ failure stops the whole app (.NET's default for a crashed background service). `
 instead, pausing 5 s, then 15 s, then 30 s, 1 min and 5 min, and reports through the `temporal` health check. That check
 is Degraded at worst and not part of readiness, so a Temporal outage never takes the list offline.
 
+The worker's hosting in full (startup, the retry loop, shutdown, deployments, failure modes):
+[TEMPORAL_WORKER.md](TEMPORAL_WORKER.md).
+
 ### One run at a time
 
 Temporal allows only one *running* execution per workflow ID. With every run of a site sharing
