@@ -14,7 +14,7 @@ person approves it, and no Azure password, client secret or storage key exists a
 
 | Workflow | Runs on | Does |
 | --- | --- | --- |
-| [`app.yml`](../.github/workflows/app.yml) | every pull request; pushes to `main` that touch the app; manual | Backend build, format, tests and vulnerable-package check; frontend lint, types, tests and `npm audit`; image build and Trivy scan. On `main`: publish the image, then propose deploying it |
+| [`app.yml`](../.github/workflows/app.yml) | every pull request; pushes to `main` that touch the app; manual | Backend build, format, tests and vulnerable-package check; frontend lint, types, tests and `npm audit` (with [reviewed exceptions](#an-npm-advisory-with-no-fix)); image build and Trivy scan. On `main`: publish the image, then propose deploying it |
 | [`infra.yml`](../.github/workflows/infra.yml) | every pull request; pushes to `main` that touch `infra/`; manual; weekly | fmt, validate, mocked tests, TFLint, terraform-docs, ShellCheck; a speculative plan on pull requests; on `main`, a plan and an approval-gated apply; a weekly drift check |
 | [`workflows.yml`](../.github/workflows/workflows.yml) | changes to `.github/` or `infra/scripts/` | actionlint, zizmor (Actions security) and ShellCheck on the CI definitions themselves |
 | [`dependabot.yml`](../.github/dependabot.yml) | weekly | Update pull requests for actions, NuGet, npm and Terraform providers, each release at least a week old |
@@ -355,6 +355,25 @@ repository after 60 days without activity; re-enable it under **Actions** if tha
 They run the checks without secrets. Merge app and action updates when green. For a Terraform provider update, start a
 plan on its branch by hand (**Run workflow**, choosing the branch) before merging.
 
+### An npm advisory with no fix
+
+The frontend job fails on any high or critical advisory against the runtime dependencies (`npm audit --omit=dev`,
+through `.github/scripts/npm-audit.sh`). Update the package when a fixed version exists (Dependabot's security updates
+usually propose it). When none does, and the advisory can't affect the app (for example, it is in build-time code that
+a package lists as a runtime dependency and that never reaches the browser bundle), accept that one advisory in
+`app/frontend/audit-exceptions.json`:
+
+```json
+{ "advisory": "GHSA-xxxx-xxxx-xxxx", "package": "<name>", "expires": "<YYYY-MM-DD, at most 92 days away>",
+  "reason": "<why it can't affect this app, and why updating isn't possible>" }
+```
+
+The job then shows it as a warning until the date. After that it fails again, so look at it again then: update if a fix
+exists, otherwise check the reason still holds and choose a new date. When an exception no longer matches anything, the
+job says so: remove it. Don't use `npm audit fix --force`: it may downgrade a package by a major version. This matches
+the image scan, where Trivy skips vulnerabilities without a fix (`--ignore-unfixed`). Check locally from `app/frontend`
+with `bash ../../.github/scripts/npm-audit.sh`.
+
 ### Rotate a credential
 
 The Azure identities have no secrets to rotate. For the others, update the secret in every environment that holds it:
@@ -389,6 +408,7 @@ After a local apply, the next CI plan should report no changes.
 | Speculative plan shows the Key Vault certificate or Gemini secret changing | The environment's PFX or Gemini secret differs from what was last applied |
 | `terraform-docs is up to date` fails | Run `terraform-docs .` in `infra/` and commit the result |
 | The publish job fails at `az acr login` or `docker push` with `unauthorized` | The push identity's AcrPush role is missing (re-run the script), or the registry was re-created. If the registry uses ABAC repository permissions, AcrPush isn't honored: assign *Container Registry Repository Writer* instead |
+| Frontend: *No known-vulnerable runtime dependencies* fails | The log names the advisory. A fixed version exists: update the package. None does: see [An npm advisory with no fix](#an-npm-advisory-with-no-fix). An exception that expired fails too, naming its date |
 | Trivy fails the image | A HIGH or CRITICAL vulnerability with a fix: update the package (NuGet, npm) or rebuild to pick up a patched base image. The log names the package and the fixed version |
 | No deployment pull request appears | **Allow GitHub Actions to create and approve pull requests** is off (step 4), or `app_image_tag` already has this tag |
 | The deployment pull request waits for status checks forever | The checks were started with `workflow_dispatch`; look for the runs under Actions. Re-run *Propose deploying it* to start them again |

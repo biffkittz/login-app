@@ -86,6 +86,9 @@ independent instance of the same image runs at https://grocery.biffkittz.com, wi
   Workflows run repository scripts as `bash .github/scripts/<name>.sh`, so a lost executable bit can't break CI
   (a file written by a tool or edited on Windows is committed as 644).
 - The repository is public, so are its logs: never print Terraform plan values, outputs or secrets.
+- The frontend audit (`.github/scripts/npm-audit.sh`) fails on high or critical advisories against runtime
+  dependencies. Accept one only with the user's agreement, in `app/frontend/audit-exceptions.json`: one advisory and
+  package, why it can't affect the app, and an expiry at most 92 days away. Never raise the threshold.
 - Releases are a pull request that sets `app_image_tag` (opened by the app workflow); applies only run from `main`
   after approval in `demo`. Don't add a path that deploys around Terraform.
 

@@ -1,0 +1,10 @@
+{
+  "exceptions": [
+    {
+      "advisory": "GHSA-fc5q-39xc-vjpf",
+      "package": "picomatch",
+      "expires": "2027-01-15",
+      "reason": "No fixed picomatch exists yet (every version through 4.0.7, the latest). The ReDoS needs an attacker-supplied glob pattern. picomatch counts as a runtime dependency only because vue-router 5 lists its Vite plugin's dependencies as its own, and @tailwindcss/vite pulls in Vite; both run in Node at build time on this project's own patterns. The app doesn't use vue-router/vite, and the browser bundle contains no picomatch. npm's suggested fix downgrades vue-router to 4."
+    }
+  ]
+}
