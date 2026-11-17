@@ -35,6 +35,7 @@ flowchart LR
   app -->|"HTTPS: new registrations"| mail[Cloudflare Email Service<br/>notifications@biffkittz.com]
   app -->|"OTLP: metrics"| prom[Prometheus<br/>internal only]
   grafana[Grafana<br/>grafana.biffkittz.com] -->|PromQL| prom
+  prom -->|"HTTPS: scrape (Metrics Read-Only key)"| tcm[Temporal Cloud<br/>metrics endpoint]
   app <-->|"gRPC + TLS: grocery runs<br/>(IDs and times only)"| temporal[Temporal Cloud<br/>workflows]
 ```
 
@@ -152,7 +153,8 @@ login-app/
   - Liveness and readiness health endpoints.
   - Metrics pushed to Prometheus over OTLP: realtime connections and SignalR messages per second, HTTP rates, errors
     and latency, sign-ins, AI pictures and cost estimates, the database pool and the .NET runtime, plus Azure's
-    platform metrics (replicas, restarts, CPU, memory, PostgreSQL). Grafana dashboards at grafana.biffkittz.com, behind
+    platform metrics (replicas, restarts, CPU, memory, PostgreSQL) and, optionally, Temporal Cloud's metrics for every
+    namespace in the account. Grafana dashboards at grafana.biffkittz.com, behind
     GitHub sign-in for the people listed in Terraform ([infra/docs/DEPLOYMENT.md](infra/docs/DEPLOYMENT.md#observability)).
   - Structured JSON logs that never contain item contents, emails or tokens.
   - EF Core migrations applied at startup.

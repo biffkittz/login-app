@@ -70,6 +70,7 @@ flowchart LR
   app["App instances"] -->|"OTLP over HTTPS (internal)"| prom["ca-loginapp-demo-prometheus<br/>internal ingress :9090<br/>+ Azure Monitor exporter"]
   grafana -->|"PromQL over HTTPS (internal)"| prom
   prom -->|"Monitoring Reader"| monitor[Azure Monitor metrics]
+  prom -->|"HTTPS, Metrics Read-Only key<br/>(with temporal_metrics_api_key)"| tcm["Temporal Cloud metrics<br/>metrics.temporal.io"]
   prom & grafana --> nfs[("Premium NFS share<br/>prometheus/ and grafana/")]
 ```
 
@@ -149,7 +150,7 @@ Container App or job first needs them. A system-assigned identity only exists on
 | | Key Vault Secrets User | secrets `ConnectionStrings--DefaultConnection`, `grocery-db-connection-string`, `Jwt--SigningKey`, `ImageGeneration--ApiKey` (with a Gemini key), `Email--ApiToken` (with registration emails), `Telemetry--OtlpPassword` (with observability), `Temporal--ApiKey` (with grocery runs), and the certificate's secret | Its secrets and its TLS certificate, nothing else. Both instances run as this identity |
 | `id-loginapp-demo-dbinit` (bootstrap job) | Key Vault Secrets User | secrets `postgresql-admin-password` and `postgresql-app-password` | The only identity that can read the administrator password |
 | `id-loginapp-demo-prometheus` (with observability) | Monitoring Reader | the resource group | The Azure Monitor exporter reads platform metrics (replicas, restarts, CPU, memory, the database) |
-| | Key Vault Secrets User | secrets `prometheus-web-config`, `prometheus-self-scrape-password` | Its users' password hashes and its own scrape password |
+| | Key Vault Secrets User | secrets `prometheus-web-config`, `prometheus-self-scrape-password`, `temporal-metrics-api-key` (with Temporal Cloud metrics) | Its users' password hashes, its own scrape password, and the key it reads Temporal Cloud's metrics with |
 | `id-loginapp-demo-grafana` (with observability) | Key Vault Secrets User | secrets `grafana-github-client-secret`, `grafana-secret-key`, `prometheus-grafana-password`, and the certificate's secret | GitHub sign-in, its encryption key, its Prometheus user, and the TLS certificate it serves |
 | Whoever runs Terraform (`key_vault_administrator_object_id`), and `key_vault_additional_administrators` | Key Vault Secrets Officer, Key Vault Certificates Officer | the vault | Create, update and read back secrets and import the certificate; Terraform grants these itself |
 | GitHub Actions: `id-loginapp-github-plan`, `-deploy`, `-push` | see [AUTHENTICATION.md](AUTHENTICATION.md#cicd-with-openid-connect) | | Pull request plans, plans and applies on main, image pushes; signed in with OIDC, created outside Terraform ([docs/CI_CD.md](../../docs/CI_CD.md)) |
@@ -180,6 +181,7 @@ only after the wait.
 | `grafana-github-client-secret` | you (`TF_VAR_grafana_github_client_secret`); with observability | Grafana | Client secret of the GitHub OAuth App Grafana signs users in with |
 | `grafana-secret-key` | `random_password`; with observability | Grafana | Grafana's `secret_key`, which encrypts what it stores |
 | `Temporal--ApiKey` | you (`TF_VAR_temporal_api_key`); with `temporal_namespace` | app | API key of a namespace-scoped Temporal Cloud service account (Write), for grocery runs |
+| `temporal-metrics-api-key` | you (`TF_VAR_temporal_metrics_api_key`); with observability | Prometheus | API key of a Temporal Cloud service account with the account role Metrics Read-Only, for Temporal Cloud's metrics endpoint |
 
 - **How the app receives them.** The app gets its secrets as Container Apps Key Vault references, which the platform
   resolves with the app's identity and exposes as environment variables: `ConnectionStrings__DefaultConnection`,
@@ -512,6 +514,25 @@ CPU and memory of every Container App, the PostgreSQL server's CPU, memory, stor
 used capacity. The exporter signs in as Prometheus' identity, which may read metrics in the resource group and nothing
 else.
 
+**Temporal Cloud's metrics are pulled too** (with `temporal_metrics_api_key`). Prometheus scrapes Temporal Cloud's
+OpenMetrics endpoint, `https://metrics.temporal.io/v1/metrics`, with an API key as a Bearer token, and Grafana shows
+them on Grafana Labs' "Temporal overview" dashboard in a folder of its own, Temporal Cloud. These are the server's
+view of every namespace in the account (other projects' included, by choice): workflow and activity outcomes and
+latencies, task queue backlogs, pollers, actions, request rates and limits. They complement the app's own Temporal SDK
+metrics, which describe its worker. The key is its own, from a service account with the account role **Metrics
+Read-Only**: the app's key is namespace-scoped and can't read metrics, and this one can't start, signal or read
+workflows. A few facts of the endpoint shape the scrape:
+
+- **180 requests an hour per account**, whoever makes them. Prometheus scrapes every 30 seconds (Temporal's advice),
+  120 of them, which leaves room for someone to try the endpoint by hand but not for a second Prometheus on the same
+  account at that rate (another project's, say): together they'd be refused with 429s.
+- **One minute at a time, three minutes late.** Each scrape returns the newest complete minute, aggregated by Temporal
+  and timestamped three minutes back. `honor_timestamps` keeps those timestamps, so the two scrapes of a minute land
+  on one sample, and the dashboard's `sum_over_time` queries count each minute once. Nothing is lost while Prometheus
+  is down for a minute or less (a revision change), but a longer gap can't be filled in: the endpoint has no history.
+- **Labels are names from Temporal**: namespace, region, task queue, workflow type, operation. Like the app's labels,
+  they carry no personal data.
+
 **Prometheus is internal.** Its ingress is internal-only, so only the environment's own apps can reach it, over HTTPS
 with the platform's certificate. Every request also needs one of its three users (`web.yml`: `app` pushes, `grafana`
 queries, `prometheus` scrapes itself), whose passwords Terraform generates and keeps in Key Vault; Prometheus holds
@@ -533,8 +554,9 @@ every restart's history. An NFS share on Premium FileStorage is the closest to a
   lock. Expect a minute without new samples on every change to Prometheus. Grafana keeps its SQLite database on the
   same share; with one replica, SQLite's own locking (which NFS honors) covers the overlap.
 
-**Configuration as code.** `prometheus.yml`, Grafana's data source and dashboard provider and the dashboards
-(`modules/observability/dashboards/*.json`) are rendered by Terraform and written to disk by an init container (Azure
+**Configuration as code.** `prometheus.yml`, Grafana's data source, its dashboard providers (one per folder: Nibbles,
+and Temporal Cloud with its metrics) and the dashboards (`modules/observability/dashboards/*.json`, and
+`dashboards/temporal-cloud/*.json` for the Temporal Cloud folder) are rendered by Terraform and written to disk by an init container (Azure
 Linux, the bootstrap job's base image). Container Apps has no config maps, Azure's API can't write to an NFS share, and
 images of our own would need a build pipeline for each change. This way a change is a plan like any other, and
 redeploys only the app it affects. Grafana treats the dashboards as provisioned: they can't be changed or deleted in

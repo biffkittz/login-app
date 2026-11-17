@@ -104,7 +104,11 @@ generated secrets and the Cloudflare records. Modules: `networking`, `registry`,
   subnet). A new Prometheus revision waits for the old one's database lock, which is why its probes watch the exporter's
   port (8080): don't point them at 9090. On NFS, flock() is an fcntl lock: busybox's flock opens files read-only, so
   only `flock -s` works there (an exclusive attempt fails with EBADF). Config reaches the containers as environment variables that init containers
-  write to disk; dashboards are `modules/observability/dashboards/*.json` (gzip+Base64, one variable each). Images
+  write to disk; dashboards are `modules/observability/dashboards/*.json` (Grafana folder Nibbles) and
+  `dashboards/temporal-cloud/*.json` (folder Temporal Cloud, only with `temporal_metrics_api_key`), gzip+Base64, one
+  variable each (`GRAFANA_DASHBOARD_JSON_<FOLDER>__<NAME>`), one provider per folder in sibling directories (providers
+  read their paths recursively). Temporal Cloud's key (`temporal_metrics_api_key`, Key Vault
+  `temporal-metrics-api-key`) reaches only Prometheus' init container, which writes it to a file. Images
   are pinned by digest (`observability_images`); keep the digest form. The CI deploy identity may assign Monitoring
   Reader only because `scripts/setup-github-oidc.sh` lists it: a new role Terraform assigns needs adding there too.
 - **Grocery runs** (`temporal_namespace`, `temporal_api_key`, optional `temporal_address`): Temporal Cloud is created by

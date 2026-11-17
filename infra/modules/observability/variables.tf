@@ -239,3 +239,15 @@ variable "grafana_secret_ids" {
     origin_certificate   = string
   })
 }
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Temporal Cloud
+# ---------------------------------------------------------------------------------------------------------------------
+
+variable "temporal_cloud_metrics" {
+  description = "Scrape Temporal Cloud's OpenMetrics endpoint (metrics.temporal.io) for every namespace in the account, and add its dashboard to Grafana's Temporal Cloud folder. api_key_secret_id is the versionless Key Vault secret ID of an API key whose service account has the account role Metrics Read-Only; Prometheus' identity must be able to read it. Null (the default) leaves Temporal Cloud out."
+  type = object({
+    api_key_secret_id = string
+  })
+  default = null
+}

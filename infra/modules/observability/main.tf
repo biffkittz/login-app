@@ -2,6 +2,7 @@
 #
 #   app instances --OTLP over HTTPS (Basic auth)--> Prometheus (internal ingress only) <--PromQL-- Grafana
 #   Azure Monitor <--Monitoring Reader-- azure-metrics-exporter (sidecar) <--scrape-- Prometheus
+#   Temporal Cloud (metrics.temporal.io) <--scrape, Bearer API key (with temporal_cloud_metrics)-- Prometheus
 #   visitor --> Cloudflare (grafana.<zone>) --> TCP ingress (Cloudflare's ranges only) --> Grafana (TLS, GitHub login)
 #
 # Both keep their data on one NFS share of a Premium FileStorage account: Container Apps can't mount Azure Disks, and
@@ -20,6 +21,29 @@ locals {
   grafana_data_dir         = "grafana"
   prometheus_config_dir    = "/etc/prometheus/config"
   self_scrape_password_key = "self-scrape-password"
+
+  # Temporal Cloud's metrics, with an API key of their own (Metrics Read-Only, which can't touch workflows).
+  temporal_cloud_enabled     = var.temporal_cloud_metrics != null
+  temporal_cloud_api_key_key = "temporal-cloud-api-key"
+
+  # Temporal Cloud allows 180 scrapes an hour per account, whoever makes them. Every 30 seconds (Temporal's advice) is
+  # 120 of them, and each scrape returns the newest complete minute, so none is missed; longer than a minute would
+  # skip some. The samples come timestamped three minutes back: honor_timestamps keeps those times, so both scrapes
+  # of a minute land on one sample, and the dashboard's sum_over_time queries count each minute once. Every namespace
+  # in the account is collected (no namespaces= filter), by choice: the dashboard picks among them.
+  temporal_cloud_scrape_configs = local.temporal_cloud_enabled ? [{
+    job_name         = "temporal-cloud"
+    scheme           = "https"
+    metrics_path     = "/v1/metrics"
+    scrape_interval  = "30s"
+    scrape_timeout   = "25s"
+    honor_timestamps = true
+    authorization = {
+      type             = "Bearer"
+      credentials_file = "${local.prometheus_config_dir}/${local.temporal_cloud_api_key_key}"
+    }
+    static_configs = [{ targets = ["metrics.temporal.io"] }]
+  }] : []
 
   # ---------------------------------------------------------------------------------------------------------------
   # Prometheus' configuration, rendered here and written to disk by the init container. Container Apps has no config
@@ -122,6 +146,7 @@ locals {
           static_configs = [{ targets = ["localhost:${local.azure_metrics_port}"] }]
         }
       ],
+      local.temporal_cloud_scrape_configs,
     )
   })
 
@@ -196,30 +221,43 @@ locals {
 
   grafana_dashboards_dir = "/etc/grafana/provisioning/dashboards-json"
 
+  # Grafana folders, keyed by their UID, and the directory of ./dashboards each one shows. Every folder is a
+  # provider with a directory of its own under grafana_dashboards_dir: providers read their paths recursively, so a
+  # folder nested in another's directory would show up in both.
+  grafana_dashboard_folders = merge(
+    { nibbles = { title = "Nibbles", source = "${path.module}/dashboards" } },
+    local.temporal_cloud_enabled ? { temporal-cloud = { title = "Temporal Cloud", source = "${path.module}/dashboards/temporal-cloud" } } : {},
+  )
+
   grafana_dashboard_providers = yamlencode({
     apiVersion = 1
-    providers = [{
-      name                  = "nibbles"
-      orgId                 = 1
-      folder                = "Nibbles"
-      folderUid             = "nibbles"
-      type                  = "file"
-      disableDeletion       = true
-      allowUiUpdates        = false
-      updateIntervalSeconds = 3600
-      options = {
-        path                      = local.grafana_dashboards_dir
-        foldersFromFilesStructure = false
+    providers = [
+      for folder, settings in local.grafana_dashboard_folders : {
+        name                  = folder
+        orgId                 = 1
+        folder                = settings.title
+        folderUid             = folder
+        type                  = "file"
+        disableDeletion       = true
+        allowUiUpdates        = false
+        updateIntervalSeconds = 3600
+        options = {
+          path                      = "${local.grafana_dashboards_dir}/${folder}"
+          foldersFromFilesStructure = false
+        }
       }
-    }]
+    ]
   })
 
-  # One environment variable per dashboard: GRAFANA_DASHBOARD_JSON_<NAME> holds ./dashboards/<name>.json, minified
-  # (which also checks that it is JSON) and compressed, so a dozen panels stay a few kilobytes in the app's definition.
-  grafana_dashboards = {
-    for file in fileset("${path.module}/dashboards", "*.json") :
-    "GRAFANA_DASHBOARD_JSON_${upper(replace(trimsuffix(file, ".json"), "-", "_"))}" => base64gzip(jsonencode(jsondecode(file("${path.module}/dashboards/${file}"))))
-  }
+  # One environment variable per dashboard: GRAFANA_DASHBOARD_JSON_<FOLDER>__<NAME> holds <name>.json from the
+  # folder's directory, minified (which also checks that it is JSON) and compressed, so a dozen panels stay a few
+  # kilobytes in the app's definition. The init container writes it to <grafana_dashboards_dir>/<folder>/<name>.json.
+  grafana_dashboards = merge([
+    for folder, settings in local.grafana_dashboard_folders : {
+      for file in fileset(settings.source, "*.json") :
+      "GRAFANA_DASHBOARD_JSON_${upper(replace(folder, "-", "_"))}__${upper(replace(trimsuffix(file, ".json"), "-", "_"))}" => base64gzip(jsonencode(jsondecode(file("${settings.source}/${file}"))))
+    }
+  ]...)
 
   # GitHub decides who may sign in: listed administrators, then listed viewers, and nobody else (with
   # role_attribute_strict, an empty role refuses the sign-in). The lists are JSON literals in the JMESPath expression.
@@ -369,6 +407,16 @@ resource "azurerm_container_app" "prometheus" {
     identity            = var.prometheus_identity.id
   }
 
+  dynamic "secret" {
+    for_each = local.temporal_cloud_enabled ? [var.temporal_cloud_metrics.api_key_secret_id] : []
+
+    content {
+      name                = local.temporal_cloud_api_key_key
+      key_vault_secret_id = secret.value
+      identity            = var.prometheus_identity.id
+    }
+  }
+
   # Internal only: the app pushes and Grafana queries from inside the environment, over HTTPS with the platform's
   # certificate. Every request also needs one of Prometheus' users (web.yml).
   ingress {
@@ -412,6 +460,16 @@ resource "azurerm_container_app" "prometheus" {
       env {
         name  = "PROMETHEUS_DATA_DIR"
         value = local.prometheus_data_dir
+      }
+
+      # Only the init container sees the key: it writes the file the temporal-cloud job reads it from.
+      dynamic "env" {
+        for_each = local.temporal_cloud_enabled ? [local.temporal_cloud_api_key_key] : []
+
+        content {
+          name        = "TEMPORAL_CLOUD_API_KEY"
+          secret_name = env.value
+        }
       }
 
       volume_mounts {

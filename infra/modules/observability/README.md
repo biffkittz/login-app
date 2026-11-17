@@ -7,6 +7,11 @@ Prometheus and Grafana as Container Apps in the app's own environment, with thei
   metrics: the Container Apps' replicas, restarts, CPU and memory, the PostgreSQL server, and the share's used
   capacity. The exporter signs in as Prometheus' user-assigned identity, which has Monitoring Reader on the app's
   resource group.
+- **Temporal Cloud** (with `temporal_cloud_metrics`): Prometheus scrapes `https://metrics.temporal.io/v1/metrics`
+  every 30 seconds for every namespace in the account, with a Metrics Read-Only API key from Key Vault that only its
+  init container sees (it writes the key to the file the scrape job reads). `honor_timestamps` keeps Temporal's own
+  timestamps (three minutes back), so the two scrapes of each minute land on one sample. Temporal allows 180 requests
+  an hour per account; this takes 120.
 - **Grafana** is public at `grafana_hostname` through Cloudflare, like the app's instances: a TCP ingress port of its
   own, Cloudflare-only IP restrictions, and TLS in the container with the same origin certificate. GitHub is the only
   way in, for the users in `grafana_github_admins` and `grafana_github_viewers`. Its data source and the dashboards
@@ -27,6 +32,22 @@ Configuration reaches the containers as environment variables, which an init con
 `prometheus.yml` and the web configuration for Prometheus, the provisioning files and the PEM certificate for Grafana.
 A change to either redeploys that app. To change a dashboard, edit its JSON here (or export it from Grafana) and
 apply.
+
+**Dashboards and folders.** Each directory is a Grafana folder with a provider of its own: `dashboards/*.json` is
+**Nibbles**, and `dashboards/temporal-cloud/*.json` is **Temporal Cloud** (only with `temporal_cloud_metrics`). Each
+dashboard travels as `GRAFANA_DASHBOARD_JSON_<FOLDER>__<NAME>`, and the init container writes it to
+`dashboards-json/<folder>/<name>.json`. The providers' directories are siblings because Grafana reads a provider's
+path recursively: a folder nested in another's directory would show in both.
+
+**The Temporal overview dashboard** (`dashboards/temporal-cloud/temporal-overview.json`) is Grafana Labs'
+[temporal-mixin](https://github.com/grafana/jsonnet-libs/tree/master/temporal-mixin) dashboard (Apache License 2.0,
+copyright Grafana Labs), as of commit `8b721e2c42d7dab40b634eca65ac99ce5cf21cee`, with three edits. Repeat them when
+updating it (`tests/modules.tftest.hcl` checks the first two):
+
+- the data source variable's default is `prometheus` (our provisioned data source), not Grafana Cloud's;
+- the top-left logo panel shows the text "Temporal Cloud" instead of an image from `storage.googleapis.com`, which every
+  viewer's browser would have fetched from Google;
+- the data source variable's Grafana Cloud filter (`regex`) is empty.
 
 <!-- BEGIN_TF_DOCS -->
 ### Requirements
@@ -88,6 +109,7 @@ apply.
 | <a name="input_prometheus_retention_size"></a> [prometheus\_retention\_size](#input\_prometheus\_retention\_size) | Most disk space Prometheus' blocks may use, e.g. "20GB"; the oldest go first. Keep it well under share\_quota\_gib. | `string` | `"20GB"` | no |
 | <a name="input_prometheus_retention_time"></a> [prometheus\_retention\_time](#input\_prometheus\_retention\_time) | How long Prometheus keeps samples, e.g. "30d". | `string` | `"30d"` | no |
 | <a name="input_share_quota_gib"></a> [share\_quota\_gib](#input\_share\_quota\_gib) | Provisioned size of the NFS share in GiB. Premium shares bill by provisioned size, and 100 GiB is the smallest. | `number` | `100` | no |
+| <a name="input_temporal_cloud_metrics"></a> [temporal\_cloud\_metrics](#input\_temporal\_cloud\_metrics) | Scrape Temporal Cloud's OpenMetrics endpoint (metrics.temporal.io) for every namespace in the account, and add its dashboard to Grafana's Temporal Cloud folder. api\_key\_secret\_id is the versionless Key Vault secret ID of an API key whose service account has the account role Metrics Read-Only; Prometheus' identity must be able to read it. Null (the default) leaves Temporal Cloud out. | <pre>object({<br/>    api_key_secret_id = string<br/>  })</pre> | `null` | no |
 
 ### Outputs
 

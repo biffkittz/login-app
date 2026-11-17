@@ -540,6 +540,11 @@ task latencies (`temporal_workflow_task_execution_latency_seconds`, `temporal_ac
 their schedule-to-start waits), and failed activities (`temporal_activity_execution_failed_total`). Their labels are the
 namespace, task queue, workflow and activity types and RPC operation names: fixed values too.
 
+Temporal Cloud's own metrics (`temporal_cloud_v1_*`: the server's view of every namespace in the account, such as
+workflow outcomes, backlogs and actions) aren't the app's: with `temporal_metrics_api_key`, Prometheus scrapes them
+from Temporal Cloud, and Grafana's Temporal Cloud folder shows them
+([infra/docs/ARCHITECTURE.md](../infra/docs/ARCHITECTURE.md#observability-prometheus-and-grafana)).
+
 ## Frontend
 
 ```text

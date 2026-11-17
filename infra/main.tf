@@ -197,6 +197,10 @@ locals {
   # (Grafana's "grafana", Prometheus' own "prometheus" for scraping itself).
   observability_enabled = var.observability_enabled
   prometheus_users      = local.observability_enabled ? toset(["app", "grafana", "prometheus"]) : toset([])
+
+  # Temporal Cloud's metrics, on with observability and a Metrics Read-Only API key, which Prometheus reads from Key
+  # Vault like its other secrets. As with the Gemini key, only whether a key is set is unwrapped from "sensitive".
+  temporal_metrics_enabled = local.observability_enabled && nonsensitive(var.temporal_metrics_api_key != null)
   app_telemetry_settings = local.observability_enabled ? {
     Telemetry__OtlpEndpoint = "https://${local.names.prometheus_app}.internal.${module.container_apps.default_domain}/api/v1/otlp/v1/metrics"
     Telemetry__OtlpUsername = "app"
@@ -399,6 +403,8 @@ module "key_vault" {
     } : {},
     # Grocery runs: the Temporal Cloud API key (configuration key Temporal:ApiKey).
     local.temporal_enabled ? { temporal_api_key = "Temporal--ApiKey" } : {},
+    # Prometheus' Metrics Read-Only key for Temporal Cloud's metrics endpoint.
+    local.temporal_metrics_enabled ? { temporal_metrics_api_key = "temporal-metrics-api-key" } : {},
   )
   secret_values = merge(
     {
@@ -419,6 +425,7 @@ module "key_vault" {
       grafana_secret_key              = random_password.grafana_secret_key[0].result
     } : {},
     local.temporal_enabled ? { temporal_api_key = var.temporal_api_key } : {},
+    local.temporal_metrics_enabled ? { temporal_metrics_api_key = var.temporal_metrics_api_key } : {},
   )
   secret_readers = merge(
     {
@@ -442,6 +449,7 @@ module "key_vault" {
       grafana_secret_key              = { secret = "grafana_secret_key", principal_id = azurerm_user_assigned_identity.grafana[0].principal_id }
     } : {},
     local.temporal_enabled ? { app_temporal_api_key = { secret = "temporal_api_key", principal_id = azurerm_user_assigned_identity.app.principal_id } } : {},
+    local.temporal_metrics_enabled ? { prometheus_temporal_metrics_api_key = { secret = "temporal_metrics_api_key", principal_id = azurerm_user_assigned_identity.prometheus[0].principal_id } } : {},
   )
 
   certificate_name       = "${replace(var.app_hostname, ".", "-")}-origin"
@@ -567,6 +575,10 @@ module "observability" {
     prometheus_password  = module.key_vault.secret_ids["prometheus_grafana_password"]
     origin_certificate   = module.key_vault.certificate_secret_id
   }
+
+  temporal_cloud_metrics = local.temporal_metrics_enabled ? {
+    api_key_secret_id = module.key_vault.secret_ids["temporal_metrics_api_key"]
+  } : null
 }
 
 # ---------------------------------------------------------------------------------------------------------------------

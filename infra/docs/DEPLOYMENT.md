@@ -58,6 +58,8 @@ read -rsp 'Gemini API key: ' TF_VAR_gemini_api_key && export TF_VAR_gemini_api_k
 read -rsp 'Grafana GitHub client secret: ' TF_VAR_grafana_github_client_secret && export TF_VAR_grafana_github_client_secret && echo
 # With temporal_namespace (see "Grocery runs"): the Temporal Cloud API key.
 read -rsp 'Temporal Cloud API key: ' TF_VAR_temporal_api_key && export TF_VAR_temporal_api_key && echo
+# Optional, with observability_enabled (see "Temporal Cloud metrics"): the Metrics Read-Only key.
+read -rsp 'Temporal Cloud metrics API key: ' TF_VAR_temporal_metrics_api_key && export TF_VAR_temporal_metrics_api_key && echo
 ```
 
 Set `TF_VAR_gemini_api_key` in every terminal you apply from once you use it: an apply without it removes the key from
@@ -301,6 +303,49 @@ share from a temporary container in the environment, as the share accepts NFS mo
 only. Simpler: set `observability_enabled = false` and apply, which deletes the share (Grafana's users and settings
 too), then set it back to `true` and apply again.
 
+### Temporal Cloud metrics
+
+Prometheus can also collect Temporal Cloud's own metrics, the server's view of every namespace in the account
+(workflow and activity outcomes and latencies, backlogs, pollers, actions, limits), and Grafana shows them on the
+*Temporal overview* dashboard in a **Temporal Cloud** folder. Design and limits:
+[ARCHITECTURE.md](ARCHITECTURE.md#observability-prometheus-and-grafana). It needs observability on, and an API key of
+its own:
+
+1. **Create a service account and key** in Temporal Cloud (Account Owner or Global Admin only): **Settings → Service
+   Accounts → Create Service Account**, account role **Metrics Read-Only**, no namespace permissions, then
+   **Create API Key** on it with an expiry you'll remember ([AUTHENTICATION.md](AUTHENTICATION.md#temporal-cloud-metrics)).
+   Copy the key (Temporal shows it once). It must be a **new** service account: the grocery runs' one is
+   namespace-scoped, and any key on it, a second one included, is refused with 403.
+2. **Pass the key**, never in a tfvars file: `TF_VAR_temporal_metrics_api_key` in your shell
+   ([Prerequisites](#prerequisites)), and the `TEMPORAL_METRICS_API_KEY` secret in the `infra-pr` and `demo-plan`
+   environments for CI ([docs/CI_CD.md](../../docs/CI_CD.md)). Without the secret, CI's next apply turns the scrape
+   off again.
+3. **Plan and apply.** It adds the Key Vault secret `temporal-metrics-api-key` (readable by Prometheus' identity only),
+   a new revision of Prometheus (a minute without samples, as with any change to it) and of Grafana (the new folder).
+4. **Check**, about five minutes later (each minute's numbers arrive three minutes late). In Grafana, **Explore**:
+   `up{job="temporal-cloud"}` is 1 and `scrape_samples_scraped{job="temporal-cloud"}` above 0; the *Temporal overview*
+   dashboard lists your namespaces in its namespace picker. Expect gaps on the dashboard's longest views: its 30-day
+   panels fill in over 30 days, since the endpoint keeps no history.
+
+**Rotating the key.** A service account can hold several keys at once. Create a second key, update
+`TF_VAR_temporal_metrics_api_key` (and `TEMPORAL_METRICS_API_KEY` in CI), and apply: Key Vault gets the new key. Then
+give Prometheus the new key now rather than at the next 30-minute sync, and restart it, since its init container writes
+the key to a file at start:
+
+```bash
+IDENTITY="$(az identity show -n id-loginapp-demo-prometheus -g "$RG" --query id -o tsv)"
+VAULT="$(terraform output -raw key_vault_uri)"
+az containerapp secret set --name ca-loginapp-demo-prometheus --resource-group "$RG" --secrets \
+  "temporal-cloud-api-key=keyvaultref:${VAULT}secrets/temporal-metrics-api-key,identityref:${IDENTITY}"
+az containerapp revision restart --name ca-loginapp-demo-prometheus --resource-group "$RG" \
+  --revision "$(az containerapp show --name ca-loginapp-demo-prometheus --resource-group "$RG" --query properties.latestRevisionName -o tsv)"
+```
+
+Once `up{job="temporal-cloud"}` is 1 again, delete the old key in Temporal Cloud.
+
+**Turning it off:** unset `TF_VAR_temporal_metrics_api_key` (and delete the CI secret) and apply. The collected series
+stay in Prometheus until they age out.
+
 ## Grocery runs (Temporal Cloud)
 
 Grocery runs ("speak now or forever hold your peace", [docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md#grocery-runs))
@@ -540,6 +585,9 @@ Destroying takes about 15 to 20 minutes.
 | Grafana's log: `error getting user teams` | GitHub refused to list your teams: the client ID is a GitHub App's (`Iv...`) rather than an OAuth App's (`Ov23li...`). Create an OAuth App ([AUTHENTICATION.md](AUTHENTICATION.md#grafanas-github-sign-in)) and use its ID and secret |
 | Apply fails on `cloudflare_dns_record.*`: `DNS record comment exceeds the maximum length of 100 characters` (9313) | Cloudflare limits comments to 100 characters below Enterprise; shorten the record's `comment` (the tests check the ones in `main.tf`) |
 | Grafana's dashboards show **No data** for the app | The app isn't pushing: its log should show event 6000 at start. Prometheus' log shows refused pushes (`401`); after rotating Prometheus' passwords, restart the app's revisions so they re-read `Telemetry--OtlpPassword` |
+| Plan fails: `TF_VAR_temporal_metrics_api_key needs observability_enabled` | The metrics key is set (in CI, the `TEMPORAL_METRICS_API_KEY` secret) while observability is off. Turn observability on, or unset the key |
+| `up{job="temporal-cloud"}` is 0, or the *Temporal overview* dashboard stays empty | Temporal Cloud refused the scrape. Prometheus doesn't log why; Grafana shows it, to a signed-in admin, at `https://grafana.biffkittz.com/api/datasources/proxy/uid/prometheus/api/v1/targets?scrapePool=temporal-cloud` (`lastError`). **401**: Temporal doesn't know the key (mistyped, expired or deleted). **403**: it does, but the key's service account lacks the account role Metrics Read-Only, typically a key made on the grocery runs' namespace-scoped service account; create a new service account ([Temporal Cloud metrics](#temporal-cloud-metrics)). To see which service account the deployed key belongs to without showing it: `az keyvault secret show --vault-name <vault> -n temporal-metrics-api-key --query value -o tsv \| cut -d. -f2 \| base64 -d 2>/dev/null` (the `sub` claim; compare with `Temporal--ApiKey`'s). Fix it, then rotate. **429**: something else scrapes the same account too: Temporal allows 180 requests an hour per account, and Prometheus alone takes 120 |
+| The *Temporal overview* dashboard is empty, `up{job="temporal-cloud"}` is 1 | Wait: each minute arrives three minutes late. Then check the dashboard's namespace and region pickers at the top. A namespace with no workflow activity has few series |
 | Prometheus' log repeats `Waiting for the previous Prometheus replica to release /prometheus/lock` | An old revision still runs. It goes once the new one is ready (a minute); if not, deactivate it: `az containerapp revision list -n ca-loginapp-demo-prometheus -g "$RG" -o table`, then `az containerapp revision deactivate`. After ten minutes Prometheus starts anyway and refuses to run if the lock is really held. With `flock: Bad file descriptor` before each line, the start script is testing the lock with an exclusive lock, which can't work on NFS from busybox's read-only descriptor: it must use `flock -s` |
 | Prometheus or Grafana won't start: `mount.nfs: access denied by server` | The share admits only the Container Apps subnet: check its `Microsoft.Storage` service endpoint and the storage account's network rules, and that secure transfer is off (Terraform sets all three) |
 | The *Azure infrastructure* dashboard is empty | The exporter can't read Azure Monitor yet: its Monitoring Reader role takes a few minutes to take effect after the first apply. Its log (`--container azure-metrics-exporter`) shows `AuthorizationFailed` until then |

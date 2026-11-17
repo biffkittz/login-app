@@ -618,6 +618,23 @@ variable "grafana_github_viewers" {
   }
 }
 
+variable "temporal_metrics_api_key" {
+  description = "API key of a Temporal Cloud service account with the account role Metrics Read-Only. With it, Prometheus scrapes Temporal Cloud's metrics endpoint (metrics.temporal.io) for every namespace in the account, and Grafana shows them in its Temporal Cloud folder. Not temporal_api_key: the app's key is namespace-scoped and can't read metrics, and this one can't touch workflows. Null leaves Temporal Cloud unmonitored. Needs observability_enabled. Pass it as TF_VAR_temporal_metrics_api_key (the TEMPORAL_METRICS_API_KEY secret in CI); never put it in a tfvars file."
+  type        = string
+  default     = null
+  sensitive   = true
+
+  validation {
+    condition     = var.temporal_metrics_api_key == null || can(regex("^[^\\s]{20,}$", var.temporal_metrics_api_key))
+    error_message = "temporal_metrics_api_key must be null or a key without spaces; check how it was copied."
+  }
+
+  validation {
+    condition     = var.temporal_metrics_api_key == null || var.observability_enabled
+    error_message = "TF_VAR_temporal_metrics_api_key needs observability_enabled: Prometheus is what reads Temporal Cloud's metrics."
+  }
+}
+
 variable "observability_images" {
   description = "Images of the observability stack, pinned by digest (a tag can be moved to other content). Dependabot can't see these: check for new releases now and then (infra/docs/DEPLOYMENT.md)."
   type = object({

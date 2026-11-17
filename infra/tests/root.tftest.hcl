@@ -887,6 +887,11 @@ run "observability_adds_grafana_behind_cloudflare_and_points_the_app_at_promethe
   }
 
   assert {
+    condition     = !local.temporal_metrics_enabled && !contains(keys(module.key_vault.secret_ids), "temporal_metrics_api_key")
+    error_message = "Without TF_VAR_temporal_metrics_api_key, Temporal Cloud must stay unmonitored."
+  }
+
+  assert {
     condition = (
       length(random_password.prometheus_users) == 3 &&
       alltrue([for password in random_password.prometheus_users : password.length == 40 && !password.special])
@@ -904,6 +909,42 @@ run "observability_adds_grafana_behind_cloudflare_and_points_the_app_at_promethe
     )
     error_message = "The outputs must name Grafana's URL, the OAuth callback and the observability resources."
   }
+}
+
+run "temporal_cloud_metrics_reach_prometheus_through_key_vault" {
+  command = apply
+
+  variables {
+    app_image_tag                = "1a2b3c4"
+    observability_enabled        = true
+    grafana_github_client_id     = "Ov23liAbCdEfGhIjKlMn"
+    grafana_github_client_secret = "0123456789abcdef0123456789abcdef01234567"
+    grafana_github_admins        = ["biffkittz"]
+    temporal_metrics_api_key     = "test-temporal-metrics-key-0123456789"
+  }
+
+  assert {
+    condition = (
+      local.temporal_metrics_enabled &&
+      contains(keys(module.key_vault.secret_ids), "temporal_metrics_api_key")
+    )
+    error_message = "The Metrics Read-Only key must be kept in Key Vault, for Prometheus."
+  }
+
+  assert {
+    condition     = !contains(keys(module.key_vault.secret_ids), "temporal_api_key")
+    error_message = "Monitoring Temporal Cloud must not need (or turn on) grocery runs' own key."
+  }
+}
+
+run "rejects_a_temporal_metrics_key_without_observability" {
+  command = plan
+
+  variables {
+    temporal_metrics_api_key = "test-temporal-metrics-key-0123456789"
+  }
+
+  expect_failures = [var.temporal_metrics_api_key]
 }
 
 run "rejects_observability_without_a_github_oauth_app" {

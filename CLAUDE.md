@@ -52,6 +52,11 @@ independent instance of the same image runs at https://grocery.biffkittz.com, wi
   ("Metrics"): rename an instrument and its queries together.
 - Prometheus and Grafana keep their data on an NFS share (Container Apps can't mount disks); exactly one Prometheus
   writes it. Images are pinned by digest; Dependabot can't update them.
+- With `temporal_metrics_api_key` (a Metrics Read-Only service account's key, not the app's), Prometheus scrapes
+  Temporal Cloud's metrics (metrics.temporal.io, every namespace in the account) every 30 s with `honor_timestamps`:
+  Temporal allows 180 scrapes an hour per account, and the dashboard's queries count each minute's sample once.
+  `dashboards/temporal-cloud/temporal-overview.json` is vendored from grafana/jsonnet-libs (Apache-2.0) with a few
+  edits listed in the module README; repeat them when updating it.
 
 ## Grocery runs (Temporal; `app/backend/Features/GroceryList/Runs`, `app/backend/Infrastructure/Temporal`)
 

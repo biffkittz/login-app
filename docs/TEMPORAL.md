@@ -514,7 +514,8 @@ grocery runs aren't set up.
 | `infra/main.tf` | The Key Vault secret, the app's settings and each instance's task queue |
 | `infra/modules/observability/dashboards/nibbles-service.json` | The "Grocery runs (Temporal)" dashboard row |
 | `.github/workflows/app.yml` | Installs the Temporal CLI (hash-checked) so the workflow tests run in CI |
-| `.github/workflows/infra.yml`, `.github/scripts/terraform-plan.sh` | Pass `TEMPORAL_API_KEY` to plans |
+| `.github/workflows/infra.yml`, `.github/scripts/terraform-plan.sh` | Pass `TEMPORAL_API_KEY` (and `TEMPORAL_METRICS_API_KEY`) to plans |
+| `infra/modules/observability/` (`temporal_cloud_metrics`, `dashboards/temporal-cloud/`) | Prometheus' scrape of Temporal Cloud's metrics and the Temporal overview dashboard (with `temporal_metrics_api_key`) |
 
 ## 9. Testing
 
@@ -539,7 +540,10 @@ patched change, see [DEVELOPMENT.md](DEVELOPMENT.md#8-tests-and-quality-checks).
   poll for a few seconds; any task can go to either, and the sequence numbers make that harmless.
 - **Logs:** 7000 (worker polling), 7001 (worker failed, retrying), 5040-5047 (runs started, signals, transitions).
 - **Metrics:** the "Grocery runs (Temporal)" row of the *Service health* dashboard, from `nibbles_grocery_runs_*`, the
-  `temporal` health check, and the SDK's `temporal_*` metrics (slots, pollers, task latencies, failures).
+  `temporal` health check, and the SDK's `temporal_*` metrics (slots, pollers, task latencies, failures). With
+  `temporal_metrics_api_key`, the *Temporal overview* dashboard (Grafana's Temporal Cloud folder) adds Temporal
+  Cloud's side, `temporal_cloud_v1_*`: workflow outcomes and latencies, backlogs, pollers and actions per namespace,
+  about three minutes behind ([infra/docs/DEPLOYMENT.md](../infra/docs/DEPLOYMENT.md#temporal-cloud-metrics)).
 - **Changing the workflow:** guard behavior changes with `Workflow.Patched`, record new histories into a new folder,
   and keep the old ones until no run that used the old code can still be in flight (a run lasts at most about six
   hours).
