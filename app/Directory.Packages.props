@@ -7,7 +7,7 @@
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
 
     <!-- ASP.NET Core and EF Core packages must stay on the same patch as the shared framework (10.0.x). -->
-    <AspNetCoreVersion>10.0.14</AspNetCoreVersion>
+    <AspNetCoreVersion>11.0.0</AspNetCoreVersion>
     <EntityFrameworkCoreVersion>10.0.14</EntityFrameworkCoreVersion>
   </PropertyGroup>
 
