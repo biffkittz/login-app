@@ -1,5 +1,6 @@
 # Sending email from a Cloudflare zone through Cloudflare Email Service: the domain onboarded for Email Sending, the
-# recipients as verified destination addresses, and an account token that can use Email Sending and nothing else.
+# recipients as verified destination addresses, and account tokens that can use Email Sending and nothing else, one for
+# each sender (the app, Grafana).
 
 # Onboards the domain for Email Sending, so the app may send from addresses in it. Cloudflare creates and locks the DNS
 # records this needs, which stay outside Terraform: MX and SPF on cf-bounce.<domain> (bounces come back to Cloudflare
@@ -43,12 +44,15 @@ locals {
   }
 }
 
-# The app's own Cloudflare API token, limited to Email Sending. Cloudflare has nothing narrower that can send, so the
-# token can also manage sending domains, but nothing outside Email Sending. Account-owned, so it belongs to no
-# person's Cloudflare login and keeps working whoever leaves. Rotate it by replacing this resource.
+# A Cloudflare API token for each sender, limited to Email Sending. Cloudflare has nothing narrower that can send, so a
+# token can also manage sending domains, but nothing outside Email Sending. One each, so a leaked or retired token can
+# be revoked without stopping the other sender. Account-owned, so they belong to no person's Cloudflare login and keep
+# working whoever leaves. Rotate one by replacing its instance of this resource.
 resource "cloudflare_account_token" "this" {
+  for_each = var.tokens
+
   account_id = var.account_id
-  name       = var.token_name
+  name       = each.value
   policies = [{
     effect            = "allow"
     permission_groups = [{ id = try(local.permission_group.id, "") }]

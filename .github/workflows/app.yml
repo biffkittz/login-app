@@ -25,6 +25,7 @@ on:
       - ".github/workflows/app.yml"
       - ".github/actions/build-and-scan-image/**"
       - ".github/scripts/propose-deploy.sh"
+      - ".github/scripts/npm-audit.sh"
   workflow_dispatch:
 
 permissions:
@@ -63,7 +64,7 @@ jobs:
         id: diff
         run: >-
           bash .github/scripts/changed-areas.sh app
-          '^(app/|global\.json$|dotnet-tools\.json$|\.github/workflows/app\.yml$|\.github/actions/build-and-scan-image/|\.github/scripts/propose-deploy\.sh$)'
+          '^(app/|global\.json$|dotnet-tools\.json$|\.github/workflows/app\.yml$|\.github/actions/build-and-scan-image/|\.github/scripts/(propose-deploy|npm-audit)\.sh$)'
 
   backend:
     name: Backend (build, tests, vulnerable packages)
@@ -155,8 +156,10 @@ jobs:
         run: npm run type-check
       - name: Test
         run: npm test
+      # High and critical advisories fail, except those accepted in app/frontend/audit-exceptions.json, each with why it
+      # can't affect the app and an expiry date (docs/CI_CD.md). npm audit itself can only lower the threshold.
       - name: No known-vulnerable runtime dependencies
-        run: npm audit --omit=dev --audit-level=high
+        run: bash ../../.github/scripts/npm-audit.sh
 
   image:
     name: Image (build and scan, not pushed)

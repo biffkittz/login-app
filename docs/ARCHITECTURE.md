@@ -309,6 +309,8 @@ sequenceDiagram
 
 ### Grocery runs
 
+(How Temporal works and how this workflow is built on it, file by file: [TEMPORAL.md](TEMPORAL.md).)
+
 "Speak now or forever hold your peace." Someone about to go shopping taps **Start grocery run** and picks how long
 last call lasts (`GroceryRuns:LastCallMinutes`: 15 minutes, 30 minutes, 1 hour or 2 hours). Everyone else who has the
 list open gets a banner with the countdown and an **I'm good** button. Until last call ends, items can be added and
@@ -501,7 +503,10 @@ signing in with HTTP Basic authentication (`Telemetry:OtlpUsername`, `Telemetry:
 letting Prometheus scrape a `/metrics` endpoint, needs no second port and no public endpoint: the app's only port faces
 Cloudflare, which would serve `/metrics` to anyone. Every metric carries `site` (`Telemetry:Site`, the instance's host
 name), and each process is its own `instance` (the replica's host name), so instances and overlapping revisions never
-mix. Prometheus, Grafana and the dashboards are infrastructure: [infra/docs/ARCHITECTURE.md](../infra/docs/ARCHITECTURE.md#observability-prometheus-and-grafana).
+mix. Prometheus, Grafana, the dashboards and the alert rules are infrastructure: [infra/docs/ARCHITECTURE.md](../infra/docs/ARCHITECTURE.md#observability-prometheus-and-grafana).
+The dashboards (`infra/modules/observability/dashboards`) and the alerts (`infra/modules/observability/alerting.tf`)
+query the names below, `nibbles_health_status` and the HTTP, Kestrel and Temporal ones among them: renaming an
+instrument means updating its queries in both.
 
 The app's own meter, `Nibbles` (`Infrastructure/Telemetry/ApplicationMeter.cs`), has these instruments, shown here as
 Prometheus stores them:
@@ -537,6 +542,11 @@ Temporal Cloud and their failures (`temporal_request_total`, `temporal_request_f
 task latencies (`temporal_workflow_task_execution_latency_seconds`, `temporal_activity_execution_latency_seconds`, and
 their schedule-to-start waits), and failed activities (`temporal_activity_execution_failed_total`). Their labels are the
 namespace, task queue, workflow and activity types and RPC operation names: fixed values too.
+
+Temporal Cloud's own metrics (`temporal_cloud_v1_*`: the server's view of every namespace in the account, such as
+workflow outcomes, backlogs and actions) aren't the app's: with `temporal_metrics_api_key`, Prometheus scrapes them
+from Temporal Cloud, and Grafana's Temporal Cloud folder shows them
+([infra/docs/ARCHITECTURE.md](../infra/docs/ARCHITECTURE.md#observability-prometheus-and-grafana)).
 
 ## Frontend
 

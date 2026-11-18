@@ -783,6 +783,14 @@ run "prometheus_is_internal_single_writer_and_receives_otlp" {
     condition     = output.otlp_metrics_endpoint == "https://ca-loginapp-test-prometheus.internal.mockdomain-1a2b3c4d.eastus.azurecontainerapps.io/api/v1/otlp/v1/metrics"
     error_message = "The app pushes to Prometheus' OTLP receiver at its internal address."
   }
+
+  assert {
+    condition = (
+      !contains([for job in yamldecode(local.prometheus_config).scrape_configs : job.job_name], "temporal-cloud") &&
+      !contains([for secret in azurerm_container_app.prometheus.secret : secret.name], "temporal-cloud-api-key")
+    )
+    error_message = "Without temporal_cloud_metrics, Prometheus must neither scrape Temporal Cloud nor hold its key."
+  }
 }
 
 run "grafana_is_behind_cloudflare_and_signs_in_with_github_only" {
@@ -870,9 +878,43 @@ run "grafana_is_behind_cloudflare_and_signs_in_with_github_only" {
   assert {
     condition = (
       length(local.grafana_dashboards) == length(fileset("./modules/observability/dashboards", "*.json")) &&
-      alltrue([for name in keys(local.grafana_dashboards) : startswith(name, "GRAFANA_DASHBOARD_JSON_")])
+      alltrue([for name in keys(local.grafana_dashboards) : startswith(name, "GRAFANA_DASHBOARD_JSON_NIBBLES__")])
     )
-    error_message = "Every dashboard in modules/observability/dashboards must reach Grafana."
+    error_message = "Every dashboard in modules/observability/dashboards must reach Grafana's Nibbles folder."
+  }
+
+  assert {
+    condition = (
+      [for provider in yamldecode(local.grafana_dashboard_providers).providers : provider.folder] == ["Nibbles"] &&
+      yamldecode(local.grafana_dashboard_providers).providers[0].options.path == "/etc/grafana/provisioning/dashboards-json/nibbles"
+    )
+    error_message = "Without temporal_cloud_metrics, Grafana must have the Nibbles folder only, read from its own directory."
+  }
+
+  assert {
+    condition     = alltrue([for provider in yamldecode(local.grafana_dashboard_providers).providers : !can(provider.folderUid)])
+    error_message = "Dashboard providers must find their folder by title, as alert rules do: Grafana provisions alerting first, and a folderUid would then make a second folder of the same title on a new database."
+  }
+
+  assert {
+    condition = (
+      length(local.grafana_smtp_environment) == 0 &&
+      !contains([for secret in azurerm_container_app.grafana.secret : secret.name], "smtp-password") &&
+      !contains([for env in azurerm_container_app.grafana.template[0].container[0].env : env.name], "GF_SMTP_PASSWORD")
+    )
+    error_message = "Without grafana_alerting, Grafana must get no SMTP settings or password."
+  }
+
+  assert {
+    condition = (
+      !can(yamldecode(local.grafana_alerting_provisioning).groups) &&
+      !can(yamldecode(local.grafana_alerting_provisioning).contactPoints) &&
+      yamldecode(local.grafana_alerting_provisioning).resetPolicies == [1] &&
+      yamldecode(local.grafana_alerting_provisioning).deleteContactPoints == [{ orgId = 1, uid = "email" }] &&
+      toset([for rule in yamldecode(local.grafana_alerting_provisioning).deleteRules : rule.uid]) == toset(flatten([for group in values(local.grafana_alert_groups) : keys(group.rules)])) &&
+      one([for env in azurerm_container_app.grafana.template[0].init_container[0].env : env.value if env.name == "GRAFANA_ALERTING"]) == local.grafana_alerting_provisioning
+    )
+    error_message = "Without grafana_alerting, the alerting file must remove every rule, the contact point and the policy an earlier configuration provisioned."
   }
 
   assert {
@@ -889,6 +931,291 @@ run "grafana_is_behind_cloudflare_and_signs_in_with_github_only" {
       for volume in azurerm_container_app.grafana.template[0].volume : volume.storage_type if volume.name == "data"
     ]) == "NfsAzureFile"
     error_message = "Grafana's database must be on the NFS share."
+  }
+}
+
+run "grafana_emails_alerts_through_cloudflare_smtp" {
+  command = apply
+
+  module {
+    source = "./modules/observability"
+  }
+
+  variables {
+    subscription_id                          = "00000000-0000-0000-0000-000000000000"
+    container_app_environment_id             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.App/managedEnvironments/cae-test"
+    container_app_environment_default_domain = "mockdomain-1a2b3c4d.eastus.azurecontainerapps.io"
+    container_apps_subnet_id                 = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.Network/virtualNetworks/vnet/subnets/snet-aca"
+    storage_account_name                     = "stloginapptestabc123"
+    images = {
+      prometheus             = "quay.io/prometheus/prometheus@sha256:fa3302279710be2f21a8301ec17a8b4f2301fd829bd113839b3b6b02b6f191a2"
+      azure_metrics_exporter = "quay.io/webdevops/azure-metrics-exporter@sha256:0f26a275e593538983a13c9ebb9d229e296524a3f292e684666667f24eae2b76"
+      grafana                = "docker.io/grafana/grafana@sha256:0615ec4fbd4072004b7d86b46ded63013a74b7d6eb1119273dd89e8fa25c13cf"
+      init                   = "mcr.microsoft.com/azurelinux/base/core@sha256:88fc2b4a425801b3b4d8fe5342e24fb6134669fb718ec970340bdd36dee50c35"
+    }
+    prometheus_app_name = "ca-loginapp-test-prometheus"
+    prometheus_identity = {
+      id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-prometheus"
+      principal_id = "44444444-4444-4444-4444-444444444444"
+      client_id    = "55555555-5555-5555-5555-555555555555"
+    }
+    prometheus_secret_ids = {
+      web_config           = "https://kv-test.vault.azure.net/secrets/prometheus-web-config"
+      self_scrape_password = "https://kv-test.vault.azure.net/secrets/prometheus-self-scrape-password"
+    }
+    monitored_resource_group_id    = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test"
+    monitored_postgresql_server_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.DBforPostgreSQL/flexibleServers/psql-test"
+    grafana_app_name               = "ca-loginapp-test-grafana"
+    grafana_identity_id            = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-grafana"
+    grafana_hostname               = "grafana.example.com"
+    grafana_exposed_port           = 8445
+    grafana_ingress_allowed_cidrs  = { cloudflare-0 = "173.245.48.0/20", cloudflare-1 = "103.21.244.0/22" }
+    grafana_github_client_id       = "Ov23liAbCdEfGhIjKlMn"
+    grafana_github_admins          = ["octocat"]
+    grafana_github_viewers         = ["hubot"]
+    grafana_secret_ids = {
+      github_client_secret = "https://kv-test.vault.azure.net/secrets/grafana-github-client-secret"
+      secret_key           = "https://kv-test.vault.azure.net/secrets/grafana-secret-key"
+      prometheus_password  = "https://kv-test.vault.azure.net/secrets/prometheus-grafana-password"
+      origin_certificate   = "https://kv-test.vault.azure.net/secrets/app-example-com-origin"
+    }
+    grafana_alerting = {
+      recipients              = ["owner@example.com", "second@example.org"]
+      sender_address          = "alerts@example.com"
+      smtp_password_secret_id = "https://kv-test.vault.azure.net/secrets/grafana-smtp-password"
+    }
+  }
+
+  assert {
+    condition = (
+      local.grafana_smtp_environment["GF_SMTP_ENABLED"] == "true" &&
+      local.grafana_smtp_environment["GF_SMTP_HOST"] == "smtp.mx.cloudflare.net:465" &&
+      local.grafana_smtp_environment["GF_SMTP_USER"] == "api_token" &&
+      local.grafana_smtp_environment["GF_SMTP_FROM_ADDRESS"] == "alerts@example.com" &&
+      local.grafana_smtp_environment["GF_SMTP_FROM_NAME"] == "Nibbles Grafana" &&
+      !contains(keys(local.grafana_smtp_environment), "GF_SMTP_SKIP_VERIFY") &&
+      alltrue([for name, value in local.grafana_smtp_environment : one([for env in azurerm_container_app.grafana.template[0].container[0].env : env.value if env.name == name]) == value])
+    )
+    error_message = "Grafana must send through Cloudflare's SMTP on 465 (TLS from the start, certificate checked) as user api_token, from the given address."
+  }
+
+  assert {
+    condition = (
+      one([for secret in azurerm_container_app.grafana.secret : secret.key_vault_secret_id if secret.name == "smtp-password"]) == "https://kv-test.vault.azure.net/secrets/grafana-smtp-password" &&
+      one([for env in azurerm_container_app.grafana.template[0].container[0].env : env.secret_name if env.name == "GF_SMTP_PASSWORD"]) == "smtp-password" &&
+      !contains([for env in azurerm_container_app.grafana.template[0].init_container[0].env : env.name], "GF_SMTP_PASSWORD")
+    )
+    error_message = "The SMTP password (Cloudflare's token) must come from Key Vault, to Grafana alone."
+  }
+
+  assert {
+    condition = (
+      yamldecode(local.grafana_alerting_provisioning).contactPoints[0].receivers[0].type == "email" &&
+      yamldecode(local.grafana_alerting_provisioning).contactPoints[0].receivers[0].settings.addresses == "owner@example.com;second@example.org" &&
+      yamldecode(local.grafana_alerting_provisioning).contactPoints[0].receivers[0].settings.singleEmail &&
+      yamldecode(local.grafana_alerting_provisioning).policies[0].receiver == yamldecode(local.grafana_alerting_provisioning).contactPoints[0].name &&
+      !can(yamldecode(local.grafana_alerting_provisioning).resetPolicies)
+    )
+    error_message = "Every alert must go to the recipients, in one email, through the provisioned policy."
+  }
+
+  assert {
+    condition = (
+      alltrue(flatten([
+        for group in yamldecode(local.grafana_alerting_provisioning).groups : [
+          for rule in group.rules : (
+            can(regex("^[a-z0-9-]{1,40}$", rule.uid)) &&
+            rule.data[0].datasourceUid == yamldecode(local.grafana_datasources).datasources[0].uid &&
+            rule.data[0].model.instant &&
+            rule.condition == "B" && rule.data[1].model.type == "math" &&
+            rule.noDataState == "OK" && rule.execErrState == "Error" &&
+            tonumber(trimsuffix(rule.for, "m")) >= 5 &&
+            contains(["critical", "warning"], rule.labels.severity) &&
+            !strcontains(jsonencode([group.name, group.folder, rule.title, rule.labels]), "$")
+          )
+        ]
+      ])) &&
+      length(distinct(flatten([for group in yamldecode(local.grafana_alerting_provisioning).groups : [for rule in group.rules : rule.uid]]))) == length(flatten([for group in yamldecode(local.grafana_alerting_provisioning).groups : group.rules]))
+    )
+    error_message = "Each rule needs a unique UID (Grafana allows 40 characters), an instant query on the Prometheus data source, a severity, no alert on missing data, and a pending period of 5 minutes or more (a Prometheus restart mustn't email). Grafana expands $ in titles, labels and folder names, so they mustn't contain one."
+  }
+
+  assert {
+    condition = (
+      toset([for group in yamldecode(local.grafana_alerting_provisioning).groups : group.folder]) == toset(["Nibbles"]) &&
+      toset([for rule in yamldecode(local.grafana_alerting_provisioning).deleteRules : rule.uid]) == toset(keys(local.grafana_alert_groups["temporal-cloud"].rules)) &&
+      length(output.grafana_alert_rules) == length(flatten([for group in yamldecode(local.grafana_alerting_provisioning).groups : group.rules]))
+    )
+    error_message = "Without temporal_cloud_metrics, the rules must stay in the Nibbles folder (a dashboard folder, so none is created beside it), and Temporal Cloud's rules must be removed."
+  }
+}
+
+run "grafana_alerting_needs_a_recipient" {
+  command = plan
+
+  module {
+    source = "./modules/observability"
+  }
+
+  variables {
+    subscription_id                          = "00000000-0000-0000-0000-000000000000"
+    container_app_environment_id             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.App/managedEnvironments/cae-test"
+    container_app_environment_default_domain = "mockdomain-1a2b3c4d.eastus.azurecontainerapps.io"
+    container_apps_subnet_id                 = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.Network/virtualNetworks/vnet/subnets/snet-aca"
+    storage_account_name                     = "stloginapptestabc123"
+    images = {
+      prometheus             = "quay.io/prometheus/prometheus@sha256:fa3302279710be2f21a8301ec17a8b4f2301fd829bd113839b3b6b02b6f191a2"
+      azure_metrics_exporter = "quay.io/webdevops/azure-metrics-exporter@sha256:0f26a275e593538983a13c9ebb9d229e296524a3f292e684666667f24eae2b76"
+      grafana                = "docker.io/grafana/grafana@sha256:0615ec4fbd4072004b7d86b46ded63013a74b7d6eb1119273dd89e8fa25c13cf"
+      init                   = "mcr.microsoft.com/azurelinux/base/core@sha256:88fc2b4a425801b3b4d8fe5342e24fb6134669fb718ec970340bdd36dee50c35"
+    }
+    prometheus_app_name = "ca-loginapp-test-prometheus"
+    prometheus_identity = {
+      id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-prometheus"
+      principal_id = "44444444-4444-4444-4444-444444444444"
+      client_id    = "55555555-5555-5555-5555-555555555555"
+    }
+    prometheus_secret_ids = {
+      web_config           = "https://kv-test.vault.azure.net/secrets/prometheus-web-config"
+      self_scrape_password = "https://kv-test.vault.azure.net/secrets/prometheus-self-scrape-password"
+    }
+    monitored_resource_group_id    = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test"
+    monitored_postgresql_server_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.DBforPostgreSQL/flexibleServers/psql-test"
+    grafana_app_name               = "ca-loginapp-test-grafana"
+    grafana_identity_id            = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-grafana"
+    grafana_hostname               = "grafana.example.com"
+    grafana_exposed_port           = 8445
+    grafana_ingress_allowed_cidrs  = { cloudflare-0 = "173.245.48.0/20", cloudflare-1 = "103.21.244.0/22" }
+    grafana_github_client_id       = "Ov23liAbCdEfGhIjKlMn"
+    grafana_github_admins          = ["octocat"]
+    grafana_github_viewers         = ["hubot"]
+    grafana_secret_ids = {
+      github_client_secret = "https://kv-test.vault.azure.net/secrets/grafana-github-client-secret"
+      secret_key           = "https://kv-test.vault.azure.net/secrets/grafana-secret-key"
+      prometheus_password  = "https://kv-test.vault.azure.net/secrets/prometheus-grafana-password"
+      origin_certificate   = "https://kv-test.vault.azure.net/secrets/app-example-com-origin"
+    }
+    grafana_alerting = {
+      recipients              = []
+      sender_address          = "alerts@example.com"
+      smtp_password_secret_id = "https://kv-test.vault.azure.net/secrets/grafana-smtp-password"
+    }
+  }
+
+  expect_failures = [var.grafana_alerting]
+}
+
+run "prometheus_scrapes_temporal_cloud_with_a_key_of_its_own" {
+  command = apply
+
+  module {
+    source = "./modules/observability"
+  }
+
+  variables {
+    subscription_id                          = "00000000-0000-0000-0000-000000000000"
+    container_app_environment_id             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.App/managedEnvironments/cae-test"
+    container_app_environment_default_domain = "mockdomain-1a2b3c4d.eastus.azurecontainerapps.io"
+    container_apps_subnet_id                 = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.Network/virtualNetworks/vnet/subnets/snet-aca"
+    storage_account_name                     = "stloginapptestabc123"
+    images = {
+      prometheus             = "quay.io/prometheus/prometheus@sha256:fa3302279710be2f21a8301ec17a8b4f2301fd829bd113839b3b6b02b6f191a2"
+      azure_metrics_exporter = "quay.io/webdevops/azure-metrics-exporter@sha256:0f26a275e593538983a13c9ebb9d229e296524a3f292e684666667f24eae2b76"
+      grafana                = "docker.io/grafana/grafana@sha256:0615ec4fbd4072004b7d86b46ded63013a74b7d6eb1119273dd89e8fa25c13cf"
+      init                   = "mcr.microsoft.com/azurelinux/base/core@sha256:88fc2b4a425801b3b4d8fe5342e24fb6134669fb718ec970340bdd36dee50c35"
+    }
+    prometheus_app_name = "ca-loginapp-test-prometheus"
+    prometheus_identity = {
+      id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-prometheus"
+      principal_id = "44444444-4444-4444-4444-444444444444"
+      client_id    = "55555555-5555-5555-5555-555555555555"
+    }
+    prometheus_secret_ids = {
+      web_config           = "https://kv-test.vault.azure.net/secrets/prometheus-web-config"
+      self_scrape_password = "https://kv-test.vault.azure.net/secrets/prometheus-self-scrape-password"
+    }
+    monitored_resource_group_id    = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test"
+    monitored_postgresql_server_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.DBforPostgreSQL/flexibleServers/psql-test"
+    grafana_app_name               = "ca-loginapp-test-grafana"
+    grafana_identity_id            = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-grafana"
+    grafana_hostname               = "grafana.example.com"
+    grafana_exposed_port           = 8445
+    grafana_github_client_id       = "Ov23liAbCdEfGhIjKlMn"
+    grafana_github_admins          = ["octocat"]
+    grafana_secret_ids = {
+      github_client_secret = "https://kv-test.vault.azure.net/secrets/grafana-github-client-secret"
+      secret_key           = "https://kv-test.vault.azure.net/secrets/grafana-secret-key"
+      prometheus_password  = "https://kv-test.vault.azure.net/secrets/prometheus-grafana-password"
+      origin_certificate   = "https://kv-test.vault.azure.net/secrets/app-example-com-origin"
+    }
+    temporal_cloud_metrics = {
+      api_key_secret_id = "https://kv-test.vault.azure.net/secrets/temporal-metrics-api-key"
+    }
+    grafana_alerting = {
+      recipients              = ["owner@example.com"]
+      sender_address          = "alerts@example.com"
+      smtp_password_secret_id = "https://kv-test.vault.azure.net/secrets/grafana-smtp-password"
+    }
+  }
+
+  assert {
+    condition = one([
+      for job in yamldecode(local.prometheus_config).scrape_configs : (
+        job.scheme == "https" &&
+        job.metrics_path == "/v1/metrics" &&
+        job.static_configs[0].targets == ["metrics.temporal.io"] &&
+        job.authorization.type == "Bearer" &&
+        job.authorization.credentials_file == "/etc/prometheus/config/temporal-cloud-api-key" &&
+        !can(job.params)
+      ) if job.job_name == "temporal-cloud"
+    ])
+    error_message = "Prometheus must scrape https://metrics.temporal.io/v1/metrics with the key as a Bearer token, for every namespace (no filter)."
+  }
+
+  assert {
+    condition = one([
+      for job in yamldecode(local.prometheus_config).scrape_configs : (
+        job.honor_timestamps == true && job.scrape_interval == "30s"
+      ) if job.job_name == "temporal-cloud"
+    ])
+    error_message = "Temporal Cloud's samples must keep their own (three-minute-old) timestamps, scraped every 30 seconds: 120 of the account's 180 scrapes an hour, and no minute missed."
+  }
+
+  assert {
+    condition = (
+      one([for secret in azurerm_container_app.prometheus.secret : secret.key_vault_secret_id if secret.name == "temporal-cloud-api-key"]) == "https://kv-test.vault.azure.net/secrets/temporal-metrics-api-key" &&
+      one([for env in azurerm_container_app.prometheus.template[0].init_container[0].env : env.secret_name if env.name == "TEMPORAL_CLOUD_API_KEY"]) == "temporal-cloud-api-key" &&
+      alltrue([for container in azurerm_container_app.prometheus.template[0].container : !contains([for env in container.env : env.name], "TEMPORAL_CLOUD_API_KEY")])
+    )
+    error_message = "The key must come from Key Vault, and only the init container (which writes its file) may see it."
+  }
+
+  assert {
+    condition = (
+      [for provider in yamldecode(local.grafana_dashboard_providers).providers : provider.folder] == ["Nibbles", "Temporal Cloud"] &&
+      [for provider in yamldecode(local.grafana_dashboard_providers).providers : provider.options.path] == ["/etc/grafana/provisioning/dashboards-json/nibbles", "/etc/grafana/provisioning/dashboards-json/temporal-cloud"] &&
+      contains(keys(local.grafana_dashboards), "GRAFANA_DASHBOARD_JSON_TEMPORAL_CLOUD__TEMPORAL_OVERVIEW") &&
+      length(local.grafana_dashboards) == length(fileset("./modules/observability/dashboards", "*.json")) + length(fileset("./modules/observability/dashboards/temporal-cloud", "*.json"))
+    )
+    error_message = "Grafana must show the Temporal Cloud dashboards in a folder of their own, beside the Nibbles folder, each read from its own directory."
+  }
+
+  assert {
+    condition = (
+      local.temporal_cloud_enabled &&
+      !strcontains(file("./modules/observability/dashboards/temporal-cloud/temporal-overview.json"), "storage.googleapis.com") &&
+      one([for variable in jsondecode(file("./modules/observability/dashboards/temporal-cloud/temporal-overview.json")).templating.list : variable.current.value if variable.name == "datasource"]) == "prometheus"
+    )
+    error_message = "The vendored Temporal dashboard must not load its logo from Google, and must default to our Prometheus data source (see the module README when updating it)."
+  }
+
+  assert {
+    condition = (
+      toset([for group in yamldecode(local.grafana_alerting_provisioning).groups : group.folder]) == toset([for provider in yamldecode(local.grafana_dashboard_providers).providers : provider.folder]) &&
+      one([for group in yamldecode(local.grafana_alerting_provisioning).groups : [for rule in group.rules : rule.uid] if group.folder == "Temporal Cloud"]) == keys(local.grafana_alert_groups["temporal-cloud"].rules) &&
+      length(yamldecode(local.grafana_alerting_provisioning).deleteRules) == 0
+    )
+    error_message = "With temporal_cloud_metrics, Temporal Cloud's rules must join its dashboard folder, and no rule be removed."
   }
 }
 

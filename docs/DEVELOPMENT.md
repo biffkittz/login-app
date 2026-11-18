@@ -317,7 +317,7 @@ npm run test          # Vitest, single run (npm run test:unit watches)
 npm run type-check    # vue-tsc, strict mode, including the tests
 npm run lint          # oxlint, then ESLint (auto-fixes what it can)
 npm run format        # Prettier
-npm audit --omit=dev  # vulnerabilities in what ships to browsers
+bash ../../.github/scripts/npm-audit.sh  # CI's audit: runtime dependencies, minus accepted advisories (docs/CI_CD.md)
 ```
 
 **What the tests cover**

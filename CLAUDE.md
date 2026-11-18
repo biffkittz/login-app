@@ -8,7 +8,8 @@ independent instance of the same image runs at https://grocery.biffkittz.com, wi
 
 - `app/`: ASP.NET Core 10 API + Vue 3 SPA in one container. See `app/CLAUDE.md`.
 - `infra/`: Terraform for Azure and Cloudflare. See `infra/CLAUDE.md`.
-- `docs/`: app docs (DEVELOPMENT, BUILD_AND_DEPLOY, ARCHITECTURE). `infra/docs/` has the infrastructure docs.
+- `docs/`: app docs (DEVELOPMENT, BUILD_AND_DEPLOY, ARCHITECTURE, DATABASE, TEMPORAL, TEMPORAL_WORKER).
+  `infra/docs/` has the infrastructure docs. A schema change (new migration) updates `docs/DATABASE.md` too.
 
 ## Ground rules
 
@@ -47,10 +48,21 @@ independent instance of the same image runs at https://grocery.biffkittz.com, wi
   endpoint, and the app's one port stays Cloudflare's. Prometheus has internal ingress only; Grafana is public at
   grafana.biffkittz.com (Cloudflare, TCP ingress on 8445) with GitHub sign-in only, for usernames listed in Terraform.
 - Metric labels carry fixed values only: never a user, item name, email address or other personal data.
-- The dashboards (`infra/modules/observability/dashboards/*.json`) query the metric names in docs/ARCHITECTURE.md
-  ("Metrics"): rename an instrument and its queries together.
+- The dashboards (`infra/modules/observability/dashboards/*.json`) and the alert rules
+  (`infra/modules/observability/alerting.tf`) query the metric names in docs/ARCHITECTURE.md ("Metrics"): rename an
+  instrument and its queries together.
 - Prometheus and Grafana keep their data on an NFS share (Container Apps can't mount disks); exactly one Prometheus
   writes it. Images are pinned by digest; Dependabot can't update them.
+- With `temporal_metrics_api_key` (a Metrics Read-Only service account's key, not the app's), Prometheus scrapes
+  Temporal Cloud's metrics (metrics.temporal.io, every namespace in the account) every 30 s with `honor_timestamps`:
+  Temporal allows 180 scrapes an hour per account, and the dashboard's queries count each minute's sample once.
+  `dashboards/temporal-cloud/temporal-overview.json` is vendored from grafana/jsonnet-libs (Apache-2.0) with a few
+  edits listed in the module README; repeat them when updating it.
+- With `grafana_alert_recipients`, Grafana emails alerts from alerts@biffkittz.com through Cloudflare Email Service's
+  SMTP, with a Cloudflare token of its own (module `email-sending`, one token per sender). Cloudflare only sends from
+  biffkittz.com. The rules are provisioned (UI-read-only); to remove one, move its UID to
+  `grafana_retired_alert_rule_uids`, since Grafana keeps a rule that merely leaves the file. Every rule's `for` stays at
+  5 minutes or more, so a Prometheus restart doesn't email.
 
 ## Grocery runs (Temporal; `app/backend/Features/GroceryList/Runs`, `app/backend/Infrastructure/Temporal`)
 
@@ -74,6 +86,9 @@ independent instance of the same image runs at https://grocery.biffkittz.com, wi
   Workflows run repository scripts as `bash .github/scripts/<name>.sh`, so a lost executable bit can't break CI
   (a file written by a tool or edited on Windows is committed as 644).
 - The repository is public, so are its logs: never print Terraform plan values, outputs or secrets.
+- The frontend audit (`.github/scripts/npm-audit.sh`) fails on high or critical advisories against runtime
+  dependencies. Accept one only with the user's agreement, in `app/frontend/audit-exceptions.json`: one advisory and
+  package, why it can't affect the app, and an expiry at most 92 days away. Never raise the threshold.
 - Releases are a pull request that sets `app_image_tag` (opened by the app workflow); applies only run from `main`
   after approval in `demo`. Don't add a path that deploys around Terraform.
 

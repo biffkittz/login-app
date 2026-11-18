@@ -47,3 +47,10 @@ output "share_name" {
   description = "Name of the NFS share (directories prometheus/ and grafana/)."
   value       = azurerm_storage_share.this.name
 }
+
+output "grafana_alert_rules" {
+  description = "The alert rules Grafana evaluates, as \"<folder> / <group>: <title>\"; empty while grafana_alerting is null."
+  value = flatten([
+    for group in local.grafana_alert_rule_groups : [for rule in group.rules : "${group.folder} / ${group.name}: ${rule.title}"]
+  ])
+}

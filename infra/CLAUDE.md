@@ -82,8 +82,9 @@ generated secrets and the Cloudflare records. Modules: `networking`, `registry`,
   their host name. Exposed ports must be unique (two TCP apps can't share one). After adding an instance, the
   bootstrap job must run again (it grants per database). The `moved` blocks in `main.tf` keep the pre-instance
   addresses of the main app and DNS record; keep them.
-- **Registration emails** go through Cloudflare Email Service (`module.email_sending`): biffkittz.com onboarded for
-  Email Sending (Cloudflare adds and locks `cf-bounce` MX/SPF, DKIM and `_dmarc` records itself; the domain's MXroute
+- **Registration emails** (and Grafana's alerts) go through Cloudflare Email Service (`module.email_sending`, one
+  account token per sender in `tokens`: `app`, `grafana`; a `moved` block keeps the app's pre-map address):
+  biffkittz.com onboarded for Email Sending (Cloudflare adds and locks `cf-bounce` MX/SPF, DKIM and `_dmarc` records itself; the domain's MXroute
   MX and SPF records are not ours, don't touch them), the recipients as verified destination addresses (each confirms
   Cloudflare's link once), and an account-owned token that reaches the app as `Email--ApiToken`. That token holds
   Email Sending Write, the narrowest group that can send (it also manages sending domains). The deploying Cloudflare
@@ -104,7 +105,16 @@ generated secrets and the Cloudflare records. Modules: `networking`, `registry`,
   subnet). A new Prometheus revision waits for the old one's database lock, which is why its probes watch the exporter's
   port (8080): don't point them at 9090. On NFS, flock() is an fcntl lock: busybox's flock opens files read-only, so
   only `flock -s` works there (an exclusive attempt fails with EBADF). Config reaches the containers as environment variables that init containers
-  write to disk; dashboards are `modules/observability/dashboards/*.json` (gzip+Base64, one variable each). Images
+  write to disk; dashboards are `modules/observability/dashboards/*.json` (Grafana folder Nibbles) and
+  `dashboards/temporal-cloud/*.json` (folder Temporal Cloud, only with `temporal_metrics_api_key`), gzip+Base64, one
+  variable each (`GRAFANA_DASHBOARD_JSON_<FOLDER>__<NAME>`), one provider per folder in sibling directories (providers
+  read their paths recursively), finding their folder by title: alerting is provisioned first, and a `folderUid` would
+duplicate a folder on a new database. Alerting (`modules/observability/alerting.tf`, with `grafana_alert_recipients`):
+rules in those folders, an email contact point and the policy, in one file the init container writes; with alerting off
+the file deletes what was provisioned, and retired rules' UIDs go in `grafana_retired_alert_rule_uids`. Grafana sends
+over Cloudflare's SMTP (`smtp.mx.cloudflare.net:465`, user `api_token`) with its own token
+(`module.email_sending[0].cloudflare_account_token.this["grafana"]`, Key Vault `grafana-smtp-password`). Temporal Cloud's key (`temporal_metrics_api_key`, Key Vault
+  `temporal-metrics-api-key`) reaches only Prometheus' init container, which writes it to a file. Images
   are pinned by digest (`observability_images`); keep the digest form. The CI deploy identity may assign Monitoring
   Reader only because `scripts/setup-github-oidc.sh` lists it: a new role Terraform assigns needs adding there too.
 - **Grocery runs** (`temporal_namespace`, `temporal_api_key`, optional `temporal_address`): Temporal Cloud is created by

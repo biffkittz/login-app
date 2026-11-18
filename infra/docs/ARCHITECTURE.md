@@ -70,7 +70,10 @@ flowchart LR
   app["App instances"] -->|"OTLP over HTTPS (internal)"| prom["ca-loginapp-demo-prometheus<br/>internal ingress :9090<br/>+ Azure Monitor exporter"]
   grafana -->|"PromQL over HTTPS (internal)"| prom
   prom -->|"Monitoring Reader"| monitor[Azure Monitor metrics]
+  prom -->|"HTTPS, Metrics Read-Only key<br/>(with temporal_metrics_api_key)"| tcm["Temporal Cloud metrics<br/>metrics.temporal.io"]
   prom & grafana --> nfs[("Premium NFS share<br/>prometheus/ and grafana/")]
+  grafana -->|"SMTP :465, alerts<br/>(with grafana_alert_recipients)"| mail["Cloudflare Email Service<br/>alerts@biffkittz.com"]
+  mail --> inbox([Recipients' inboxes])
 ```
 
 | Component | Resource | Purpose |
@@ -82,7 +85,7 @@ flowchart LR
 | Secrets | Key Vault (RBAC) | A connection string per instance; the JWT signing key, Gemini API key, database passwords and TLS certificate, shared by the instances |
 | Images | Azure Container Registry (Basic) | The app's images |
 | Observability | Log Analytics workspace; with `observability_enabled`, Prometheus and Grafana as Container Apps and a Premium FileStorage account with an NFS share | Container logs and Key Vault audit events; the app's metrics (pushed over OTLP) and Azure's platform metrics, in dashboards at grafana.biffkittz.com |
-| Email | Cloudflare Email Service: `biffkittz.com` onboarded for Email Sending, the recipients as verified destination addresses, an account token for Email Sending | Emails `registration_notification_recipients` from notifications@biffkittz.com whenever someone registers on either instance |
+| Email | Cloudflare Email Service: `biffkittz.com` onboarded for Email Sending, the recipients as verified destination addresses, an account token for Email Sending per sender | Emails `registration_notification_recipients` from notifications@biffkittz.com whenever someone registers on either instance; Grafana emails `grafana_alert_recipients` from alerts@biffkittz.com ([Alerts](#alerts)) |
 | Workflows | Temporal Cloud namespace (`temporal_namespace`, created by hand; outside Azure and Terraform) | Runs grocery runs. Each app instance runs its own Temporal worker in-process, on a task queue of its own (`nibbles-<instance>`), and connects out on port 7233 with an API key from Key Vault |
 
 ## Request path
@@ -149,8 +152,8 @@ Container App or job first needs them. A system-assigned identity only exists on
 | | Key Vault Secrets User | secrets `ConnectionStrings--DefaultConnection`, `grocery-db-connection-string`, `Jwt--SigningKey`, `ImageGeneration--ApiKey` (with a Gemini key), `Email--ApiToken` (with registration emails), `Telemetry--OtlpPassword` (with observability), `Temporal--ApiKey` (with grocery runs), and the certificate's secret | Its secrets and its TLS certificate, nothing else. Both instances run as this identity |
 | `id-loginapp-demo-dbinit` (bootstrap job) | Key Vault Secrets User | secrets `postgresql-admin-password` and `postgresql-app-password` | The only identity that can read the administrator password |
 | `id-loginapp-demo-prometheus` (with observability) | Monitoring Reader | the resource group | The Azure Monitor exporter reads platform metrics (replicas, restarts, CPU, memory, the database) |
-| | Key Vault Secrets User | secrets `prometheus-web-config`, `prometheus-self-scrape-password` | Its users' password hashes and its own scrape password |
-| `id-loginapp-demo-grafana` (with observability) | Key Vault Secrets User | secrets `grafana-github-client-secret`, `grafana-secret-key`, `prometheus-grafana-password`, and the certificate's secret | GitHub sign-in, its encryption key, its Prometheus user, and the TLS certificate it serves |
+| | Key Vault Secrets User | secrets `prometheus-web-config`, `prometheus-self-scrape-password`, `temporal-metrics-api-key` (with Temporal Cloud metrics) | Its users' password hashes, its own scrape password, and the key it reads Temporal Cloud's metrics with |
+| `id-loginapp-demo-grafana` (with observability) | Key Vault Secrets User | secrets `grafana-github-client-secret`, `grafana-secret-key`, `prometheus-grafana-password`, `grafana-smtp-password` (with alert emails), and the certificate's secret | GitHub sign-in, its encryption key, its Prometheus user, its token for sending alerts, and the TLS certificate it serves |
 | Whoever runs Terraform (`key_vault_administrator_object_id`), and `key_vault_additional_administrators` | Key Vault Secrets Officer, Key Vault Certificates Officer | the vault | Create, update and read back secrets and import the certificate; Terraform grants these itself |
 | GitHub Actions: `id-loginapp-github-plan`, `-deploy`, `-push` | see [AUTHENTICATION.md](AUTHENTICATION.md#cicd-with-openid-connect) | | Pull request plans, plans and applies on main, image pushes; signed in with OIDC, created outside Terraform ([docs/CI_CD.md](../../docs/CI_CD.md)) |
 
@@ -169,7 +172,8 @@ only after the wait.
 | `grocery-db-connection-string` | Terraform (composed) | app (grocery instance) | The same, with `Database=grocery`. One such secret per additional instance |
 | `Jwt--SigningKey` | `random_bytes` (64 bytes, Base64) | app | HMAC-SHA256 signing key for session tokens |
 | `ImageGeneration--ApiKey` | you (`TF_VAR_gemini_api_key`); only when given | app | Google Gemini API key for AI pictures of items and cost estimates |
-| `Email--ApiToken` | `cloudflare_account_token` (module `email-sending`); only with registration email recipients | app | Cloudflare account token limited to Email Sending (sending, and managing sending domains) |
+| `Email--ApiToken` | `cloudflare_account_token` (module `email-sending`, `this["app"]`); only with registration email recipients | app | Cloudflare account token limited to Email Sending (sending, and managing sending domains) |
+| `grafana-smtp-password` | `cloudflare_account_token` (module `email-sending`, `this["grafana"]`); only with alert recipients | Grafana | Grafana's own Cloudflare account token, limited like the app's: the password of Cloudflare's SMTP |
 | `postgresql-admin-password` | `random_password` (32 characters) | bootstrap job | Server administrator password |
 | `postgresql-app-password` | `random_password` (40 alphanumerics) | bootstrap job | Password the job sets on `loginapp_app` |
 | certificate `app-biffkittz-com-origin` | imported from your PFX | app, Grafana | Cloudflare origin certificate and private key (a wildcard, so it serves grafana.biffkittz.com too) |
@@ -180,6 +184,7 @@ only after the wait.
 | `grafana-github-client-secret` | you (`TF_VAR_grafana_github_client_secret`); with observability | Grafana | Client secret of the GitHub OAuth App Grafana signs users in with |
 | `grafana-secret-key` | `random_password`; with observability | Grafana | Grafana's `secret_key`, which encrypts what it stores |
 | `Temporal--ApiKey` | you (`TF_VAR_temporal_api_key`); with `temporal_namespace` | app | API key of a namespace-scoped Temporal Cloud service account (Write), for grocery runs |
+| `temporal-metrics-api-key` | you (`TF_VAR_temporal_metrics_api_key`); with observability | Prometheus | API key of a Temporal Cloud service account with the account role Metrics Read-Only, for Temporal Cloud's metrics endpoint |
 
 - **How the app receives them.** The app gets its secrets as Container Apps Key Vault references, which the platform
   resolves with the app's identity and exposes as environment variables: `ConnectionStrings__DefaultConnection`,
@@ -239,7 +244,7 @@ flowchart TD
   aca[container-app]
   mail[email-sending]
   root --> net & reg & db & kvm & aca & mail
-  mail -->|email token| kvm
+  mail -->|email tokens| kvm
   net -->|subnet IDs| db & aca & kvm
   db -->|FQDN| kvm
   db -->|FQDN| aca
@@ -478,8 +483,8 @@ registering never waits for it or fails because of it. The app side is described
   it would need the domain's own SPF record (managed by hand for MXroute) rewritten, and because a domain has to be
   verified by hand before it can be linked. Cloudflare Email Routing would have replaced the domain's MX records.
 - **Everything is Terraform** (module `email-sending`): onboarding the domain, the recipients as verified destination
-  addresses, and the app's API token, which is account-owned, is limited to Email Sending (the narrowest group that
-  can send), and goes through Key Vault like every other secret. Cloudflare creates and locks the DNS records itself, because the zone is
+  addresses, and an API token per sender (the app's, and Grafana's for [alerts](#alerts)), each account-owned, limited
+  to Email Sending (the narrowest group that can send), and passed through Key Vault like every other secret. Cloudflare creates and locks the DNS records itself, because the zone is
   on Cloudflare. Two steps stay manual, both once: the deploying token needs the permissions to do this
   ([AUTHENTICATION.md](AUTHENTICATION.md#cloudflare)), and each recipient follows the confirmation link Cloudflare
   emails it.
@@ -512,6 +517,25 @@ CPU and memory of every Container App, the PostgreSQL server's CPU, memory, stor
 used capacity. The exporter signs in as Prometheus' identity, which may read metrics in the resource group and nothing
 else.
 
+**Temporal Cloud's metrics are pulled too** (with `temporal_metrics_api_key`). Prometheus scrapes Temporal Cloud's
+OpenMetrics endpoint, `https://metrics.temporal.io/v1/metrics`, with an API key as a Bearer token, and Grafana shows
+them on Grafana Labs' "Temporal overview" dashboard in a folder of its own, Temporal Cloud. These are the server's
+view of every namespace in the account (other projects' included, by choice): workflow and activity outcomes and
+latencies, task queue backlogs, pollers, actions, request rates and limits. They complement the app's own Temporal SDK
+metrics, which describe its worker. The key is its own, from a service account with the account role **Metrics
+Read-Only**: the app's key is namespace-scoped and can't read metrics, and this one can't start, signal or read
+workflows. A few facts of the endpoint shape the scrape:
+
+- **180 requests an hour per account**, whoever makes them. Prometheus scrapes every 30 seconds (Temporal's advice),
+  120 of them, which leaves room for someone to try the endpoint by hand but not for a second Prometheus on the same
+  account at that rate (another project's, say): together they'd be refused with 429s.
+- **One minute at a time, three minutes late.** Each scrape returns the newest complete minute, aggregated by Temporal
+  and timestamped three minutes back. `honor_timestamps` keeps those timestamps, so the two scrapes of a minute land
+  on one sample, and the dashboard's `sum_over_time` queries count each minute once. Nothing is lost while Prometheus
+  is down for a minute or less (a revision change), but a longer gap can't be filled in: the endpoint has no history.
+- **Labels are names from Temporal**: namespace, region, task queue, workflow type, operation. Like the app's labels,
+  they carry no personal data.
+
 **Prometheus is internal.** Its ingress is internal-only, so only the environment's own apps can reach it, over HTTPS
 with the platform's certificate. Every request also needs one of its three users (`web.yml`: `app` pushes, `grafana`
 queries, `prometheus` scrapes itself), whose passwords Terraform generates and keeps in Key Vault; Prometheus holds
@@ -533,9 +557,10 @@ every restart's history. An NFS share on Premium FileStorage is the closest to a
   lock. Expect a minute without new samples on every change to Prometheus. Grafana keeps its SQLite database on the
   same share; with one replica, SQLite's own locking (which NFS honors) covers the overlap.
 
-**Configuration as code.** `prometheus.yml`, Grafana's data source and dashboard provider and the dashboards
-(`modules/observability/dashboards/*.json`) are rendered by Terraform and written to disk by an init container (Azure
-Linux, the bootstrap job's base image). Container Apps has no config maps, Azure's API can't write to an NFS share, and
+**Configuration as code.** `prometheus.yml`, Grafana's data source, its dashboard providers (one per folder: Nibbles,
+and Temporal Cloud with its metrics), the dashboards (`modules/observability/dashboards/*.json`, and
+`dashboards/temporal-cloud/*.json` for the Temporal Cloud folder) and its alerting ([Alerts](#alerts)) are rendered by
+Terraform and written to disk by an init container (Azure Linux, the bootstrap job's base image). Container Apps has no config maps, Azure's API can't write to an NFS share, and
 images of our own would need a build pipeline for each change. This way a change is a plan like any other, and
 redeploys only the app it affects. Grafana treats the dashboards as provisioned: they can't be changed or deleted in
 its UI.
@@ -557,6 +582,49 @@ Premium share).
 **Images are pinned by digest**, from Prometheus' own registry (quay.io), Microsoft's (MCR) and Docker Hub (Grafana's
 official images; Docker Hub limits anonymous pulls, which matters only if Grafana restarts very often).
 Dependabot can't see digests in Terraform variables, so updates are manual (DEPLOYMENT.md).
+
+### Alerts
+
+With `grafana_alert_recipients`, Grafana evaluates alert rules every minute and emails the recipients from
+alerts@biffkittz.com when an alert starts firing, every 12 hours while it keeps firing, and when it resolves. An email
+covers one rule in one folder and lists every site, job, app or namespace it fires for.
+
+**The rules** (`modules/observability/alerting.tf`) watch what has gone wrong before, or would hurt most:
+
+| Group (folder) | Rule | Fires when | Severity |
+| --- | --- | --- | --- |
+| Site (Nibbles) | Database unreachable from the app | An instance's database health check has failed for 5 minutes | critical |
+| | Site stopped reporting | An instance that pushed metrics in the last day has pushed none for about 10 minutes: down, restarting over and over, or cut off from Prometheus | critical |
+| | Cloudflare's requests refused | More than 5 of Cloudflare's connections in 10 minutes are refused for want of a trusted client certificate (403 before routing, or a failed TLS handshake): Authenticated Origin Pulls is broken and visitors get errors, as in November 2026 | critical |
+| Errors and slowness (Nibbles) | Server errors | 5 or more 5xx answers in 15 minutes | warning |
+| | Slow responses | The 95th percentile above 2 seconds over 15 minutes, for 10 minutes, with at least 20 requests; Estimate Cost, which waits for Gemini by design, left out | warning |
+| Database and infrastructure (Nibbles) | Database server down | Azure Monitor's `is_db_alive` is 0 for 5 minutes | critical |
+| | Database storage nearly full | Above 80% for 30 minutes (the server turns read-only when full) | warning |
+| | Database CPU credits nearly gone | Fewer than 15 left for 15 minutes: Burstable servers are then held to their baseline | warning |
+| | Container app memory nearly exhausted | Any of the Container Apps above 90% of its memory for 15 minutes | warning |
+| | Prometheus can't collect metrics | A scrape target (Temporal Cloud's included) down for 10 minutes | warning |
+| Grocery runs (Nibbles) | Grocery run worker not polling | An instance's Temporal worker hasn't polled for 10 minutes | warning |
+| | Grocery run activities failing | An activity type failed 3 or more times in 30 minutes | warning |
+| Temporal Cloud (Temporal Cloud; with its metrics) | Workflows failing or timing out | Any workflow in any namespace of the account (other projects' included) failed or timed out in the last 15 minutes | warning |
+| | Grocery run tasks with no worker | Tasks reached a `nibbles-*` task queue with no worker polling it | warning |
+
+- **Missing data isn't an alert.** Each query says what wrong looks like (a site that stopped reporting is one that
+  reported in the last day), so a query that returns nothing means all is well. A query that *fails* (Prometheus
+  unreachable) becomes a *DatasourceError* alert after the rule's pending period, which is how an outage of Prometheus
+  shows. Every pending period is at least 5 minutes, so a new Prometheus revision (a minute or two) doesn't email.
+- **Provisioned, like the dashboards.** The rules, the email contact point and the notification policy come from a
+  file the init container writes; Grafana's UI can't change them, though it can silence alerts. Grafana keeps a
+  provisioned rule that leaves the file, so the file also lists the UIDs of removed rules (and, with alerting off,
+  of every rule) for Grafana to delete. The rules live in the dashboards' folders. Grafana provisions alerting before
+  dashboards, and both find their folder by title: had the dashboard providers named a folder UID, a new database would
+  get two folders of each name.
+- **Email through Cloudflare's SMTP** (`smtp.mx.cloudflare.net:465`, TLS from the start, user `api_token`), with an
+  account token of Grafana's own limited to Email Sending, through Key Vault: the setup registration emails use, with a
+  token per sender so either can be revoked alone. Cloudflare sends only from onboarded domains, hence
+  alerts@biffkittz.com. Sending from a Gmail address would take Gmail's SMTP and an app password, which can also read
+  the whole mailbox. The recipients are verified destination addresses: free, and outside the sending quota.
+- **No personal data.** Labels and emails name sites, jobs, apps, Temporal namespaces, task queues and workflow and
+  activity types: fixed values, like the metrics' own.
 
 ### Smaller choices
 
@@ -669,8 +737,10 @@ When the demo isn't needed, `terraform destroy` removes everything; see [DEPLOYM
 - **The metrics share isn't encrypted in transit** (NFS in Container Apps), and Prometheus' database on NFS isn't a
   configuration Prometheus supports, though Azure's NFS is POSIX-compliant. If the database is ever corrupted, stop
   Prometheus, delete `prometheus/` on the share, and start it again: the history is lost, nothing else.
-- **No alerts yet.** Prometheus and Grafana record and show; nothing notifies anyone. Grafana alert rules with a
-  contact point (email or a chat webhook) are the next step.
+- **Alerts can't report their own outage.** Grafana runs in the environment it watches and emails through Cloudflare,
+  so if the environment, Grafana or Cloudflare Email Service is down, no email comes. An outside check would cover
+  that: an uptime monitor on the sites, or a dead man's switch (a rule that always fires, sent to a service that
+  alerts when it stops hearing it). Cloudflare's SMTP submission is also in beta (since June 2026).
 - **No egress filtering.** Outbound traffic uses the platform defaults; the app's only outbound calls go to the
   Gemini API (`generativelanguage.googleapis.com`) for item pictures and cost estimates, to Cloudflare's API
   (`api.cloudflare.com`) for registration emails, and to Temporal Cloud (`<namespace>.<account>.tmprl.cloud:7233`)

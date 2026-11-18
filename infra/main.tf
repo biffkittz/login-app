@@ -124,6 +124,22 @@ locals {
     { for index, address in local.registration_notification_recipients : "RegistrationNotifications__Recipients__${index}" => address },
   ) : {}
 
+  # Grafana's alert emails, on when anyone is to receive them (and Grafana runs). Grafana sends them through Cloudflare
+  # Email Service's SMTP with a Cloudflare token of its own (Key Vault grafana-smtp-password), from an address in the
+  # zone: Cloudflare sends only from onboarded domains.
+  grafana_alerts_enabled       = local.observability_enabled && length(var.grafana_alert_recipients) > 0
+  grafana_alert_recipients     = [for address in var.grafana_alert_recipients : lower(address)]
+  grafana_alert_sender_address = "${var.grafana_alert_sender_username}@${var.dns_zone_name}"
+
+  # Cloudflare Email Service is set up for whichever senders there are, each with a token of its own: the app's, for
+  # registration emails, and Grafana's, for alerts. Every recipient of either becomes a destination address.
+  email_sending_enabled    = local.registration_notifications_enabled || local.grafana_alerts_enabled
+  email_sending_recipients = distinct(concat(local.registration_notification_recipients, local.grafana_alert_recipients))
+  email_sending_tokens = merge(
+    local.registration_notifications_enabled ? { app = "${local.name} app: send registration emails (managed by Terraform, project:${var.project})" } : {},
+    local.grafana_alerts_enabled ? { grafana = "${local.name} Grafana: send alert emails (managed by Terraform, project:${var.project})" } : {},
+  )
+
   # Each instance's secrets: Container App secrets that reference Key Vault, the same ones for every instance except the
   # connection string, which names the instance's own database. The environment variables below take their values
   # from them. The certificate's secret holds the PFX (Base64, no password), which the app loads as its HTTPS
@@ -197,6 +213,10 @@ locals {
   # (Grafana's "grafana", Prometheus' own "prometheus" for scraping itself).
   observability_enabled = var.observability_enabled
   prometheus_users      = local.observability_enabled ? toset(["app", "grafana", "prometheus"]) : toset([])
+
+  # Temporal Cloud's metrics, on with observability and a Metrics Read-Only API key, which Prometheus reads from Key
+  # Vault like its other secrets. As with the Gemini key, only whether a key is set is unwrapped from "sensitive".
+  temporal_metrics_enabled = local.observability_enabled && nonsensitive(var.temporal_metrics_api_key != null)
   app_telemetry_settings = local.observability_enabled ? {
     Telemetry__OtlpEndpoint = "https://${local.names.prometheus_app}.internal.${module.container_apps.default_domain}/api/v1/otlp/v1/metrics"
     Telemetry__OtlpUsername = "app"
@@ -397,8 +417,12 @@ module "key_vault" {
       grafana_github_client_secret    = "grafana-github-client-secret"
       grafana_secret_key              = "grafana-secret-key"
     } : {},
+    # Grafana's Cloudflare token for sending alert emails, its SMTP password.
+    local.grafana_alerts_enabled ? { grafana_smtp_password = "grafana-smtp-password" } : {},
     # Grocery runs: the Temporal Cloud API key (configuration key Temporal:ApiKey).
     local.temporal_enabled ? { temporal_api_key = "Temporal--ApiKey" } : {},
+    # Prometheus' Metrics Read-Only key for Temporal Cloud's metrics endpoint.
+    local.temporal_metrics_enabled ? { temporal_metrics_api_key = "temporal-metrics-api-key" } : {},
   )
   secret_values = merge(
     {
@@ -409,7 +433,7 @@ module "key_vault" {
     },
     { for key in keys(var.additional_app_instances) : "${key}_db_connection_string" => local.app_connection_strings[key] },
     local.image_generation_configured ? { gemini_api_key = var.gemini_api_key } : {},
-    local.registration_notifications_enabled ? { email_api_token = module.email_sending[0].api_token } : {},
+    local.registration_notifications_enabled ? { email_api_token = module.email_sending[0].api_tokens["app"] } : {},
     local.observability_enabled ? {
       prometheus_app_password         = random_password.prometheus_users["app"].result
       prometheus_web_config           = yamlencode({ basic_auth_users = { for user, password in random_password.prometheus_users : user => password.bcrypt_hash } })
@@ -418,7 +442,9 @@ module "key_vault" {
       grafana_github_client_secret    = var.grafana_github_client_secret
       grafana_secret_key              = random_password.grafana_secret_key[0].result
     } : {},
+    local.grafana_alerts_enabled ? { grafana_smtp_password = module.email_sending[0].api_tokens["grafana"] } : {},
     local.temporal_enabled ? { temporal_api_key = var.temporal_api_key } : {},
+    local.temporal_metrics_enabled ? { temporal_metrics_api_key = var.temporal_metrics_api_key } : {},
   )
   secret_readers = merge(
     {
@@ -441,7 +467,9 @@ module "key_vault" {
       grafana_github_client_secret    = { secret = "grafana_github_client_secret", principal_id = azurerm_user_assigned_identity.grafana[0].principal_id }
       grafana_secret_key              = { secret = "grafana_secret_key", principal_id = azurerm_user_assigned_identity.grafana[0].principal_id }
     } : {},
+    local.grafana_alerts_enabled ? { grafana_smtp_password = { secret = "grafana_smtp_password", principal_id = azurerm_user_assigned_identity.grafana[0].principal_id } } : {},
     local.temporal_enabled ? { app_temporal_api_key = { secret = "temporal_api_key", principal_id = azurerm_user_assigned_identity.app.principal_id } } : {},
+    local.temporal_metrics_enabled ? { prometheus_temporal_metrics_api_key = { secret = "temporal_metrics_api_key", principal_id = azurerm_user_assigned_identity.prometheus[0].principal_id } } : {},
   )
 
   certificate_name       = "${replace(var.app_hostname, ".", "-")}-origin"
@@ -567,6 +595,16 @@ module "observability" {
     prometheus_password  = module.key_vault.secret_ids["prometheus_grafana_password"]
     origin_certificate   = module.key_vault.certificate_secret_id
   }
+
+  temporal_cloud_metrics = local.temporal_metrics_enabled ? {
+    api_key_secret_id = module.key_vault.secret_ids["temporal_metrics_api_key"]
+  } : null
+
+  grafana_alerting = local.grafana_alerts_enabled ? {
+    recipients              = local.grafana_alert_recipients
+    sender_address          = local.grafana_alert_sender_address
+    smtp_password_secret_id = module.key_vault.secret_ids["grafana_smtp_password"]
+  } : null
 }
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -683,31 +721,39 @@ resource "cloudflare_zone_setting" "authenticated_origin_pulls" {
 }
 
 # ---------------------------------------------------------------------------------------------------------------------
-# Registration emails. Whenever someone registers on any instance, the app emails registration_notification_recipients
-# from notifications@biffkittz.com through Cloudflare Email Service's REST API. Nothing here exists while the list of
-# recipients is empty. Azure Communication Services Email was passed over: Microsoft is retiring it (September 2028),
-# and it would need the domain's own SPF record, which already serves the domain's mail host.
+# Email: registration emails and Grafana's alerts. Whenever someone registers on any instance, the app emails
+# registration_notification_recipients from notifications@biffkittz.com through Cloudflare Email Service's REST API;
+# Grafana emails grafana_alert_recipients from alerts@biffkittz.com through its SMTP. Nothing here exists while both
+# lists are empty. Azure Communication Services Email was passed over: Microsoft is retiring it (September 2028), and
+# it would need the domain's own SPF record, which already serves the domain's mail host.
 # ---------------------------------------------------------------------------------------------------------------------
 
 # Cloudflare's catalogue of permissions a token can be given, from which the module picks the one that sends email.
 data "cloudflare_account_api_token_permission_groups_list" "this" {
-  count = local.registration_notifications_enabled ? 1 : 0
+  count = local.email_sending_enabled ? 1 : 0
 
   account_id = local.cloudflare_account_id
 }
 
-# The zone apex onboarded for Email Sending, the recipients as verified destination addresses, and the app's own
-# API token for Email Sending. Its value goes to Key Vault (Email--ApiToken) and from there to the app. Rotate it with:
-#   terraform apply -replace='module.email_sending[0].cloudflare_account_token.this'
+# The zone apex onboarded for Email Sending, the recipients as verified destination addresses, and an API token for
+# Email Sending per sender: "app", which goes to Key Vault (Email--ApiToken) and from there to the app, and "grafana"
+# (Key Vault grafana-smtp-password). Rotate one with, for example:
+#   terraform apply -replace='module.email_sending[0].cloudflare_account_token.this["app"]'
 module "email_sending" {
   source = "./modules/email-sending"
-  count  = local.registration_notifications_enabled ? 1 : 0
+  count  = local.email_sending_enabled ? 1 : 0
 
   account_id                  = local.cloudflare_account_id
   zone_id                     = data.cloudflare_zone.this.id
   domain                      = var.dns_zone_name
-  recipients                  = local.registration_notification_recipients
-  token_name                  = "${local.name} app: send registration emails (managed by Terraform, project:${var.project})"
+  recipients                  = local.email_sending_recipients
+  tokens                      = local.email_sending_tokens
   permission_groups           = data.cloudflare_account_api_token_permission_groups_list.this[0].result
   preferred_permission_groups = var.cloudflare_email_sending_permission_groups
+}
+
+# The app's token from before Grafana had one: the same token, so the app keeps sending through the change.
+moved {
+  from = module.email_sending[0].cloudflare_account_token.this
+  to   = module.email_sending[0].cloudflare_account_token.this["app"]
 }

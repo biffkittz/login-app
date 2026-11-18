@@ -261,3 +261,10 @@ How it uses Temporal:
     Wait Conditions: The workflow wakes up early if all collaborators send the "I'm good" Signal before the timer expires.
 
     SignalR Integration: Once the workflow completes (either via timeout or consensus), an Activity fires a SignalR message to the Vue frontend, unlocking the UI and moving the list to a "Shopping in Progress" state.
+
+
+
+
+I want a deep dive into Temporal and how the workflow was configured for the grocery app. I want a coherent explanation of the Temporal architecture. For example,
+you should explain how all the components of a workflow fit together (workflow definition, activities, decisions, and so on). You should explain the purpose of each
+file related to the grocery workflow. This information should be presented in an easy-to-read document under docs.

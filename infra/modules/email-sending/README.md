@@ -1,7 +1,8 @@
 # email-sending
 
 Sending email from a Cloudflare zone with [Cloudflare Email Service](https://developers.cloudflare.com/email-service/):
-the app emails everyone in `recipients` whenever someone registers.
+the app emails the registration notices' recipients whenever someone registers, and Grafana emails its alerts.
+`recipients` is everyone either one writes to.
 
 - **The domain** is onboarded for Email Sending. Cloudflare adds and locks the records this needs, outside Terraform:
   MX and SPF on `cf-bounce.<domain>`, DKIM at `cf-bounce._domainkey.<domain>`, and DMARC at `_dmarc.<domain>`. The
@@ -9,8 +10,10 @@ the app emails everyone in `recipients` whenever someone registers.
 - **Each recipient** becomes a verified destination address of the account. Cloudflare emails it a confirmation link
   once; until its owner follows it, sending to it may be refused on the Workers Free plan. Sending to verified
   addresses is free on every plan.
-- **The token** is account-owned and limited to Email Sending (nothing narrower can send, so it can also manage
-  sending domains). It gets the first of `preferred_permission_groups` found in
+- **The tokens**, one per sender in `tokens` (`app` for the REST API, `grafana` for SMTP: user `api_token` at
+  `smtp.mx.cloudflare.net:465`), so either can be revoked without stopping the other. Each is account-owned and
+  limited to Email Sending (nothing narrower can send, so it can also manage sending domains). Each gets the first of
+  `preferred_permission_groups` found in
   `permission_groups` (Cloudflare's catalogue, passed in by the root module, which reads it with
   `cloudflare_account_api_token_permission_groups_list`); a plan fails, naming the groups found, when none match.
   The catalogue is an input rather than read here so that the choice can be tested: `terraform test` mocks can't
@@ -47,16 +50,16 @@ the app emails everyone in `recipients` whenever someone registers.
 | <a name="input_permission_groups"></a> [permission\_groups](#input\_permission\_groups) | Cloudflare's catalogue of API token permission groups (the cloudflare\_account\_api\_token\_permission\_groups\_list data source's result), from which the token's permission is chosen. | <pre>list(object({<br/>    id            = string<br/>    name          = string<br/>    is_selectable = optional(bool)<br/>    scopes        = optional(list(string), [])<br/>  }))</pre> | n/a | yes |
 | <a name="input_preferred_permission_groups"></a> [preferred\_permission\_groups](#input\_preferred\_permission\_groups) | Names of the permission groups that allow sending email, narrowest first. The token gets the first one in permission\_groups. | `list(string)` | n/a | yes |
 | <a name="input_recipients"></a> [recipients](#input\_recipients) | Addresses that receive the emails, in lower case. Each becomes a verified destination address of the account once its owner follows the confirmation link Cloudflare sends it. | `list(string)` | n/a | yes |
-| <a name="input_token_name"></a> [token\_name](#input\_token\_name) | Name of the app's API token, as the Cloudflare dashboard lists it. | `string` | n/a | yes |
+| <a name="input_tokens"></a> [tokens](#input\_tokens) | The API tokens to create, keyed by the sender that uses each (such as app or grafana), with the name the Cloudflare dashboard lists it under. Each can send email (through the REST API or SMTP) and nothing else. | `map(string)` | n/a | yes |
 | <a name="input_zone_id"></a> [zone\_id](#input\_zone\_id) | Cloudflare zone that holds domain. Cloudflare Email Service needs the domain's DNS to be on Cloudflare, where it adds the records sending needs. | `string` | n/a | yes |
 
 ### Outputs
 
 | Name | Description |
 | ---- | ----------- |
-| <a name="output_api_token"></a> [api\_token](#output\_api\_token) | The app's token for sending email: Authorization: Bearer <token> on Cloudflare's email sending API. |
+| <a name="output_api_tokens"></a> [api\_tokens](#output\_api\_tokens) | Each sender's token, by the keys of tokens: Authorization: Bearer <token> on Cloudflare's email sending API, or the password of SMTP user api\_token at smtp.mx.cloudflare.net:465. |
 | <a name="output_permission_group"></a> [permission\_group](#output\_permission\_group) | The permission group the token was given. |
 | <a name="output_recipients"></a> [recipients](#output\_recipients) | Each recipient and whether its owner has confirmed it ("verified") or not yet ("awaiting confirmation"), as of the last refresh. |
 | <a name="output_sending_domain"></a> [sending\_domain](#output\_sending\_domain) | The domain onboarded for Email Sending. |
-| <a name="output_token_name"></a> [token\_name](#output\_token\_name) | Name of the app's API token, as the Cloudflare dashboard lists it. |
+| <a name="output_token_names"></a> [token\_names](#output\_token\_names) | Each sender's token name, as the Cloudflare dashboard lists it, by the keys of tokens. |
 <!-- END_TF_DOCS -->

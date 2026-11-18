@@ -56,7 +56,16 @@ fi
 if [[ -n "${TEMPORAL_API_KEY:-}" ]]; then
   export TF_VAR_temporal_api_key="$TEMPORAL_API_KEY"
 fi
-unset TLS_CERTIFICATE_PFX_BASE64 TLS_CERTIFICATE_PFX_PASSWORD GEMINI_API_KEY GRAFANA_GITHUB_CLIENT_SECRET TEMPORAL_API_KEY
+
+# Prometheus' Metrics Read-Only key for Temporal Cloud (with observability). Optional: without it, Temporal Cloud
+# goes unmonitored, so a plan that removes a key in use shows that, and this says why.
+if [[ -n "${TEMPORAL_METRICS_API_KEY:-}" ]]; then
+  export TF_VAR_temporal_metrics_api_key="$TEMPORAL_METRICS_API_KEY"
+else
+  echo "::notice::TEMPORAL_METRICS_API_KEY isn't set in this environment, so Prometheus doesn't scrape Temporal Cloud."
+fi
+unset TLS_CERTIFICATE_PFX_BASE64 TLS_CERTIFICATE_PFX_PASSWORD GEMINI_API_KEY GRAFANA_GITHUB_CLIENT_SECRET TEMPORAL_API_KEY \
+  TEMPORAL_METRICS_API_KEY
 
 args=(-input=false -no-color -detailed-exitcode -var-file=environments/demo.tfvars -out="$out/tfplan")
 if [[ "$mode" == "pr" ]]; then

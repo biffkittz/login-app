@@ -81,6 +81,7 @@ internal sealed class TemporalWorkerService(
                 };
                 foreach (ITemporalWorkerContribution contribution in contributions)
                 {
+                    // add workflows and activities from each contribution (there's only one contribution for now)
                     contribution.AddTo(workerOptions);
                 }
 

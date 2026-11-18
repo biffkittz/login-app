@@ -9,6 +9,7 @@
 #   export TF_VAR_tls_certificate_pfx_password=...                    # if the PFX has one
 #   export TF_VAR_gemini_api_key=...                                  # optional: AI pictures of items
 #   export TF_VAR_grafana_github_client_secret=...                    # with observability_enabled (below)
+#   export TF_VAR_temporal_metrics_api_key=...                        # optional, with observability: Temporal Cloud metrics
 # Every other variable keeps its default from variables.tf.
 
 subscription_id = "3c3f379f-8161-4631-a30c-a3af82622a6a"
@@ -22,7 +23,7 @@ app_hostname  = "app.biffkittz.com"
 
 # Image tag of the app to run, e.g. the short commit SHA pushed with `az acr build`. Leave it commented out for the
 # first apply (no image exists yet). Once set, keep it set: removing it again would delete the Container App.
-app_image_tag = "64a66f194aaa"
+app_image_tag = "v10"
 
 # One replica: this is a demonstration environment.
 app_min_replicas = 1
@@ -59,10 +60,16 @@ key_vault_additional_administrators = { github_deploy = "a81d64db-6f59-44c4-be91
 # Grafana shows them at https://grafana.biffkittz.com to the GitHub users listed here. First create a GitHub OAuth App
 # with the callback URL https://grafana.biffkittz.com/login/github, put its client ID below (it isn't a secret) and its
 # client secret in TF_VAR_grafana_github_client_secret (GRAFANA_GITHUB_CLIENT_SECRET in CI), then set
-# observability_enabled = true.
+# observability_enabled = true. With a Metrics Read-Only key in TF_VAR_temporal_metrics_api_key (TEMPORAL_METRICS_API_KEY
+# in CI), Prometheus also collects Temporal Cloud's metrics ("Temporal Cloud metrics" in DEPLOYMENT.md).
 observability_enabled    = true
 grafana_github_client_id = "Ov23lijK4onubMdrjg93"
 grafana_github_admins    = ["biffkittz"]
+
+# Grafana emails its alerts (rules in infra/modules/observability/alerting.tf) to this address from alerts@biffkittz.com,
+# through Cloudflare Email Service with a token of Grafana's own. Cloudflare can only send from biffkittz.com. The
+# address is already a confirmed destination (registration emails); a new one gets Cloudflare's confirmation link.
+grafana_alert_recipients = ["benjamin.e.burner@gmail.com"]
 
 # Grocery runs (infra/docs/DEPLOYMENT.md, "Grocery runs (Temporal Cloud)"): last call before a trip to the store, run as a
 # Temporal workflow. First create a Temporal Cloud namespace with API key authentication (AWS us-east-2 is the nearest
